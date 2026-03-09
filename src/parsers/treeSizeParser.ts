@@ -111,7 +111,7 @@ function cellText(value: unknown): string {
 
 // TreeSize exports can use different column name conventions across versions.
 // We try several common variants.
-const PATH_COLS = ['Path', 'Folder', 'Directory', 'Name', 'Share', 'Drive', 'Shared Drive']
+const PATH_COLS = ['Full Path', 'Path', 'Folder', 'Directory', 'Name', 'Share', 'Drive', 'Shared Drive']
 const SIZE_COLS = ['Size', 'Size (Bytes)', 'Allocated', 'Size in Bytes', 'Total Size', 'Used Space']
 const FILES_COLS = ['Files', '# Files', 'File Count', 'Number of Files', 'Total Files']
 const FOLDERS_COLS = ['Folders', '# Folders', 'Subfolder Count', 'Subfolders', 'Total Folders']
