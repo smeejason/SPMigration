@@ -184,9 +184,10 @@ async function openTargetPanel(
 ): Promise<void> {
   const existing = getState().mappings.find((m) => m.sourceNode.path === node.path)
 
-  const lastModStr = node.lastModified
-    ? node.lastModified.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })
-    : '—'
+  const fmtDate = (d?: Date) =>
+    d ? d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }) : '—'
+  const lastModStr = fmtDate(node.lastModified)
+  const lastAccStr = fmtDate(node.lastAccessed)
   const sizeStr = node.sizeBytes > 0 ? formatBytes(node.sizeBytes) : '—'
   const fileStr = node.fileCount > 0 ? node.fileCount.toLocaleString() : '—'
   const folderStr = node.folderCount > 0 ? node.folderCount.toLocaleString() : '—'
@@ -213,6 +214,8 @@ async function openTargetPanel(
           <dd>${childStr}</dd>
           <dt>Last Modified</dt>
           <dd>${lastModStr}</dd>
+          <dt>Last Accessed</dt>
+          <dd>${lastAccStr}</dd>
         </dl>
       </div>
 

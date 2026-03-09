@@ -52,6 +52,7 @@ export interface TreeNode {
   fileCount: number
   folderCount: number
   lastModified?: Date
+  lastAccessed?: Date
   children: TreeNode[]
 }
 
@@ -62,6 +63,7 @@ export interface ParsedTreeSizeRow {
   folderCount: number
   percentOfParent?: number
   lastModified?: Date
+  lastAccessed?: Date
 }
 
 // ─── SharePoint / Graph ──────────────────────────────────────────────────────

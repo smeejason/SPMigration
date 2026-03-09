@@ -125,6 +125,7 @@ const SIZE_COLS = ['Size', 'Size (Bytes)', 'Allocated', 'Size in Bytes', 'Total 
 const FILES_COLS = ['Files', '# Files', 'File Count', 'Number of Files', 'Total Files']
 const FOLDERS_COLS = ['Folders', '# Folders', 'Subfolder Count', 'Subfolders', 'Total Folders']
 const DATE_COLS = ['Last Change', 'Last Modified', 'Modified', 'Date Modified', 'Last Accessed']
+const ACCESSED_COLS = ['Last Accessed', 'Accessed', 'Date Accessed', 'Last Access']
 
 function findCol(record: Record<string, string>, candidates: string[]): string {
   for (const c of candidates) {
@@ -158,15 +159,20 @@ function normalizePath(raw: string): string {
     .trim()                   // trim again in case whitespace was next to slashes
 }
 
+function parseDate(raw: string): Date | undefined {
+  if (!raw) return undefined
+  const d = new Date(raw)
+  return isNaN(d.getTime()) ? undefined : d
+}
+
 function normalizeRow(record: Record<string, string>): ParsedTreeSizeRow {
-  const rawDate = findCol(record, DATE_COLS)
-  const lastModified = rawDate ? new Date(rawDate) : undefined
   return {
     path: normalizePath(findCol(record, PATH_COLS)),
     sizeBytes: parseBytes(findCol(record, SIZE_COLS)),
     fileCount: parseInt(findCol(record, FILES_COLS).replace(/[^0-9]/g, '') || '0', 10),
     folderCount: parseInt(findCol(record, FOLDERS_COLS).replace(/[^0-9]/g, '') || '0', 10),
-    lastModified: lastModified && !isNaN(lastModified.getTime()) ? lastModified : undefined,
+    lastModified: parseDate(findCol(record, DATE_COLS)),
+    lastAccessed: parseDate(findCol(record, ACCESSED_COLS)),
   }
 }
 
@@ -208,6 +214,7 @@ function buildTree(rows: ParsedTreeSizeRow[]): TreeNode {
       fileCount: row.fileCount,
       folderCount: row.folderCount,
       lastModified: row.lastModified,
+      lastAccessed: row.lastAccessed,
       children: [],
     }
     nodeMap.set(row.path, node)
