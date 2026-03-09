@@ -69,6 +69,7 @@ type DeepPartial<T> = T extends object
 function deepMerge<T>(target: T, source: DeepPartial<T>): T {
   if (Array.isArray(source)) return source as unknown as T
   if (typeof source !== 'object' || source === null) return source as unknown as T
+  if (target === null || typeof target !== 'object') return { ...source } as unknown as T
   const result = { ...target } as Record<string, unknown>
   for (const key of Object.keys(source as object)) {
     const srcVal = (source as Record<string, unknown>)[key]
