@@ -184,11 +184,36 @@ async function openTargetPanel(
 ): Promise<void> {
   const existing = getState().mappings.find((m) => m.sourceNode.path === node.path)
 
+  const lastModStr = node.lastModified
+    ? node.lastModified.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })
+    : '—'
+  const sizeStr = node.sizeBytes > 0 ? formatBytes(node.sizeBytes) : '—'
+  const fileStr = node.fileCount > 0 ? node.fileCount.toLocaleString() : '—'
+  const folderStr = node.folderCount > 0 ? node.folderCount.toLocaleString() : '—'
+  const childStr = node.children.length > 0 ? node.children.length.toLocaleString() : '—'
+
   targetEl.innerHTML = `
     <div class="target-panel">
-      <div class="target-source-label">
-        <strong>Source:</strong> <code>${escHtml(String(node.name || node.path))}</code>
-        <span class="target-source-size">${formatBytes(node.sizeBytes)}</span>
+
+      <div class="source-detail-card">
+        <div class="source-detail-title">
+          <span class="source-detail-icon">📁</span>
+          <span class="source-detail-name">${escHtml(String(node.name || node.path))}</span>
+        </div>
+        <dl class="source-detail-grid">
+          <dt>Full Path</dt>
+          <dd class="source-detail-path" title="${escHtml(node.path)}">${escHtml(node.path)}</dd>
+          <dt>Size</dt>
+          <dd>${sizeStr}</dd>
+          <dt>Files</dt>
+          <dd>${fileStr}</dd>
+          <dt>Subfolders</dt>
+          <dd>${folderStr}</dd>
+          <dt>Direct Children</dt>
+          <dd>${childStr}</dd>
+          <dt>Last Modified</dt>
+          <dd>${lastModStr}</dd>
+        </dl>
       </div>
 
       <div class="form-group">
@@ -393,10 +418,25 @@ function injectMappingStyles(): void {
 
     /* Target panel */
     .mapping-placeholder { padding: 32px; text-align: center; color: var(--color-text-muted); font-size: 0.88rem; }
-    .target-panel { padding: 16px; }
-    .target-source-label { font-size: 0.85rem; margin-bottom: 20px; padding-bottom: 12px;
+    .target-panel { padding: 16px; display: flex; flex-direction: column; gap: 20px; }
+
+    /* Source detail card */
+    .source-detail-card { background: var(--color-surface-alt); border: 1px solid var(--color-border);
+      border-radius: 6px; overflow: hidden; }
+    .source-detail-title { display: flex; align-items: center; gap: 8px; padding: 10px 14px;
+      border-bottom: 1px solid var(--color-border); background: var(--color-surface); }
+    .source-detail-icon { font-size: 1.1rem; flex-shrink: 0; }
+    .source-detail-name { font-weight: 600; font-size: 0.9rem; font-family: 'Consolas', monospace;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+    .source-detail-grid { display: grid; grid-template-columns: auto 1fr; gap: 0; margin: 0; padding: 0; }
+    .source-detail-grid dt, .source-detail-grid dd {
+      padding: 6px 14px; margin: 0; font-size: 0.82rem;
       border-bottom: 1px solid var(--color-border); }
-    .target-source-size { margin-left: 8px; color: var(--color-text-muted); }
+    .source-detail-grid dt:last-of-type, .source-detail-grid dd:last-of-type { border-bottom: none; }
+    .source-detail-grid dt { color: var(--color-text-muted); font-weight: 500; white-space: nowrap;
+      background: var(--color-surface); border-right: 1px solid var(--color-border); }
+    .source-detail-grid dd { font-family: 'Consolas', monospace; word-break: break-all; }
+    .source-detail-path { font-size: 0.78rem; color: var(--color-text-muted); }
     .site-search-row { display: flex; gap: 8px; }
     .site-results { margin-top: 8px; border: 1px solid var(--color-border); border-radius: 4px;
       max-height: 200px; overflow-y: auto; }
