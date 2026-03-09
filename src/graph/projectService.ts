@@ -42,6 +42,8 @@ function listItemsUrl(): string {
 //
 // SharePoint Person fields require the internal SP list item ID from the site's
 // "User Information List", not the AAD Object ID.  We query by email to resolve.
+// If a user hasn't visited the SP site yet they won't be in the list; in that
+// case we fall back to the claims-format identity string so the write still works.
 
 async function resolveSpUserIds(emails: string[]): Promise<string[]> {
   const { siteId } = getSpConfig()
@@ -57,9 +59,12 @@ async function resolveSpUserIds(emails: string[]): Promise<string[]> {
         .get() as { value: Array<{ id: string }> }
       if (res.value.length > 0) {
         ids.push(res.value[0].id)
+      } else {
+        // User not yet in the SP site — use claims-format identity string
+        ids.push(`i:0#.f|membership|${email}`)
       }
     } catch {
-      // User hasn't visited the SP site yet — skip; stored in ProjectData anyway
+      ids.push(`i:0#.f|membership|${email}`)
     }
   }
   return ids
@@ -87,16 +92,15 @@ export async function createProject(
   data: Pick<MigrationProject, 'title' | 'description' | 'status'> & { owners?: SharePointUser[] }
 ): Promise<MigrationProject> {
   const owners = data.owners ?? []
-  const projectData: ProjectData = { owners }
 
   const spFields: Record<string, unknown> = {
     Title: data.title,
     Description: data.description,
     Status: data.status,
-    ProjectData: JSON.stringify(projectData),
+    ProjectData: JSON.stringify({}),
   }
 
-  // Write to the SharePoint Owners person field (best-effort)
+  // Owners are stored exclusively in the SharePoint Owners person field
   const spUserIds = await resolveSpUserIds(owners.map((o) => o.email))
   if (spUserIds.length > 0) {
     spFields['OwnersLookupId@odata.type'] = 'Collection(Edm.String)'
@@ -123,12 +127,8 @@ export async function updateProject(
   if (fields.status !== undefined) spFields['Status'] = fields.status
   if (fields.projectData !== undefined) spFields['ProjectData'] = JSON.stringify(fields.projectData)
 
+  // Owners are stored exclusively in the SharePoint Owners person field
   if (fields.owners !== undefined) {
-    // Merge owners into the stored ProjectData too
-    if (fields.projectData === undefined) {
-      // Caller didn't provide projectData — we need to merge owners into current projectData
-      // The caller is responsible for passing the full updated projectData; owners are stored there
-    }
     const spUserIds = await resolveSpUserIds(fields.owners.map((o) => o.email))
     if (spUserIds.length > 0) {
       spFields['OwnersLookupId@odata.type'] = 'Collection(Edm.String)'
@@ -164,17 +164,14 @@ function mapItem(item: GraphListItem): MigrationProject {
     // Corrupt JSON — treat as empty
   }
 
-  // Primary source: owners stored in ProjectData JSON
-  let owners: SharePointUser[] = projectData.owners ?? []
-
-  // Fallback: read from SP Owners person field if ProjectData has none
-  if (owners.length === 0 && Array.isArray(f.Owners)) {
-    owners = (f.Owners as SpLookupValue[]).map((u) => ({
-      id: String(u.LookupId ?? ''),
-      displayName: u.LookupValue ?? '',
-      email: u.Email ?? '',
-    }))
-  }
+  // Owners are read exclusively from the SharePoint Owners person field
+  const owners: SharePointUser[] = Array.isArray(f.Owners)
+    ? (f.Owners as SpLookupValue[]).map((u) => ({
+        id: String(u.LookupId ?? ''),
+        displayName: u.LookupValue ?? '',
+        email: u.Email ?? '',
+      }))
+    : []
 
   return {
     id: item.id,

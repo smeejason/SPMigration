@@ -172,9 +172,8 @@ export function renderProjectForm(
     try {
       let saved: MigrationProject
       if (isEdit && project) {
-        const updatedProjectData = { ...project.projectData, owners: selectedOwners }
-        await updateProject(project.id, { title, description, status, owners: selectedOwners, projectData: updatedProjectData })
-        saved = { ...project, title, description, status, owners: selectedOwners, projectData: updatedProjectData }
+        await updateProject(project.id, { title, description, status, owners: selectedOwners })
+        saved = { ...project, title, description, status, owners: selectedOwners }
         setState({
           projects: getState().projects.map((p) => (p.id === saved.id ? saved : p)),
         })
