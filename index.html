@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SP Migration Planner</title>
+    <style>
+      *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+      :root {
+        --color-primary: #0078d4;
+        --color-primary-dark: #005a9e;
+        --color-primary-light: #deecf9;
+        --color-success: #107c10;
+        --color-warning: #ff8c00;
+        --color-danger: #d13438;
+        --color-text: #323130;
+        --color-text-muted: #605e5c;
+        --color-border: #edebe9;
+        --color-bg: #faf9f8;
+        --color-surface: #ffffff;
+        --color-surface-alt: #f3f2f1;
+        --radius: 4px;
+        --shadow: 0 2px 8px rgba(0,0,0,0.1);
+        --font: 'Segoe UI', system-ui, sans-serif;
+      }
+      body {
+        font-family: var(--font);
+        color: var(--color-text);
+        background: var(--color-bg);
+        min-height: 100vh;
+      }
+      #app { min-height: 100vh; display: flex; flex-direction: column; }
+    </style>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
