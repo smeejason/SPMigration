@@ -60,17 +60,10 @@ function renderStatsCards(tree: TreeNode): string {
 }
 
 function computeStats(root: TreeNode): { totalFiles: number; totalFolders: number; totalBytes: number } {
-  // Count every folder node in the tree (each row in the CSV = one folder path)
-  let totalFolders = 0
-  function countFolders(node: TreeNode): void {
-    if (node.path) totalFolders++ // skip synthetic root (empty path)
-    for (const child of node.children) countFolders(child)
-  }
-  countFolders(root)
-
+  // Use the highest node's values directly — TreeSize stores cumulative totals on each row
   return {
     totalFiles: root.fileCount,
-    totalFolders,
+    totalFolders: root.folderCount,
     totalBytes: root.sizeBytes,
   }
 }

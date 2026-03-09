@@ -173,8 +173,14 @@ function validateHeaders(headers: string[]): void {
 // ─── Tree builder ─────────────────────────────────────────────────────────────
 
 function buildTree(rows: ParsedTreeSizeRow[]): TreeNode {
-  // Sort by path length so parents always come before children
-  const sorted = [...rows].sort((a, b) => a.path.localeCompare(b.path))
+  // Exclude file nodes (*.* pattern) — keep only folder paths
+  const folderRows = rows.filter((r) => {
+    const lastSegment = r.path.split('/').filter(Boolean).pop() ?? ''
+    return !lastSegment.includes('.')
+  })
+
+  // Sort by path so parents always come before children
+  const sorted = [...folderRows].sort((a, b) => a.path.localeCompare(b.path))
 
   const nodeMap = new Map<string, TreeNode>()
 
