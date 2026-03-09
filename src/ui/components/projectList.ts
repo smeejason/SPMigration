@@ -1,6 +1,6 @@
 import { getProjects, deleteProject } from '../../graph/projectService'
 import { setState, getState } from '../../state/store'
-import type { MigrationProject } from '../../types'
+import type { AppUser, MigrationProject } from '../../types'
 
 export async function renderProjectList(container: HTMLElement): Promise<void> {
   container.innerHTML = `
@@ -28,7 +28,11 @@ export async function renderProjectList(container: HTMLElement): Promise<void> {
 async function loadProjects(container: HTMLElement): Promise<void> {
   const body = container.querySelector('#projects-body') as HTMLElement
   try {
-    const projects = await getProjects()
+    const allProjects = await getProjects()
+    // Only show projects where the current user is listed as an owner.
+    // Projects with no owners (legacy data) are shown to everyone.
+    const currentUser = getState().auth.user
+    const projects = filterByOwnership(allProjects, currentUser)
     setState({ projects })
     renderProjectCards(body, projects, container)
   } catch (err) {
@@ -92,12 +96,22 @@ function renderProjectCards(
   })
 }
 
+function filterByOwnership(projects: MigrationProject[], user: AppUser | null): MigrationProject[] {
+  if (!user) return []
+  return projects.filter((p) => {
+    // Legacy projects with no owners are visible to everyone
+    if (p.owners.length === 0) return true
+    return p.owners.some((o) => o.email === user.mail || o.id === user.id)
+  })
+}
+
 function projectCardHtml(p: MigrationProject): string {
   const stats = p.projectData
   const sizeLabel = stats.treeData ? formatBytes(stats.treeData.sizeBytes) : '—'
   const mappingCount = (stats.mappings ?? []).length
   const modified = p.lastModified ? formatDate(p.lastModified) : '—'
   const statusClass = p.status.toLowerCase().replace(' ', '-')
+  const ownerNames = p.owners.map((o) => escHtml(o.displayName || o.email)).join(', ')
 
   return `
     <div class="project-card" data-project-id="${p.id}">
@@ -113,6 +127,7 @@ function projectCardHtml(p: MigrationProject): string {
         <span>🗺 ${mappingCount} mapping${mappingCount !== 1 ? 's' : ''}</span>
         <span>📅 ${modified}</span>
       </div>
+      ${ownerNames ? `<div class="project-owners">👤 ${ownerNames}</div>` : ''}
       <div class="project-actions">
         <button class="btn btn-primary project-open">Open</button>
         <button class="btn btn-ghost project-delete" title="Delete project">🗑</button>
@@ -151,7 +166,8 @@ function injectProjectStyles(): void {
     .project-card-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 12px; gap: 12px; }
     .project-name { font-size: 1.05rem; font-weight: 600; margin-bottom: 4px; }
     .project-desc { font-size: 0.85rem; color: var(--color-text-muted); }
-    .project-stats { display: flex; gap: 16px; font-size: 0.85rem; color: var(--color-text-muted); margin-bottom: 16px; flex-wrap: wrap; }
+    .project-stats { display: flex; gap: 16px; font-size: 0.85rem; color: var(--color-text-muted); margin-bottom: 8px; flex-wrap: wrap; }
+    .project-owners { font-size: 0.82rem; color: var(--color-text-muted); margin-bottom: 16px; }
     .project-actions { display: flex; gap: 8px; }
     .status-badge { padding: 3px 10px; border-radius: 12px; font-size: 0.78rem; font-weight: 600; white-space: nowrap; }
     .status-planning { background: #deecf9; color: #005a9e; }
