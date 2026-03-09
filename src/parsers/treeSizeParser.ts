@@ -188,9 +188,12 @@ function validateHeaders(headers: string[]): void {
 
 // ─── Tree builder ─────────────────────────────────────────────────────────────
 
-// Matches a real file extension: a dot followed by 1–5 alphanumeric chars at end of string.
-// e.g. ".pdf", ".xlsx" → file.  "3. Regulatory, Audit & Policy" → NOT a file (space after dot).
-const FILE_EXT_RE = /\.[a-zA-Z0-9]{1,5}$/
+// Matches a real file extension: a dot followed by 2–5 LETTERS (no digits) at end of string.
+// ".pdf", ".xlsx", ".docx" → file (letters-only extension).
+// "3. Regulatory, Audit & Policy" → NOT a file (space after dot).
+// "received 02.11.2020" → NOT a file (.2020 is digits).
+// "Version 1.0" → NOT a file (.0 is only 1 char).
+const FILE_EXT_RE = /\.[a-zA-Z]{2,5}$/
 
 function buildTree(rows: ParsedTreeSizeRow[]): TreeNode {
   // Drop rows that look like files (have a real file extension), keep all folders.
