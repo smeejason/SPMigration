@@ -152,7 +152,7 @@ function normalizeRow(record: Record<string, string>): ParsedTreeSizeRow {
   const rawDate = findCol(record, DATE_COLS)
   const lastModified = rawDate ? new Date(rawDate) : undefined
   return {
-    path: findCol(record, PATH_COLS).replace(/\\/g, '/').replace(/\/+$/, ''),
+    path: findCol(record, PATH_COLS).replace(/\\/g, '/').replace(/\/+$/, '').replace(/^\/+/, ''),
     sizeBytes: parseBytes(findCol(record, SIZE_COLS)),
     fileCount: parseInt(findCol(record, FILES_COLS).replace(/[^0-9]/g, '') || '0', 10),
     folderCount: parseInt(findCol(record, FOLDERS_COLS).replace(/[^0-9]/g, '') || '0', 10),

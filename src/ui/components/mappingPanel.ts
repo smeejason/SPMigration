@@ -49,12 +49,21 @@ export function renderMappingPanel(container: HTMLElement): void {
 
   const ul = document.createElement('ul')
   ul.className = 'tree-list tree-root'
-  ul.appendChild(createMappingNodeEl(tree, targetEl, true))
+
+  // If the top of the tree is a synthetic root (empty path), skip it and render
+  // its children directly so the user sees their actual top-level folder(s) first.
+  const topNodes = !tree.path ? tree.children : [tree]
+  for (const node of topNodes) {
+    ul.appendChild(createMappingNodeEl(node, targetEl, true))
+  }
+
   treeEl.appendChild(ul)
 
-  // Auto-expand root
-  const rootToggle = ul.querySelector<HTMLButtonElement>('.mapping-toggle-btn:not(.invisible)')
-  rootToggle?.click()
+  // Auto-expand if there is only one top-level node
+  if (topNodes.length === 1) {
+    const rootToggle = ul.querySelector<HTMLButtonElement>('.mapping-toggle-btn:not(.invisible)')
+    rootToggle?.click()
+  }
 }
 
 // ─── Lazy node element factory ────────────────────────────────────────────────
