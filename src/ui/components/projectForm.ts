@@ -1,6 +1,6 @@
 import { createProject, updateProject } from '../../graph/projectService'
 import { setState, getState } from '../../state/store'
-import type { MigrationProject, ProjectStatus } from '../../types'
+import type { MigrationProject, ProjectStatus, SharePointUser } from '../../types'
 
 export function renderProjectForm(
   container: HTMLElement,
@@ -84,7 +84,11 @@ export function renderProjectForm(
           projects: getState().projects.map((p) => (p.id === saved.id ? saved : p)),
         })
       } else {
-        saved = await createProject({ title, description, status })
+        const authUser = getState().auth.user
+        const owner: SharePointUser | undefined = authUser
+          ? { id: authUser.id, displayName: authUser.displayName, email: authUser.mail }
+          : undefined
+        saved = await createProject({ title, description, status, owner })
         setState({ projects: [...getState().projects, saved] })
       }
       container.innerHTML = ''

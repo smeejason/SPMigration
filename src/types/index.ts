@@ -35,6 +35,7 @@ export interface ProjectData {
   mappings?: MigrationMapping[]
   settings?: ProjectSettings
   lastSaved?: string          // ISO date string
+  owner?: SharePointUser
 }
 
 export interface ProjectSettings {

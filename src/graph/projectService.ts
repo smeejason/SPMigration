@@ -1,6 +1,6 @@
 import { Client } from '@microsoft/microsoft-graph-client'
 import { getToken } from '../auth/authService'
-import type { MigrationProject, ProjectData, ProjectStatus, GraphListItem } from '../types'
+import type { MigrationProject, ProjectData, ProjectStatus, GraphListItem, SharePointUser } from '../types'
 
 // ─── Config ───────────────────────────────────────────────────────────────────
 // These are resolved once at runtime from the SharePoint site set up during
@@ -61,14 +61,15 @@ export async function getProject(id: string): Promise<MigrationProject> {
 }
 
 export async function createProject(
-  data: Pick<MigrationProject, 'title' | 'description' | 'status'>
+  data: Pick<MigrationProject, 'title' | 'description' | 'status'> & { owner?: SharePointUser }
 ): Promise<MigrationProject> {
+  const projectData: ProjectData = data.owner ? { owner: data.owner } : {}
   const body = {
     fields: {
       Title: data.title,
       Description: data.description,
       Status: data.status,
-      ProjectData: JSON.stringify({} satisfies ProjectData),
+      ProjectData: JSON.stringify(projectData),
     },
   }
   const item = await client().api(listItemsUrl()).post(body) as GraphListItem
@@ -117,7 +118,7 @@ function mapItem(item: GraphListItem): MigrationProject {
     title: f.Title ?? '',
     description: (f.Description as string | undefined) ?? '',
     status: ((f.Status as string | undefined) ?? 'Planning') as ProjectStatus,
-    owners: [],   // Owner expansion requires additional Graph call — resolved in UI layer
+    owners: projectData.owner ? [projectData.owner] : [],
     projectData,
     lastModified: f.Modified ? new Date(f.Modified as string) : undefined,
   }

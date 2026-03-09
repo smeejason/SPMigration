@@ -1,7 +1,6 @@
 import {
   PublicClientApplication,
   type AccountInfo,
-  type AuthenticationResult,
   InteractionRequiredAuthError,
 } from '@azure/msal-browser'
 import { msalConfig, loginRequest } from './msalConfig'

@@ -1,5 +1,5 @@
 import Papa from 'papaparse'
-import { Workbook } from 'exceljs'
+import { Workbook, type Worksheet } from 'exceljs'
 import { detectFormat } from './fileDetector'
 import type { TreeNode, ParsedTreeSizeRow } from '../types'
 
@@ -51,23 +51,31 @@ async function parseExcel(file: File): Promise<ParsedTreeSizeRow[]> {
   const workbook = new Workbook()
   await workbook.xlsx.load(buffer)
 
-  const sheet = workbook.worksheets[0]
+  // Use the first worksheet that has data; TreeSize sometimes adds a cover sheet
+  const sheet = workbook.worksheets.find((ws) => ws.rowCount > 1) ?? workbook.worksheets[0]
   if (!sheet) throw new Error('No worksheets found in the Excel file.')
 
-  // First row = headers
-  const headerRow = sheet.getRow(1)
-  const headers: string[] = []
-  headerRow.eachCell((cell) => headers.push(String(cell.value ?? '').trim()))
+  // TreeSize reports sometimes prepend metadata rows before the column headers.
+  // Scan the first 10 rows to find the actual header row.
+  const headerRowNum = findHeaderRowNum(sheet)
+  if (headerRowNum === -1) {
+    throw new Error(
+      `Could not find a header row. Expected a column named one of: ${PATH_COLS.join(', ')}.`
+    )
+  }
 
-  validateHeaders(headers)
+  const headers: string[] = []
+  sheet.getRow(headerRowNum).eachCell({ includeEmpty: true }, (cell, colNum) => {
+    headers[colNum - 1] = String(cell.value ?? '').trim()
+  })
 
   const rows: ParsedTreeSizeRow[] = []
   sheet.eachRow((row, rowNum) => {
-    if (rowNum === 1) return // skip header
+    if (rowNum <= headerRowNum) return
     const record: Record<string, string> = {}
-    row.eachCell((cell, colNum) => {
+    row.eachCell({ includeEmpty: true }, (cell, colNum) => {
       const header = headers[colNum - 1]
-      if (header) record[header] = String(cell.value ?? '').trim()
+      if (header) record[header] = cellText(cell.value)
     })
     const parsed = normalizeRow(record)
     if (parsed.path) rows.push(parsed)
@@ -76,15 +84,38 @@ async function parseExcel(file: File): Promise<ParsedTreeSizeRow[]> {
   return rows
 }
 
+/** Scan up to the first 10 rows for the row containing a known path column name. */
+function findHeaderRowNum(sheet: Worksheet): number {
+  for (let r = 1; r <= Math.min(10, sheet.rowCount); r++) {
+    const row = sheet.getRow(r)
+    let found = false
+    row.eachCell((cell) => {
+      const v = String(cell.value ?? '').trim()
+      if (PATH_COLS.includes(v)) found = true
+    })
+    if (found) return r
+  }
+  return -1
+}
+
+function cellText(value: unknown): string {
+  if (value === null || value === undefined) return ''
+  if (typeof value === 'object' && 'result' in (value as object)) {
+    // Formula cell — use cached result
+    return String((value as { result: unknown }).result ?? '').trim()
+  }
+  return String(value).trim()
+}
+
 // ─── Normalisation ────────────────────────────────────────────────────────────
 
 // TreeSize exports can use different column name conventions across versions.
 // We try several common variants.
-const PATH_COLS = ['Path', 'Folder', 'Directory', 'Name']
-const SIZE_COLS = ['Size', 'Size (Bytes)', 'Allocated', 'Size in Bytes']
-const FILES_COLS = ['Files', '# Files', 'File Count', 'Number of Files']
-const FOLDERS_COLS = ['Folders', '# Folders', 'Subfolder Count', 'Subfolders']
-const DATE_COLS = ['Last Change', 'Last Modified', 'Modified', 'Date Modified']
+const PATH_COLS = ['Path', 'Folder', 'Directory', 'Name', 'Share', 'Drive', 'Shared Drive']
+const SIZE_COLS = ['Size', 'Size (Bytes)', 'Allocated', 'Size in Bytes', 'Total Size', 'Used Space']
+const FILES_COLS = ['Files', '# Files', 'File Count', 'Number of Files', 'Total Files']
+const FOLDERS_COLS = ['Folders', '# Folders', 'Subfolder Count', 'Subfolders', 'Total Folders']
+const DATE_COLS = ['Last Change', 'Last Modified', 'Modified', 'Date Modified', 'Last Accessed']
 
 function findCol(record: Record<string, string>, candidates: string[]): string {
   for (const c of candidates) {
