@@ -1,4 +1,4 @@
-import { signIn, signOut, getCurrentUser } from '../../auth/authService'
+import { signIn, getCurrentUser } from '../../auth/authService'
 import { getRootSite } from '../../graph/graphClient'
 import { setState, getState } from '../../state/store'
 

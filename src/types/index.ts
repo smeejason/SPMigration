@@ -125,7 +125,7 @@ export interface AppState {
   sites: SharePointSite[]
   pendingSiteCreations: SiteRequest[]
   ui: {
-    activeView: 'login' | 'projects' | 'project-upload' | 'project-map' | 'project-summary'
+    activeView: 'login' | 'projects' | 'project-upload' | 'project-map' | 'project-sites' | 'project-summary'
     loading: boolean
     error: string | null
   }
