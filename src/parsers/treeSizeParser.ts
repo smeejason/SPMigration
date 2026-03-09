@@ -188,11 +188,15 @@ function validateHeaders(headers: string[]): void {
 
 // ─── Tree builder ─────────────────────────────────────────────────────────────
 
+// Matches a real file extension: a dot followed by 1–5 alphanumeric chars at end of string.
+// e.g. ".pdf", ".xlsx" → file.  "3. Regulatory, Audit & Policy" → NOT a file (space after dot).
+const FILE_EXT_RE = /\.[a-zA-Z0-9]{1,5}$/
+
 function buildTree(rows: ParsedTreeSizeRow[]): TreeNode {
-  // Drop file-like rows (any last segment containing a dot = *.* pattern)
+  // Drop rows that look like files (have a real file extension), keep all folders.
   const folderRows = rows.filter((r) => {
     const lastSegment = r.path.split('/').filter(Boolean).pop() ?? ''
-    return lastSegment.length > 0 && !lastSegment.includes('.')
+    return lastSegment.length > 0 && !FILE_EXT_RE.test(lastSegment)
   })
 
   if (folderRows.length === 0) {
