@@ -100,9 +100,18 @@ function findHeaderRowNum(sheet: Worksheet): number {
 
 function cellText(value: unknown): string {
   if (value === null || value === undefined) return ''
-  if (typeof value === 'object' && 'result' in (value as object)) {
+  if (typeof value === 'object') {
+    const v = value as Record<string, unknown>
     // Formula cell — use cached result
-    return String((value as { result: unknown }).result ?? '').trim()
+    if ('result' in v) return String(v.result ?? '').trim()
+    // Rich text cell (ExcelJS returns { richText: [{text, font}, ...] })
+    if ('richText' in v && Array.isArray(v.richText)) {
+      return (v.richText as Array<{ text?: unknown }>).map((r) => String(r.text ?? '')).join('').trim()
+    }
+    // Hyperlink cell
+    if ('text' in v) return String(v.text ?? '').trim()
+    // Error cell
+    if ('error' in v) return ''
   }
   return String(value).trim()
 }

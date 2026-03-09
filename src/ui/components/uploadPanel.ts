@@ -1,7 +1,5 @@
-import { parseTreeSizeFile } from '../../parsers/treeSizeParser'
 import { setState, getState } from '../../state/store'
 import { updateProject } from '../../graph/projectService'
-import { renderTreeView } from './treeView'
 import type { TreeNode } from '../../types'
 
 export function renderUploadPanel(container: HTMLElement): void {
@@ -26,25 +24,58 @@ export function renderUploadPanel(container: HTMLElement): void {
         <div id="upload-status" class="upload-status" style="display:none"></div>
       </div>
 
-      <div id="tree-preview" class="panel-section" style="${existingTree ? '' : 'display:none'}">
-        <div class="tree-header-row">
-          <h3>File System Tree</h3>
-          ${existingTree ? `<div class="tree-summary">${treeSummary(existingTree)}</div>` : ''}
+      <div id="stats-section" class="panel-section" style="${existingTree ? '' : 'display:none'}">
+        <h3>File System Summary</h3>
+        <div id="stats-cards" class="stats-grid">
+          ${existingTree ? renderStatsCards(existingTree) : ''}
         </div>
-        <div id="tree-container" class="tree-container"></div>
       </div>
     </div>
   `
   injectUploadStyles()
-
-  // Show existing tree if available
-  if (existingTree) {
-    const treeContainer = container.querySelector('#tree-container') as HTMLElement
-    renderTreeView(treeContainer, existingTree)
-  }
-
   setupDropZone(container)
 }
+
+// ─── Stats ────────────────────────────────────────────────────────────────────
+
+function renderStatsCards(tree: TreeNode): string {
+  const { totalFiles, totalFolders, totalBytes } = computeStats(tree)
+  return `
+    <div class="stat-card">
+      <div class="stat-icon">📄</div>
+      <div class="stat-value">${totalFiles.toLocaleString()}</div>
+      <div class="stat-label">Total Files</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-icon">📁</div>
+      <div class="stat-value">${totalFolders.toLocaleString()}</div>
+      <div class="stat-label">Total Folders</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-icon">💾</div>
+      <div class="stat-value">${formatBytes(totalBytes)}</div>
+      <div class="stat-label">Space Used</div>
+    </div>
+  `
+}
+
+function computeStats(root: TreeNode): { totalFiles: number; totalFolders: number; totalBytes: number } {
+  // Count every folder node in the tree (each row in the CSV = one folder path)
+  let totalFolders = 0
+  function countFolders(node: TreeNode): void {
+    if (node.path) totalFolders++ // skip synthetic root (empty path)
+    for (const child of node.children) countFolders(child)
+  }
+  countFolders(root)
+
+  return {
+    totalFiles: root.fileCount,
+    totalFolders,
+    totalBytes: root.sizeBytes,
+  }
+}
+
+// ─── Drop zone / file handling ────────────────────────────────────────────────
 
 function setupDropZone(container: HTMLElement): void {
   const dropZone = container.querySelector('#drop-zone') as HTMLElement
@@ -69,68 +100,79 @@ function setupDropZone(container: HTMLElement): void {
   })
 }
 
-async function handleFile(container: HTMLElement, file: File): Promise<void> {
+function handleFile(container: HTMLElement, file: File): void {
   const status = container.querySelector('#upload-status') as HTMLElement
-  const treePreview = container.querySelector('#tree-preview') as HTMLElement
-  const treeContainer = container.querySelector('#tree-container') as HTMLElement
+  const statsSection = container.querySelector('#stats-section') as HTMLElement
+  const statsCards = container.querySelector('#stats-cards') as HTMLElement
+
+  const fileName = String(file?.name ?? 'file')
 
   status.className = 'upload-status upload-status--info'
-  status.textContent = `Parsing "${file.name}"…`
+  status.innerHTML = `
+    <span class="spinner"></span>
+    Parsing <strong>${escHtml(fileName)}</strong> — this may take a moment for large files…
+  `
   status.style.display = 'block'
+  statsSection.style.display = 'none'
 
-  try {
-    const tree = await parseTreeSizeFile(file)
+  // Run parsing in a Web Worker so the UI stays responsive
+  const worker = new Worker(new URL('../../parsers/parseWorker.ts', import.meta.url), { type: 'module' })
+  worker.postMessage(file)
+
+  worker.onmessage = (e: MessageEvent<{ ok: boolean; tree?: TreeNode; error?: string }>) => {
+    worker.terminate()
+    if (!e.data.ok || !e.data.tree) {
+      status.className = 'upload-status upload-status--error'
+      status.textContent = `Error: ${e.data.error ?? 'Unknown error'}`
+      return
+    }
+
+    const tree = e.data.tree
     setState({ treeData: tree })
 
+    const stats = computeStats(tree)
     status.className = 'upload-status upload-status--success'
-    status.textContent = `✓ Parsed successfully — ${treeSummary(tree)}`
+    status.textContent = `✓ Parsed successfully — ${formatBytes(stats.totalBytes)} · ${stats.totalFiles.toLocaleString()} files · ${stats.totalFolders.toLocaleString()} folders`
 
-    // Show tree
-    treePreview.style.display = ''
-    treePreview.querySelector('.tree-header-row')!.innerHTML = `
-      <h3>File System Tree</h3>
-      <div class="tree-summary">${treeSummary(tree)}</div>
-    `
-    renderTreeView(treeContainer, tree)
+    statsCards.innerHTML = renderStatsCards(tree)
+    statsSection.style.display = ''
 
-    // Persist to SharePoint
+    // Persist to SharePoint (non-critical)
     const project = getState().currentProject
     if (project) {
-      try {
-        await updateProject(project.id, {
-          projectData: { ...project.projectData, treeData: tree },
+      updateProject(project.id, {
+        projectData: { ...project.projectData, treeData: tree },
+      })
+        .then(() => {
+          setState({
+            currentProject: { ...project, projectData: { ...project.projectData, treeData: tree } },
+          })
         })
-        setState({
-          currentProject: { ...project, projectData: { ...project.projectData, treeData: tree } },
-        })
-      } catch {
-        // Non-critical — tree is in state, save failed silently
-        console.warn('[Upload] Could not persist tree to SharePoint')
-      }
+        .catch(() => console.warn('[Upload] Could not persist tree to SharePoint'))
     }
-  } catch (err) {
+  }
+
+  worker.onerror = (e) => {
+    worker.terminate()
     status.className = 'upload-status upload-status--error'
-    status.textContent = `Error: ${(err as Error).message}`
+    status.textContent = `Error: ${e.message ?? 'Parse worker failed'}`
   }
 }
 
-function treeSummary(tree: TreeNode): string {
-  const totalFiles = countFiles(tree)
-  const size = formatBytes(tree.sizeBytes)
-  return `${size} · ${totalFiles.toLocaleString()} files`
-}
-
-function countFiles(node: TreeNode): number {
-  if (node.children.length === 0) return node.fileCount
-  return node.fileCount + node.children.reduce((s, c) => s + countFiles(c), 0)
-}
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function formatBytes(bytes: number): string {
-  if (bytes === 0) return '0 B'
+  if (!bytes || bytes <= 0) return '0 B'
   const units = ['B', 'KB', 'MB', 'GB', 'TB']
-  const i = Math.floor(Math.log(bytes) / Math.log(1024))
+  const i = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1)
   return `${(bytes / Math.pow(1024, i)).toFixed(1)} ${units[i]}`
 }
+
+function escHtml(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+}
+
+// ─── Styles ───────────────────────────────────────────────────────────────────
 
 function injectUploadStyles(): void {
   if (document.getElementById('upload-styles')) return
@@ -141,6 +183,8 @@ function injectUploadStyles(): void {
     .panel-section { margin-bottom: 32px; }
     .panel-section h3 { font-size: 1.05rem; font-weight: 600; margin-bottom: 8px; }
     .panel-desc { font-size: 0.88rem; color: var(--color-text-muted); margin-bottom: 16px; }
+
+    /* Drop zone */
     .drop-zone { border: 2px dashed var(--color-border); border-radius: 8px; padding: 40px 24px;
       text-align: center; transition: border-color 0.15s, background 0.15s; cursor: default; }
     .drop-zone--active, .drop-zone:hover { border-color: var(--color-primary); background: var(--color-primary-light); }
@@ -149,14 +193,29 @@ function injectUploadStyles(): void {
     .drop-label { font-size: 0.9rem; color: var(--color-text-muted); margin-bottom: 12px; }
     .drop-hint { font-size: 0.8rem; color: var(--color-text-muted); margin-top: 8px; }
     .btn-sm { padding: 6px 14px; font-size: 0.85rem; }
-    .upload-status { padding: 10px 14px; border-radius: 4px; font-size: 0.875rem; margin-top: 12px; }
+
+    /* Status */
+    .upload-status { padding: 10px 14px; border-radius: 4px; font-size: 0.875rem; margin-top: 12px;
+      display: flex; align-items: center; gap: 8px; }
     .upload-status--info { background: #deecf9; color: #005a9e; }
     .upload-status--success { background: #dff6dd; color: #107c10; }
     .upload-status--error { background: #fde7e9; color: #a4262c; }
-    .tree-header-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
-    .tree-summary { font-size: 0.85rem; color: var(--color-text-muted); }
-    .tree-container { border: 1px solid var(--color-border); border-radius: 6px; overflow: auto;
-      max-height: 500px; background: white; }
+
+    /* Spinner */
+    .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid currentColor;
+      border-top-color: transparent; border-radius: 50%; animation: spin 0.7s linear infinite; flex-shrink: 0; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* Stats cards */
+    .stats-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-top: 12px; }
+    .stat-card { background: var(--color-surface, #faf9f8); border: 1px solid var(--color-border);
+      border-radius: 8px; padding: 20px 24px; display: flex; flex-direction: column; align-items: center;
+      gap: 6px; text-align: center; }
+    .stat-icon { font-size: 2rem; }
+    .stat-value { font-size: 1.6rem; font-weight: 700; color: var(--color-primary, #0078d4);
+      font-variant-numeric: tabular-nums; }
+    .stat-label { font-size: 0.8rem; color: var(--color-text-muted); text-transform: uppercase;
+      letter-spacing: 0.05em; font-weight: 500; }
   `
   document.head.appendChild(style)
 }
