@@ -14,13 +14,8 @@ import type {
 
 function createClient(): Client {
   return Client.init({
-    authProvider: async (done) => {
-      try {
-        const token = await getToken()
-        done(null, token)
-      } catch (err) {
-        done(err as Error, null)
-      }
+    authProvider: {
+      getAccessToken: () => getToken(),
     },
   })
 }
