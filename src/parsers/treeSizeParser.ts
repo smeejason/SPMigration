@@ -148,11 +148,21 @@ function parseBytes(raw: string): number {
   return Math.round(num)
 }
 
+function normalizePath(raw: string): string {
+  return raw
+    .trim()                   // strip leading/trailing whitespace (common in CSV exports)
+    .replace(/\\/g, '/')      // backslash → forward slash
+    .replace(/\/+/g, '/')     // collapse runs of slashes (// → /)
+    .replace(/^\//, '')       // strip leading slash
+    .replace(/\/$/, '')       // strip trailing slash
+    .trim()                   // trim again in case whitespace was next to slashes
+}
+
 function normalizeRow(record: Record<string, string>): ParsedTreeSizeRow {
   const rawDate = findCol(record, DATE_COLS)
   const lastModified = rawDate ? new Date(rawDate) : undefined
   return {
-    path: findCol(record, PATH_COLS).replace(/\\/g, '/').replace(/\/+$/, '').replace(/^\/+/, ''),
+    path: normalizePath(findCol(record, PATH_COLS)),
     sizeBytes: parseBytes(findCol(record, SIZE_COLS)),
     fileCount: parseInt(findCol(record, FILES_COLS).replace(/[^0-9]/g, '') || '0', 10),
     folderCount: parseInt(findCol(record, FOLDERS_COLS).replace(/[^0-9]/g, '') || '0', 10),
@@ -173,66 +183,71 @@ function validateHeaders(headers: string[]): void {
 // ─── Tree builder ─────────────────────────────────────────────────────────────
 
 function buildTree(rows: ParsedTreeSizeRow[]): TreeNode {
-  // Exclude file nodes (*.* pattern) — keep only folder paths
+  // Drop file-like rows (any last segment containing a dot = *.* pattern)
   const folderRows = rows.filter((r) => {
     const lastSegment = r.path.split('/').filter(Boolean).pop() ?? ''
-    return !lastSegment.includes('.')
+    return lastSegment.length > 0 && !lastSegment.includes('.')
   })
 
-  // Sort by path so parents always come before children
-  const sorted = [...folderRows].sort((a, b) => a.path.localeCompare(b.path))
+  if (folderRows.length === 0) {
+    throw new Error('No folder paths found after filtering. Check your TreeSize export settings.')
+  }
 
+  // ── Pass 1: create every node and index by path ───────────────────────────
   const nodeMap = new Map<string, TreeNode>()
 
-  for (const row of sorted) {
+  for (const row of folderRows) {
     const parts = row.path.split('/').filter(Boolean)
-    const name = parts[parts.length - 1] ?? row.path
-    const depth = parts.length - 1
+    if (parts.length === 0) continue
 
     const node: TreeNode = {
       path: row.path,
-      name,
-      depth,
+      name: parts[parts.length - 1],
+      depth: parts.length - 1,
       sizeBytes: row.sizeBytes,
       fileCount: row.fileCount,
       folderCount: row.folderCount,
       lastModified: row.lastModified,
       children: [],
     }
-
     nodeMap.set(row.path, node)
+  }
 
-    // Find parent
-    if (parts.length > 1) {
-      const parentPath = parts.slice(0, -1).join('/')
-      const parent = nodeMap.get(parentPath) ?? nodeMap.get('/' + parentPath)
-      if (parent) {
-        parent.children.push(node)
-      }
+  // ── Pass 2: link every node to its parent ─────────────────────────────────
+  // We do this after all nodes exist so order does not matter.
+  const hasParent = new Set<string>()
+
+  for (const [path, node] of nodeMap) {
+    const parts = path.split('/').filter(Boolean)
+    if (parts.length <= 1) continue
+
+    const parentPath = parts.slice(0, -1).join('/')
+    const parent = nodeMap.get(parentPath)
+    if (parent) {
+      parent.children.push(node)
+      hasParent.add(path)
     }
   }
 
-  // Find root(s) — nodes with no parent in the map
-  const roots = sorted.filter((r) => {
-    const parts = r.path.split('/').filter(Boolean)
-    if (parts.length <= 1) return true
-    const parentPath = parts.slice(0, -1).join('/')
-    return !nodeMap.has(parentPath) && !nodeMap.has('/' + parentPath)
-  })
-
-  if (roots.length === 1) {
-    return nodeMap.get(roots[0].path)!
+  // Sort each folder's children alphabetically for a consistent display order
+  for (const node of nodeMap.values()) {
+    node.children.sort((a, b) => a.name.localeCompare(b.name))
   }
 
-  // Multiple roots → synthetic root
+  // ── Identify root(s) — nodes with no parent ───────────────────────────────
+  const rootNodes = [...nodeMap.values()].filter((n) => !hasParent.has(n.path))
+
+  if (rootNodes.length === 1) return rootNodes[0]
+
+  // Multiple roots → synthetic wrapper (skipped in the UI)
   const syntheticRoot: TreeNode = {
     path: '',
     name: 'Root',
     depth: -1,
-    sizeBytes: roots.reduce((s, r) => s + (nodeMap.get(r.path)?.sizeBytes ?? 0), 0),
-    fileCount: roots.reduce((s, r) => s + (nodeMap.get(r.path)?.fileCount ?? 0), 0),
-    folderCount: roots.length,
-    children: roots.map((r) => nodeMap.get(r.path)!),
+    sizeBytes: rootNodes.reduce((s, r) => s + r.sizeBytes, 0),
+    fileCount: rootNodes.reduce((s, r) => s + r.fileCount, 0),
+    folderCount: rootNodes.length,
+    children: rootNodes.sort((a, b) => a.name.localeCompare(b.name)),
   }
   return syntheticRoot
 }
