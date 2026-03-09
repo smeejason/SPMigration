@@ -46,24 +46,33 @@ export function getCurrentUser(): AppUser | null {
 // ─── Sign in / out ────────────────────────────────────────────────────────────
 
 export async function signIn(): Promise<AppUser> {
-  let result: AuthenticationResult
   try {
-    result = await msalInstance.loginPopup(loginRequest)
+    const result = await msalInstance.loginPopup(loginRequest)
+    const account = result.account
+    return {
+      id: account.homeAccountId,
+      displayName: account.name ?? '',
+      mail: account.username,
+      userPrincipalName: account.username,
+    }
   } catch (err) {
-    // If popup was blocked, fall back to redirect
+    // COOP browser policy can block popup detection even when login succeeded.
+    // If the account was cached by MSAL, treat it as a successful sign-in.
+    const account = getAccount()
+    if (account) {
+      return {
+        id: account.homeAccountId,
+        displayName: account.name ?? '',
+        mail: account.username,
+        userPrincipalName: account.username,
+      }
+    }
+    // Fall back to redirect if popup was blocked entirely
     if ((err as Error).message?.includes('popup')) {
       await msalInstance.loginRedirect(loginRequest)
-      // Page will reload — execution stops here
       return Promise.reject(new Error('Redirecting for login…'))
     }
     throw err
-  }
-  const account = result.account
-  return {
-    id: account.homeAccountId,
-    displayName: account.name ?? '',
-    mail: account.username,
-    userPrincipalName: account.username,
   }
 }
 

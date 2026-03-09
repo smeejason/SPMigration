@@ -13,7 +13,7 @@ import type {
 // ─── Graph client factory ─────────────────────────────────────────────────────
 
 function createClient(): Client {
-  return Client.init({
+  return Client.initWithMiddleware({
     authProvider: {
       getAccessToken: () => getToken(),
     },
