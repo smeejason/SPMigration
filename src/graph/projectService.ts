@@ -40,34 +40,58 @@ function listItemsUrl(): string {
 
 // ─── SP User resolution ───────────────────────────────────────────────────────
 //
-// SharePoint Person fields require the internal SP list item ID from the site's
-// "User Information List", not the AAD Object ID.  We query by email to resolve.
-// If a user hasn't visited the SP site yet they won't be in the list; in that
-// case we fall back to the claims-format identity string so the write still works.
+// SharePoint Person fields require the internal numeric SP user ID, not the AAD
+// Object ID.  The only reliable way to get/create this via delegated auth is the
+// SharePoint REST ensureUser endpoint, which we call directly with a SharePoint-
+// scoped token.  The site webUrl (needed for the REST call) is fetched once and
+// cached.
+
+let _spWebUrl: string | null = null
+
+async function getSpWebUrl(): Promise<string> {
+  if (_spWebUrl) return _spWebUrl
+  const { siteId } = getSpConfig()
+  const site = await client()
+    .api(`/sites/${siteId}`)
+    .select('webUrl')
+    .get() as { webUrl: string }
+  _spWebUrl = site.webUrl
+  return site.webUrl
+}
 
 async function resolveSpUserIds(emails: string[]): Promise<string[]> {
-  const { siteId } = getSpConfig()
-  const ids: string[] = []
-  for (const email of emails) {
-    if (!email) continue
-    try {
-      const res = await client()
-        .api(`/sites/${siteId}/lists/User Information List/items`)
-        .filter(`fields/EMail eq '${email}'`)
-        .expand('fields($select=EMail)')
-        .top(1)
-        .get() as { value: Array<{ id: string }> }
-      if (res.value.length > 0) {
-        ids.push(res.value[0].id)
-      } else {
-        // User not yet in the SP site — use claims-format identity string
-        ids.push(`i:0#.f|membership|${email}`)
+  if (emails.length === 0) return []
+  try {
+    const webUrl = await getSpWebUrl()
+    const spHost = new URL(webUrl).origin  // e.g. https://tenant.sharepoint.com
+    const spToken = await getToken([`${spHost}/.default`])
+    const ids: string[] = []
+
+    for (const email of emails) {
+      if (!email) continue
+      try {
+        const res = await fetch(`${webUrl}/_api/web/ensureuser`, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${spToken}`,
+            'Content-Type': 'application/json;odata=verbose',
+            Accept: 'application/json;odata=verbose',
+          },
+          body: JSON.stringify({ logonName: `i:0#.f|membership|${email}` }),
+        })
+        if (res.ok) {
+          const data = await res.json() as { d: { Id: number } }
+          ids.push(String(data.d.Id))
+        }
+      } catch {
+        // Skip user if ensureUser fails for this email
       }
-    } catch {
-      ids.push(`i:0#.f|membership|${email}`)
     }
+    return ids
+  } catch {
+    // If we can't get the SP token or site URL, skip writing Owners field
+    return []
   }
-  return ids
 }
 
 // ─── CRUD ─────────────────────────────────────────────────────────────────────
