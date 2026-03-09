@@ -188,53 +188,50 @@ function validateHeaders(headers: string[]): void {
 
 // ─── Tree builder ─────────────────────────────────────────────────────────────
 
-// Matches a real file extension: a dot followed by 2–5 LETTERS (no digits) at end of string.
-// ".pdf", ".xlsx", ".docx" → file (letters-only extension).
-// "3. Regulatory, Audit & Policy" → NOT a file (space after dot).
-// "received 02.11.2020" → NOT a file (.2020 is digits).
-// "Version 1.0" → NOT a file (.0 is only 1 char).
-const FILE_EXT_RE = /\.[a-zA-Z]{2,5}$/
-
 function buildTree(rows: ParsedTreeSizeRow[]): TreeNode {
-  // Drop rows that look like files (have a real file extension), keep all folders.
-  const folderRows = rows.filter((r) => {
-    const lastSegment = r.path.split('/').filter(Boolean).pop() ?? ''
-    return lastSegment.length > 0 && !FILE_EXT_RE.test(lastSegment)
-  })
-
-  if (folderRows.length === 0) {
-    throw new Error('No folder paths found after filtering. Check your TreeSize export settings.')
+  // Every row is a folder — no filtering.
+  // Index explicit rows by path so we can attach their metadata.
+  const rowMap = new Map<string, ParsedTreeSizeRow>()
+  for (const row of rows) {
+    if (row.path) rowMap.set(row.path, row)
   }
 
-  // ── Pass 1: create every node and index by path ───────────────────────────
-  const nodeMap = new Map<string, TreeNode>()
-
-  for (const row of folderRows) {
+  // ── Pass 1: collect ALL paths, including implicit ancestor segments ────────
+  // e.g. if a row has path "BHFP03/NationalDataDrive/Shared/AKL" but
+  // "BHFP03/NationalDataDrive" is not its own row, we still create that node
+  // so children are never left as orphan roots.
+  const allPaths = new Set<string>()
+  for (const row of rows) {
+    if (!row.path) continue
     const parts = row.path.split('/').filter(Boolean)
-    if (parts.length === 0) continue
+    for (let i = 1; i <= parts.length; i++) {
+      allPaths.add(parts.slice(0, i).join('/'))
+    }
+  }
 
-    const node: TreeNode = {
-      path: row.path,
+  // ── Pass 2: build a node for every path ───────────────────────────────────
+  const nodeMap = new Map<string, TreeNode>()
+  for (const path of allPaths) {
+    const parts = path.split('/').filter(Boolean)
+    const row = rowMap.get(path)
+    nodeMap.set(path, {
+      path,
       name: parts[parts.length - 1],
       depth: parts.length - 1,
-      sizeBytes: row.sizeBytes,
-      fileCount: row.fileCount,
-      folderCount: row.folderCount,
-      lastModified: row.lastModified,
-      lastAccessed: row.lastAccessed,
+      sizeBytes: row?.sizeBytes ?? 0,
+      fileCount: row?.fileCount ?? 0,
+      folderCount: row?.folderCount ?? 0,
+      lastModified: row?.lastModified,
+      lastAccessed: row?.lastAccessed,
       children: [],
-    }
-    nodeMap.set(row.path, node)
+    })
   }
 
-  // ── Pass 2: link every node to its parent ─────────────────────────────────
-  // We do this after all nodes exist so order does not matter.
+  // ── Pass 3: link every node to its parent ─────────────────────────────────
   const hasParent = new Set<string>()
-
   for (const [path, node] of nodeMap) {
     const parts = path.split('/').filter(Boolean)
     if (parts.length <= 1) continue
-
     const parentPath = parts.slice(0, -1).join('/')
     const parent = nodeMap.get(parentPath)
     if (parent) {
@@ -243,7 +240,7 @@ function buildTree(rows: ParsedTreeSizeRow[]): TreeNode {
     }
   }
 
-  // Sort each folder's children alphabetically for a consistent display order
+  // Sort each folder's children alphabetically for consistent display
   for (const node of nodeMap.values()) {
     node.children.sort((a, b) => a.name.localeCompare(b.name))
   }
@@ -254,7 +251,7 @@ function buildTree(rows: ParsedTreeSizeRow[]): TreeNode {
   if (rootNodes.length === 1) return rootNodes[0]
 
   // Multiple roots → synthetic wrapper (skipped in the UI)
-  const syntheticRoot: TreeNode = {
+  return {
     path: '',
     name: 'Root',
     depth: -1,
@@ -263,5 +260,4 @@ function buildTree(rows: ParsedTreeSizeRow[]): TreeNode {
     folderCount: rootNodes.length,
     children: rootNodes.sort((a, b) => a.name.localeCompare(b.name)),
   }
-  return syntheticRoot
 }
