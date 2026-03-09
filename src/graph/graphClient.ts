@@ -44,7 +44,12 @@ export async function getCurrentUser(): Promise<AppUser> {
 // ─── Root site (connectivity check) ──────────────────────────────────────────
 
 export async function getRootSite(): Promise<SharePointSite> {
-  const site = await client().api('/sites/root').get() as GraphSite
+  const site = await client().api('/sites/root').get() as GraphSite | null
+  if (!site) {
+    throw new Error(
+      'Could not reach SharePoint root site. Ensure admin consent has been granted for Sites.ReadWrite.All in your Azure App Registration.'
+    )
+  }
   return mapSite(site)
 }
 
