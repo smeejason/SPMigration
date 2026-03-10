@@ -75,7 +75,15 @@ async function parseExcel(file: File): Promise<ParsedTreeSizeRow[]> {
     const record: Record<string, string> = {}
     row.eachCell({ includeEmpty: true }, (cell, colNum) => {
       const header = headers[colNum - 1]
-      if (header) record[header] = cellText(cell.value)
+      if (!header) return
+      let text = cellText(cell.value)
+      // TreeSize Excel exports store the unit in the cell number format (e.g. '#,0.0 "TB"').
+      // Append it so parseBytes can convert correctly.
+      if (typeof cell.value === 'number' && cell.numFmt) {
+        const unitMatch = (cell.numFmt as string).match(/"([^"]+)"/)
+        if (unitMatch) text = `${text} ${unitMatch[1]}`
+      }
+      record[header] = text
     })
     const parsed = normalizeRow(record)
     if (parsed.path) rows.push(parsed)
@@ -142,10 +150,11 @@ function parseBytes(raw: string): number {
   if (isNaN(num)) return 0
 
   const lower = raw.toLowerCase()
-  if (lower.includes('tb')) return Math.round(num * 1e12)
-  if (lower.includes('gb')) return Math.round(num * 1e9)
-  if (lower.includes('mb')) return Math.round(num * 1e6)
-  if (lower.includes('kb')) return Math.round(num * 1e3)
+  // Use binary (1024-based) units to match formatBytes display, ensuring round-trip accuracy.
+  if (lower.includes('tb')) return Math.round(num * 1024 ** 4)
+  if (lower.includes('gb')) return Math.round(num * 1024 ** 3)
+  if (lower.includes('mb')) return Math.round(num * 1024 ** 2)
+  if (lower.includes('kb')) return Math.round(num * 1024)
   return Math.round(num)
 }
 
