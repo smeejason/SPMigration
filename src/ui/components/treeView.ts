@@ -34,7 +34,8 @@ function createNodeEl(node: TreeNode, isRoot = false): HTMLLIElement {
   li.className = `tree-node${isRoot ? ' tree-node--root' : ''}`
 
   const hasChildren = node.children.length > 0
-  const isFolder = hasChildren || node.folderCount > 0
+  // All TreeSize rows are directories. Only *-wildcard entries (e.g. "*.*") are loose-file indicators.
+  const isFolder = !node.name.includes('*')
 
   const row = document.createElement('div')
   row.className = 'tree-row'

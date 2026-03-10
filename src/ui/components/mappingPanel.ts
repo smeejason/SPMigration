@@ -28,7 +28,11 @@ export function renderMappingPanel(container: HTMLElement): void {
           <h3>Source: File System</h3>
           <span class="mapping-hint">Click a folder to map it</span>
         </div>
+        <div class="mapping-search-bar">
+          <input type="text" id="tree-search" class="form-input mapping-search-input" placeholder="Search by name or path…" autocomplete="off" />
+        </div>
         <div id="mapping-tree" class="mapping-tree"></div>
+        <div id="mapping-search-results" class="mapping-tree" style="display:none"></div>
       </div>
       <div class="mapping-right">
         <div class="mapping-section-header">
@@ -64,6 +68,58 @@ export function renderMappingPanel(container: HTMLElement): void {
     const rootToggle = ul.querySelector<HTMLButtonElement>('.mapping-toggle-btn:not(.invisible)')
     rootToggle?.click()
   }
+
+  // ── Search ────────────────────────────────────────────────────────────────
+  const searchInput = container.querySelector('#tree-search') as HTMLInputElement
+  const treeDiv = container.querySelector('#mapping-tree') as HTMLElement
+  const resultsDiv = container.querySelector('#mapping-search-results') as HTMLElement
+
+  // Pre-collect every node in the tree for fast searching
+  const allNodes: TreeNode[] = []
+  function collectNodes(node: TreeNode): void {
+    allNodes.push(node)
+    for (const child of node.children) collectNodes(child)
+  }
+  for (const n of topNodes) collectNodes(n)
+
+  searchInput.addEventListener('input', () => {
+    const term = searchInput.value.trim().toLowerCase()
+    if (!term) {
+      treeDiv.style.display = ''
+      resultsDiv.style.display = 'none'
+      resultsDiv.innerHTML = ''
+      return
+    }
+
+    const matches = allNodes.filter(
+      (n) => n.name.toLowerCase().includes(term) || n.path.toLowerCase().includes(term)
+    )
+
+    treeDiv.style.display = 'none'
+    resultsDiv.style.display = ''
+
+    if (matches.length === 0) {
+      resultsDiv.innerHTML = '<p class="mapping-search-empty">No folders match your search.</p>'
+      return
+    }
+
+    const ul2 = document.createElement('ul')
+    ul2.className = 'tree-list'
+    for (const match of matches) {
+      const li = createMappingNodeEl(match, targetEl)
+      // In search results, inject a full-path subtitle so it's always visible
+      const row = li.querySelector<HTMLElement>('.mapping-row')
+      if (row && match.path) {
+        const pathLabel = document.createElement('span')
+        pathLabel.className = 'search-result-path'
+        pathLabel.textContent = match.path.replace(/\//g, '\\')
+        row.insertAdjacentElement('afterend', pathLabel)
+      }
+      ul2.appendChild(li)
+    }
+    resultsDiv.innerHTML = ''
+    resultsDiv.appendChild(ul2)
+  })
 }
 
 // ─── Lazy node element factory ────────────────────────────────────────────────
@@ -73,7 +129,8 @@ function createMappingNodeEl(node: TreeNode, targetEl: HTMLElement, isRoot = fal
   li.className = `mapping-node${isRoot ? ' mapping-node--root' : ''}`
 
   const hasChildren = node.children.length > 0
-  const isFolder = hasChildren || node.folderCount > 0
+  // All TreeSize rows are directories. Only *-wildcard entries (e.g. "*.*") are loose-file indicators.
+  const isFolder = !node.name.includes('*')
 
   // ── Row ──────────────────────────────────────────────────────────────────
   const row = document.createElement('div')
@@ -385,6 +442,12 @@ function injectMappingStyles(): void {
   style.id = 'mapping-styles'
   style.textContent = `
     .mapping-empty { padding: 48px; text-align: center; color: var(--color-text-muted); }
+    .mapping-search-bar { padding: 8px 12px; border-bottom: 1px solid var(--color-border); background: white; }
+    .mapping-search-input { width: 100%; box-sizing: border-box; padding: 6px 10px; font-size: 0.85rem; }
+    .mapping-search-empty { padding: 16px; color: var(--color-text-muted); font-size: 0.875rem; text-align: center; }
+    .search-result-path { display: block; font-size: 0.72rem; color: var(--color-text-muted);
+      font-family: 'Consolas', monospace; padding: 0 8px 4px 46px; white-space: nowrap;
+      overflow: hidden; text-overflow: ellipsis; }
     .mapping-panel { display: grid; grid-template-columns: 1fr 1fr; height: calc(100vh - 140px); overflow: hidden; }
     .mapping-left, .mapping-right { overflow-y: auto; border-right: 1px solid var(--color-border); }
     .mapping-right { border-right: none; }
