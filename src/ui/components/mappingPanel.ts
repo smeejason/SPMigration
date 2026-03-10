@@ -413,8 +413,14 @@ async function openTargetPanel(
   }
   attachClearSite()
 
-  targetEl.querySelector('#btn-save-mapping')?.addEventListener('click', () => {
+  targetEl.querySelector('#btn-save-mapping')?.addEventListener('click', async () => {
     const folderPath = (targetEl.querySelector('#folder-path') as HTMLInputElement).value.trim()
+    const libSelect = targetEl.querySelector('#library-select') as HTMLSelectElement | null
+    if (libSelect && selectedSite) {
+      const selId = libSelect.value
+      const selName = libSelect.options[libSelect.selectedIndex]?.text ?? ''
+      selectedDrive = selId ? { id: selId, name: selName, webUrl: '', driveType: 'documentLibrary' } : null
+    }
 
     const mapping: MigrationMapping = {
       id: node.path,
@@ -430,20 +436,37 @@ async function openTargetPanel(
       mapping,
     ]
     setState({ mappings })
-    persistMappings(mappings)
     onMappingChange(selectedSite?.displayName ?? null)
 
     const saveBtn = targetEl.querySelector('#btn-save-mapping') as HTMLButtonElement
-    saveBtn.textContent = '✓ Saved'
-    setTimeout(() => { saveBtn.textContent = 'Save Mapping' }, 2000)
+    saveBtn.disabled = true
+    saveBtn.textContent = 'Saving…'
+    try {
+      await persistMappings(mappings)
+      saveBtn.textContent = '✓ Saved'
+    } catch {
+      saveBtn.textContent = '⚠ Save failed — retry'
+    } finally {
+      saveBtn.disabled = false
+      setTimeout(() => { if (saveBtn.textContent !== '⚠ Save failed — retry') saveBtn.textContent = 'Save Mapping' }, 2000)
+    }
   })
 
-  targetEl.querySelector('#btn-remove-mapping')?.addEventListener('click', () => {
+  targetEl.querySelector('#btn-remove-mapping')?.addEventListener('click', async () => {
+    const removeBtn = targetEl.querySelector('#btn-remove-mapping') as HTMLButtonElement
+    removeBtn.disabled = true
+    removeBtn.textContent = 'Removing…'
     const mappings = getState().mappings.filter((m) => m.sourceNode.path !== node.path)
     setState({ mappings })
-    persistMappings(mappings)
+    try {
+      await persistMappings(mappings)
+    } catch {
+      removeBtn.disabled = false
+      removeBtn.textContent = 'Remove'
+      return
+    }
     onMappingChange(null)
-    targetEl.querySelector('#btn-remove-mapping')?.remove()
+    removeBtn.remove()
   })
 }
 
@@ -469,13 +492,10 @@ async function loadLibraries(
 async function persistMappings(mappings: MigrationMapping[]): Promise<void> {
   const project = getState().currentProject
   if (!project) return
-  try {
-    await updateProject(project.id, {
-      projectData: { ...project.projectData, mappings },
-    })
-  } catch {
-    console.warn('[Mapping] Could not persist mappings to SharePoint')
-  }
+  const updatedProjectData = { ...project.projectData, mappings }
+  await updateProject(project.id, { projectData: updatedProjectData })
+  // Keep currentProject in sync so re-opening the panel sees the latest mappings
+  setState({ currentProject: { ...project, projectData: updatedProjectData } })
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
