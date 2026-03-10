@@ -1,6 +1,6 @@
 import { setState, getState } from '../../state/store'
 import { updateProject, getSpConfig } from '../../graph/projectService'
-import { getOrCreateProjectFolder, uploadFileToDrive, downloadDriveItem } from '../../graph/graphClient'
+import { getOrCreateProjectFolder, uploadFileToDrive, downloadDriveItem, saveMappingsFile } from '../../graph/graphClient'
 import type { TreeNode, MigrationMapping, ExcelUpload } from '../../types'
 
 // ─── Entry point ──────────────────────────────────────────────────────────────
@@ -214,12 +214,19 @@ async function handleFile(container: HTMLElement, file: File): Promise<void> {
       )
     }
 
+    // Save mappings as a separate file (keeps the list item field small)
+    if (updatedMappings.length > 0) {
+      setStatus('info', 'Saving mappings…', true)
+      await saveMappingsFile(siteId, project.title, project.id, updatedMappings)
+    }
+
+    // ProjectData holds only lightweight metadata — no inline treeData or mappings
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const { treeData: _t, mappings: _m, ...restData } = project.projectData
     const newProjectData = {
-      ...project.projectData,
+      ...restData,
       uploads: [...(project.projectData.uploads ?? []), newUpload],
       activeUploadId: ts,
-      mappings: updatedMappings,
-      treeData: undefined,  // retire the legacy inline field
     }
 
     await updateProject(project.id, { projectData: newProjectData })

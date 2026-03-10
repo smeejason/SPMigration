@@ -1,4 +1,4 @@
-import { getProjects, deleteProject, loadProjectTree } from '../../graph/projectService'
+import { getProjects, deleteProject, loadProjectTree, loadProjectMappings } from '../../graph/projectService'
 import { setState, getState } from '../../state/store'
 import type { AppUser, MigrationProject } from '../../types'
 
@@ -79,11 +79,14 @@ function renderProjectCards(
       btn.textContent = 'Opening…'
 
       try {
-        const treeData = await loadProjectTree(project)
+        const [treeData, mappings] = await Promise.all([
+          loadProjectTree(project),
+          loadProjectMappings(project),
+        ])
         setState({
           currentProject: project,
           treeData,
-          mappings: project.projectData.mappings ?? [],
+          mappings,
           ui: { activeView: 'project-upload', loading: false, error: null },
         })
       } catch {

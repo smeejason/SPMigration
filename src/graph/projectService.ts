@@ -1,7 +1,7 @@
 import { Client } from '@microsoft/microsoft-graph-client'
 import { getToken } from '../auth/authService'
-import { downloadDriveItem } from './graphClient'
-import type { MigrationProject, ProjectData, ProjectStatus, GraphListItem, SharePointUser, TreeNode } from '../types'
+import { downloadDriveItem, loadMappingsFile } from './graphClient'
+import type { MigrationProject, ProjectData, ProjectStatus, GraphListItem, SharePointUser, TreeNode, MigrationMapping } from '../types'
 
 // ─── Config ───────────────────────────────────────────────────────────────────
 
@@ -193,6 +193,28 @@ export async function loadProjectTree(project: MigrationProject): Promise<TreeNo
 
   // Legacy: tree data was stored inline in the ProjectData field
   return treeData ?? null
+}
+
+// ─── Mappings loading ─────────────────────────────────────────────────────────
+//
+// For projects that have an SP upload folder, mappings are stored as a separate
+// file to avoid hitting the SharePoint list item column size limit.
+// Falls back to the inline ProjectData.mappings field for legacy projects.
+
+export async function loadProjectMappings(project: MigrationProject): Promise<MigrationMapping[]> {
+  const { uploads, mappings: inlineMappings } = project.projectData
+
+  if (uploads && uploads.length > 0) {
+    const { siteId } = getSpConfig()
+    try {
+      const fileMappings = await loadMappingsFile(siteId, project.title, project.id)
+      if (fileMappings !== null) return fileMappings
+    } catch (err) {
+      console.warn('[ProjectService] Could not load mappings file, falling back to inline:', err)
+    }
+  }
+
+  return inlineMappings ?? []
 }
 
 // ─── Mapping ──────────────────────────────────────────────────────────────────

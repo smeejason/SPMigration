@@ -1,5 +1,5 @@
-import { searchSites, getSiteDrives } from '../../graph/graphClient'
-import { updateProject } from '../../graph/projectService'
+import { searchSites, getSiteDrives, saveMappingsFile } from '../../graph/graphClient'
+import { updateProject, getSpConfig } from '../../graph/projectService'
 import { setState, getState } from '../../state/store'
 import type { TreeNode, MigrationMapping, SharePointSite, SharePointDrive } from '../../types'
 
@@ -492,10 +492,27 @@ async function loadLibraries(
 async function persistMappings(mappings: MigrationMapping[]): Promise<void> {
   const project = getState().currentProject
   if (!project) return
-  const updatedProjectData = { ...project.projectData, mappings }
-  await updateProject(project.id, { projectData: updatedProjectData })
-  // Keep currentProject in sync so re-opening the panel sees the latest mappings
-  setState({ currentProject: { ...project, projectData: updatedProjectData } })
+
+  const hasUploadFolder = (project.projectData.uploads?.length ?? 0) > 0
+
+  if (hasUploadFolder) {
+    // New model: store mappings as a separate file to avoid SP column size limits.
+    // sourceNode.children are stripped by saveMappingsFile — they are already in .tree.json.
+    const { siteId } = getSpConfig()
+    await saveMappingsFile(siteId, project.title, project.id, mappings)
+
+    // Remove any inline mappings from ProjectData so the field stays small.
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const { mappings: _removed, ...restData } = project.projectData
+    const updatedProjectData = { ...restData }
+    await updateProject(project.id, { projectData: updatedProjectData })
+    setState({ mappings, currentProject: { ...project, projectData: updatedProjectData } })
+  } else {
+    // Legacy model (no upload folder yet): store inline as before.
+    const updatedProjectData = { ...project.projectData, mappings }
+    await updateProject(project.id, { projectData: updatedProjectData })
+    setState({ mappings, currentProject: { ...project, projectData: updatedProjectData } })
+  }
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────

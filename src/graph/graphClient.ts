@@ -8,6 +8,7 @@ import type {
   GraphSite,
   GraphDrive,
   GraphUser,
+  MigrationMapping,
 } from '../types'
 
 // ─── Graph client factory ─────────────────────────────────────────────────────
@@ -230,4 +231,63 @@ export async function downloadDriveItem(siteId: string, itemId: string): Promise
   }
   const text = await response.text()
   return JSON.parse(text)
+}
+
+// ─── Mappings file helpers ────────────────────────────────────────────────────
+//
+// Mappings are stored as {projectId}.mappings.json in the project SP folder
+// rather than inline in the list item field, avoiding the ~63 KB column limit.
+// sourceNode.children is stripped on write — the tree is already in .tree.json.
+
+export function getProjectFolderName(projectTitle: string, projectId: string): string {
+  return `${sanitizeSegment(projectTitle).slice(0, 60)}_${projectId}`
+}
+
+export async function saveMappingsFile(
+  siteId: string,
+  projectTitle: string,
+  projectId: string,
+  mappings: MigrationMapping[]
+): Promise<void> {
+  // Strip children from each sourceNode — they are large and already in .tree.json
+  const slim = mappings.map((m) => ({
+    ...m,
+    sourceNode: { ...m.sourceNode, children: [] },
+  }))
+
+  const token = await getToken()
+  const folderName = getProjectFolderName(projectTitle, projectId)
+  const filePath = encodeURIComponent(`SPMigration/${folderName}/${projectId}.mappings.json`)
+
+  const response = await fetch(
+    `https://graph.microsoft.com/v1.0/sites/${siteId}/drive/root:/${filePath}:/content`,
+    {
+      method: 'PUT',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(slim),
+    }
+  )
+  if (!response.ok) {
+    const text = await response.text().catch(() => '')
+    throw new Error(`Mappings save failed (${response.status}): ${text}`)
+  }
+}
+
+export async function loadMappingsFile(
+  siteId: string,
+  projectTitle: string,
+  projectId: string
+): Promise<MigrationMapping[] | null> {
+  const token = await getToken()
+  const folderName = getProjectFolderName(projectTitle, projectId)
+  const filePath = encodeURIComponent(`SPMigration/${folderName}/${projectId}.mappings.json`)
+
+  const response = await fetch(
+    `https://graph.microsoft.com/v1.0/sites/${siteId}/drive/root:/${filePath}:/content`,
+    { headers: { Authorization: `Bearer ${token}` } }
+  )
+  if (response.status === 404) return null
+  if (!response.ok) throw new Error(`Mappings load failed (${response.status})`)
+  const text = await response.text()
+  return JSON.parse(text) as MigrationMapping[]
 }
