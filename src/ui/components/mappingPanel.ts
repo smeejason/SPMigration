@@ -29,7 +29,10 @@ export function renderMappingPanel(container: HTMLElement): void {
           <span class="mapping-hint">Click a folder to map it</span>
         </div>
         <div class="mapping-search-bar">
-          <input type="text" id="tree-search" class="form-input mapping-search-input" placeholder="Search by name or path…" autocomplete="off" />
+          <div class="search-input-wrap">
+            <input type="text" id="tree-search" class="form-input mapping-search-input" placeholder="Search by name or path… (press Enter)" autocomplete="off" />
+            <button type="button" id="btn-clear-search" class="btn-clear-search" style="display:none" title="Clear search">✕</button>
+          </div>
         </div>
         <div id="mapping-tree" class="mapping-tree"></div>
         <div id="mapping-search-results" class="mapping-tree" style="display:none"></div>
@@ -79,14 +82,19 @@ export function renderMappingPanel(container: HTMLElement): void {
   }
   for (const n of topNodes) collectNodes(n)
 
-  searchInput.addEventListener('input', () => {
+  const clearSearchBtn = container.querySelector('#btn-clear-search') as HTMLButtonElement
+
+  function clearSearch(): void {
+    searchInput.value = ''
+    clearSearchBtn.style.display = 'none'
+    treeDiv.style.display = ''
+    resultsDiv.style.display = 'none'
+    resultsDiv.innerHTML = ''
+  }
+
+  function runSearch(): void {
     const term = searchInput.value.trim().toLowerCase()
-    if (!term) {
-      treeDiv.style.display = ''
-      resultsDiv.style.display = 'none'
-      resultsDiv.innerHTML = ''
-      return
-    }
+    if (!term) { clearSearch(); return }
 
     const matches = allNodes.filter(
       (n) => n.name.toLowerCase().includes(term) || n.originalPath.toLowerCase().includes(term) || n.path.toLowerCase().includes(term)
@@ -94,6 +102,7 @@ export function renderMappingPanel(container: HTMLElement): void {
 
     treeDiv.style.display = 'none'
     resultsDiv.style.display = ''
+    clearSearchBtn.style.display = ''
 
     if (matches.length === 0) {
       resultsDiv.innerHTML = '<p class="mapping-search-empty">No folders match your search.</p>'
@@ -116,7 +125,14 @@ export function renderMappingPanel(container: HTMLElement): void {
     }
     resultsDiv.innerHTML = ''
     resultsDiv.appendChild(ul2)
+  }
+
+  searchInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') runSearch()
+    if (e.key === 'Escape') clearSearch()
   })
+
+  clearSearchBtn.addEventListener('click', clearSearch)
 }
 
 // ─── Lazy node element factory ────────────────────────────────────────────────
@@ -143,10 +159,9 @@ function createMappingNodeEl(node: TreeNode, targetEl: HTMLElement, isRoot = fal
   toggleIcon.textContent = '▶'
   toggleBtn.appendChild(toggleIcon)
 
-  // Icon
-  const iconEl = document.createElement('span')
-  iconEl.className = 'tree-icon'
-  iconEl.textContent = isFolder ? '📁' : '📄'
+  // Icon — folder with optional mapped-badge overlay
+  const iconWrap = document.createElement('span')
+  iconWrap.className = 'tree-icon-wrap'
 
   // Name
   const nameEl = document.createElement('span')
@@ -163,15 +178,33 @@ function createMappingNodeEl(node: TreeNode, targetEl: HTMLElement, isRoot = fal
   const tagEl = document.createElement('span')
   tagEl.className = 'mapping-tag'
   const existingMapping = getState().mappings.find((m) => m.sourceNode.path === node.path)
-  if (existingMapping?.targetSite) {
-    tagEl.textContent = `→ ${existingMapping.targetSite.displayName}`
-  } else {
-    tagEl.style.display = 'none'
-  }
   tagRegistry.set(node.path, tagEl)
 
+  // Helper: apply/remove the mapped visual state on this row
+  function applyMappedState(isMapped: boolean, siteName?: string): void {
+    if (isFolder) {
+      iconWrap.innerHTML = isMapped
+        ? '📁<span class="mapped-folder-badge" aria-hidden="true">✓</span>'
+        : '📁'
+      iconWrap.className = `tree-icon-wrap${isMapped ? ' tree-icon-wrap--mapped' : ''}`
+    } else {
+      iconWrap.textContent = '📄'
+    }
+    if (isMapped) {
+      row.classList.add('mapping-row--mapped')
+      tagEl.textContent = siteName ? `→ ${siteName}` : ''
+      tagEl.style.display = siteName ? '' : 'none'
+    } else {
+      row.classList.remove('mapping-row--mapped')
+      tagEl.style.display = 'none'
+    }
+  }
+
+  const isMappedInitially = !!existingMapping?.targetSite
+  applyMappedState(isMappedInitially, existingMapping?.targetSite?.displayName)
+
   row.appendChild(toggleBtn)
-  row.appendChild(iconEl)
+  row.appendChild(iconWrap)
   row.appendChild(nameEl)
   row.appendChild(sizeEl)
   row.appendChild(tagEl)
@@ -215,13 +248,7 @@ function createMappingNodeEl(node: TreeNode, targetEl: HTMLElement, isRoot = fal
       document.querySelectorAll('.mapping-row--active').forEach((r) => r.classList.remove('mapping-row--active'))
       row.classList.add('mapping-row--active')
       openTargetPanel(targetEl, node, (siteName) => {
-        // Update the tag in the DOM live
-        if (siteName) {
-          tagEl.textContent = `→ ${siteName}`
-          tagEl.style.display = ''
-        } else {
-          tagEl.style.display = 'none'
-        }
+        applyMappedState(!!siteName, siteName ?? undefined)
       })
     })
   }
@@ -473,7 +500,14 @@ function injectMappingStyles(): void {
   style.textContent = `
     .mapping-empty { padding: 48px; text-align: center; color: var(--color-text-muted); }
     .mapping-search-bar { padding: 8px 12px; border-bottom: 1px solid var(--color-border); background: white; }
-    .mapping-search-input { width: 100%; box-sizing: border-box; padding: 6px 10px; font-size: 0.85rem; }
+    .search-input-wrap { position: relative; display: flex; align-items: center; }
+    .mapping-search-input { flex: 1; box-sizing: border-box; padding: 6px 32px 6px 10px; font-size: 0.85rem; }
+    .btn-clear-search {
+      position: absolute; right: 6px; background: none; border: none; cursor: pointer;
+      color: var(--color-text-muted); font-size: 0.85rem; line-height: 1; padding: 2px 4px;
+      border-radius: 3px;
+    }
+    .btn-clear-search:hover { background: var(--color-surface-alt); color: var(--color-text); }
     .mapping-search-empty { padding: 16px; color: var(--color-text-muted); font-size: 0.875rem; text-align: center; }
     .search-result-path { display: block; font-size: 0.72rem; color: var(--color-text-muted);
       font-family: 'Consolas', monospace; padding: 0 8px 4px 46px; white-space: nowrap;
@@ -505,7 +539,22 @@ function injectMappingStyles(): void {
       font-size: 0.65rem; color: var(--color-text-muted); padding: 0; flex-shrink: 0; }
     .mapping-toggle-btn.invisible { visibility: hidden; pointer-events: none; }
     .toggle-icon { display: block; }
-    .tree-icon { flex-shrink: 0; }
+
+    /* Folder icon with optional mapped-badge */
+    .tree-icon-wrap { position: relative; display: inline-flex; flex-shrink: 0; line-height: 1; }
+    .mapped-folder-badge {
+      position: absolute; bottom: -2px; right: -5px;
+      font-size: 0.48rem; font-style: normal; font-weight: 700;
+      background: #107c10; color: white; border-radius: 50%;
+      width: 9px; height: 9px; display: flex; align-items: center; justify-content: center;
+      border: 1px solid white;
+    }
+
+    /* Mapped row highlighting */
+    .mapping-row--mapped { background: rgba(16, 124, 16, 0.07); }
+    .mapping-row--mapped:hover { background: rgba(16, 124, 16, 0.13); }
+    .mapping-row--mapped.mapping-row--active { background: rgba(16, 124, 16, 0.13); border-left-color: #107c10; }
+
     .tree-name { flex: 1; font-size: 0.875rem; font-family: 'Consolas', monospace;
       white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
     .tree-size-sm { font-size: 0.75rem; color: var(--color-text-muted); white-space: nowrap; flex-shrink: 0; }
