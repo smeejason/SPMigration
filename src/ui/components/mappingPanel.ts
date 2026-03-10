@@ -92,7 +92,7 @@ export function renderMappingPanel(container: HTMLElement): void {
     }
 
     const matches = allNodes.filter(
-      (n) => n.name.toLowerCase().includes(term) || n.path.toLowerCase().includes(term)
+      (n) => n.name.toLowerCase().includes(term) || n.originalPath.toLowerCase().includes(term) || n.path.toLowerCase().includes(term)
     )
 
     treeDiv.style.display = 'none'
@@ -109,10 +109,10 @@ export function renderMappingPanel(container: HTMLElement): void {
       const li = createMappingNodeEl(match, targetEl)
       // In search results, inject a full-path subtitle so it's always visible
       const row = li.querySelector<HTMLElement>('.mapping-row')
-      if (row && match.path) {
+      if (row && match.originalPath) {
         const pathLabel = document.createElement('span')
         pathLabel.className = 'search-result-path'
-        pathLabel.textContent = match.path.replace(/\//g, '\\')
+        pathLabel.textContent = match.originalPath
         row.insertAdjacentElement('afterend', pathLabel)
       }
       ul2.appendChild(li)
@@ -155,7 +155,7 @@ function createMappingNodeEl(node: TreeNode, targetEl: HTMLElement, isRoot = fal
   const nameEl = document.createElement('span')
   nameEl.className = 'tree-name'
   nameEl.textContent = String(node.name || node.path || '(unnamed)')
-  if (node.path) nameEl.title = node.path
+  if (node.originalPath) nameEl.title = node.originalPath
 
   // Size
   const sizeEl = document.createElement('span')
@@ -260,7 +260,7 @@ async function openTargetPanel(
         </div>
         <dl class="source-detail-grid">
           <dt>Full Path</dt>
-          <dd class="source-detail-path" title="${escHtml(node.path)}">${escHtml(node.path)}</dd>
+          <dd class="source-detail-path" title="${escHtml(node.originalPath)}">${escHtml(node.originalPath)}</dd>
           <dt>Size</dt>
           <dd>${sizeStr}</dd>
           <dt>Files</dt>

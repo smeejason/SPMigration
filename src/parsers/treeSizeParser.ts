@@ -175,8 +175,10 @@ function parseDate(raw: string): Date | undefined {
 }
 
 function normalizeRow(record: Record<string, string>): ParsedTreeSizeRow {
+  const rawPath = findCol(record, PATH_COLS).trim()
   return {
-    path: normalizePath(findCol(record, PATH_COLS)),
+    path: normalizePath(rawPath),
+    originalPath: rawPath,
     sizeBytes: parseBytes(findCol(record, SIZE_COLS)),
     fileCount: parseInt(findCol(record, FILES_COLS).replace(/[^0-9]/g, '') || '0', 10),
     folderCount: parseInt(findCol(record, FOLDERS_COLS).replace(/[^0-9]/g, '') || '0', 10),
@@ -205,6 +207,25 @@ function buildTree(rows: ParsedTreeSizeRow[]): TreeNode {
     if (row.path) rowMap.set(row.path, row)
   }
 
+  // Detect original path format from the source data so we can reconstruct
+  // originalPath for implicit ancestor nodes (created from path segments that
+  // don't have their own row). UNC paths start with \\ and use \ as separator.
+  let uncPrefix = ''
+  let origSep = '/'
+  for (const row of rows) {
+    if (row.originalPath.startsWith('\\\\')) {
+      uncPrefix = '\\\\'
+      origSep = '\\'
+      break
+    } else if (row.originalPath.includes('\\')) {
+      origSep = '\\'
+    }
+  }
+
+  function makeOriginalPath(normalizedPath: string): string {
+    return uncPrefix + normalizedPath.split('/').join(origSep)
+  }
+
   // ── Pass 1: collect ALL paths, including implicit ancestor segments ────────
   // e.g. if a row has path "BHFP03/NationalDataDrive/Shared/AKL" but
   // "BHFP03/NationalDataDrive" is not its own row, we still create that node
@@ -225,6 +246,7 @@ function buildTree(rows: ParsedTreeSizeRow[]): TreeNode {
     const row = rowMap.get(path)
     nodeMap.set(path, {
       path,
+      originalPath: row?.originalPath ?? makeOriginalPath(path),
       name: parts[parts.length - 1],
       depth: parts.length - 1,
       sizeBytes: row?.sizeBytes ?? 0,
@@ -262,6 +284,7 @@ function buildTree(rows: ParsedTreeSizeRow[]): TreeNode {
   // Multiple roots → synthetic wrapper (skipped in the UI)
   return {
     path: '',
+    originalPath: '',
     name: 'Root',
     depth: -1,
     sizeBytes: rootNodes.reduce((s, r) => s + r.sizeBytes, 0),

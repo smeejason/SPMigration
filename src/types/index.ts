@@ -45,7 +45,8 @@ export interface ProjectSettings {
 // ─── TreeSize ────────────────────────────────────────────────────────────────
 
 export interface TreeNode {
-  path: string
+  path: string          // normalized internal key (forward slashes, no leading slash)
+  originalPath: string  // raw path for display (preserves UNC prefix and backslashes)
   name: string
   depth: number
   sizeBytes: number
@@ -57,7 +58,8 @@ export interface TreeNode {
 }
 
 export interface ParsedTreeSizeRow {
-  path: string
+  path: string          // normalized
+  originalPath: string  // raw from source file
   sizeBytes: number
   fileCount: number
   folderCount: number

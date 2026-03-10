@@ -78,7 +78,7 @@ function rowHtml(m: MigrationMapping): string {
   const statusLabel = m.status === 'ready' ? '✅ Ready' : '⏳ Pending'
   return `
     <tr>
-      <td class="path-cell" title="${escHtml(m.sourceNode.path)}">${escHtml(m.sourceNode.name)}</td>
+      <td class="path-cell" title="${escHtml(m.sourceNode.originalPath)}">${escHtml(m.sourceNode.originalPath)}</td>
       <td>${formatBytes(m.sourceNode.sizeBytes)}</td>
       <td>${m.sourceNode.fileCount.toLocaleString()}</td>
       <td>${m.targetSite ? escHtml(m.targetSite.displayName) : '—'}</td>
@@ -92,7 +92,7 @@ function rowHtml(m: MigrationMapping): string {
 function exportCsv(mappings: MigrationMapping[]): void {
   const headers = ['Source Path', 'Size (Bytes)', 'File Count', 'Target Site', 'Target Library', 'Target Path', 'Status']
   const rows = mappings.map((m) => [
-    m.sourceNode.path,
+    m.sourceNode.originalPath,
     m.sourceNode.sizeBytes,
     m.sourceNode.fileCount,
     m.targetSite?.displayName ?? '',
@@ -106,7 +106,7 @@ function exportCsv(mappings: MigrationMapping[]): void {
 
 function exportJson(mappings: MigrationMapping[]): void {
   const data = mappings.map((m) => ({
-    sourcePath: m.sourceNode.path,
+    sourcePath: m.sourceNode.originalPath,
     sourceName: m.sourceNode.name,
     sizeBytes: m.sourceNode.sizeBytes,
     fileCount: m.sourceNode.fileCount,

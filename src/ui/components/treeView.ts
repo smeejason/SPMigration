@@ -41,7 +41,7 @@ function createNodeEl(node: TreeNode, isRoot = false): HTMLLIElement {
   row.className = 'tree-row'
   row.dataset.hasChildren = String(hasChildren)
   row.dataset.loaded = 'false'
-  if (node.path) row.title = node.path
+  if (node.originalPath) row.title = node.originalPath
 
   const childCount = node.fileCount + node.folderCount
   const sizeLabel = formatBytes(node.sizeBytes)
