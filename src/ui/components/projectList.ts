@@ -1,4 +1,4 @@
-import { getProjects, deleteProject } from '../../graph/projectService'
+import { getProjects, deleteProject, loadProjectTree } from '../../graph/projectService'
 import { setState, getState } from '../../state/store'
 import type { AppUser, MigrationProject } from '../../types'
 
@@ -70,15 +70,26 @@ function renderProjectCards(
 
   body.querySelectorAll('[data-project-id]').forEach((card) => {
     const id = card.getAttribute('data-project-id')!
-    card.querySelector('.project-open')?.addEventListener('click', () => {
+    card.querySelector('.project-open')?.addEventListener('click', async () => {
       const project = getState().projects.find((p) => p.id === id)
-      if (project) {
+      if (!project) return
+
+      const btn = card.querySelector('.project-open') as HTMLButtonElement
+      btn.disabled = true
+      btn.textContent = 'Opening…'
+
+      try {
+        const treeData = await loadProjectTree(project)
         setState({
           currentProject: project,
-          treeData: project.projectData.treeData ?? null,
+          treeData,
           mappings: project.projectData.mappings ?? [],
           ui: { activeView: 'project-upload', loading: false, error: null },
         })
+      } catch {
+        btn.disabled = false
+        btn.textContent = 'Open'
+        alert('Could not load project data from SharePoint. Please try again.')
       }
     })
     card.querySelector('.project-delete')?.addEventListener('click', async (e) => {
@@ -107,7 +118,10 @@ function filterByOwnership(projects: MigrationProject[], user: AppUser | null): 
 
 function projectCardHtml(p: MigrationProject): string {
   const stats = p.projectData
-  const sizeLabel = stats.treeData ? formatBytes(stats.treeData.sizeBytes) : '—'
+  const uploadCount = stats.uploads?.length ?? 0
+  const sizeLabel = uploadCount > 0
+    ? `${uploadCount} upload${uploadCount !== 1 ? 's' : ''}`
+    : stats.treeData ? formatBytes(stats.treeData.sizeBytes) : '—'
   const mappingCount = (stats.mappings ?? []).length
   const modified = p.lastModified ? formatDate(p.lastModified) : '—'
   const statusClass = p.status.toLowerCase().replace(' ', '-')

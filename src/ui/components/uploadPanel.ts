@@ -1,23 +1,51 @@
 import { setState, getState } from '../../state/store'
-import { updateProject } from '../../graph/projectService'
-import type { TreeNode } from '../../types'
+import { updateProject, getSpConfig } from '../../graph/projectService'
+import { getOrCreateProjectFolder, uploadFileToDrive, downloadDriveItem } from '../../graph/graphClient'
+import type { TreeNode, MigrationMapping, ExcelUpload } from '../../types'
+
+// ─── Entry point ──────────────────────────────────────────────────────────────
 
 export function renderUploadPanel(container: HTMLElement): void {
-  const existingTree = getState().treeData
+  const state = getState()
+  const project = state.currentProject
+  const existingTree = state.treeData
+  const uploads = project?.projectData.uploads ?? []
+  const activeId = project?.projectData.activeUploadId
+    ?? (uploads.length > 0 ? uploads[uploads.length - 1].id : undefined)
 
   container.innerHTML = `
     <div class="upload-panel">
+
+      ${uploads.length > 0 ? `
       <div class="panel-section">
-        <h3>Upload TreeSize Report</h3>
-        <p class="panel-desc">Export your file server structure from TreeSize Pro or Free as <strong>.csv</strong> or <strong>.xlsx</strong>, then upload it here.</p>
+        <h3>Upload History</h3>
+        <p class="panel-desc">All TreeSize reports uploaded for this project, stored in SharePoint. The <strong>Active</strong> report drives the mapping view.</p>
+        <div class="upload-history-list" id="history-list">
+          ${renderHistoryItems(uploads, activeId)}
+        </div>
+      </div>
+      ` : ''}
+
+      <div class="conflict-warning" id="conflict-warning" style="display:none">
+        <div class="conflict-warning-header">
+          <span>⚠ <strong>Mapping conflicts detected</strong></span>
+          <button type="button" id="btn-dismiss-conflicts" class="btn-dismiss-conflicts">✕</button>
+        </div>
+        <p id="conflict-msg" class="conflict-msg"></p>
+        <ul id="conflict-list" class="conflict-list"></ul>
+      </div>
+
+      <div class="panel-section">
+        <h3>${uploads.length > 0 ? 'Upload New Report' : 'Upload TreeSize Report'}</h3>
+        <p class="panel-desc">Export your file server structure from TreeSize Pro or Free as <strong>.csv</strong> or <strong>.xlsx</strong>, then upload it here. Each report is saved to SharePoint automatically.</p>
 
         <div id="drop-zone" class="drop-zone ${existingTree ? 'drop-zone--has-file' : ''}">
           <input type="file" id="file-input" accept=".csv,.xlsx,.xls" style="display:none" />
           <div class="drop-zone-content">
             <div class="drop-icon">📂</div>
-            <p class="drop-label">${existingTree ? 'Replace file — drag & drop or' : 'Drag & drop your TreeSize export here, or'}</p>
+            <p class="drop-label">Drag & drop your TreeSize export here, or</p>
             <button type="button" id="btn-browse" class="btn btn-primary btn-sm">Browse files</button>
-            <p class="drop-hint">Accepts .csv and .xlsx</p>
+            <p class="drop-hint">Accepts .csv and .xlsx · Saved to SharePoint automatically</p>
           </div>
         </div>
 
@@ -30,10 +58,237 @@ export function renderUploadPanel(container: HTMLElement): void {
           ${existingTree ? renderStatsCards(existingTree) : ''}
         </div>
       </div>
+
     </div>
   `
   injectUploadStyles()
   setupDropZone(container)
+  setupHistoryButtons(container)
+}
+
+// ─── History ──────────────────────────────────────────────────────────────────
+
+function renderHistoryItems(uploads: ExcelUpload[], activeId?: string): string {
+  return [...uploads].reverse().map((u) => {
+    const isActive = u.id === activeId
+    const date = formatDate(new Date(u.uploadedAt))
+    return `
+      <div class="history-item${isActive ? ' history-item--active' : ''}">
+        <span class="history-item-icon">📊</span>
+        <div class="history-item-info">
+          <span class="history-item-name" title="${escHtml(u.fileName)}">${escHtml(u.fileName)}</span>
+          <span class="history-item-date">${date}</span>
+        </div>
+        ${isActive
+          ? '<span class="history-active-badge">● Active</span>'
+          : `<button type="button" class="btn btn-ghost btn-sm history-switch-btn" data-upload-id="${escHtml(u.id)}">Use This</button>`
+        }
+      </div>
+    `
+  }).join('')
+}
+
+function setupHistoryButtons(container: HTMLElement): void {
+  container.querySelector('#history-list')?.addEventListener('click', async (e) => {
+    const btn = (e.target as HTMLElement).closest<HTMLButtonElement>('.history-switch-btn')
+    if (!btn || btn.disabled) return
+
+    const uploadId = btn.dataset.uploadId!
+    const project = getState().currentProject
+    const upload = project?.projectData.uploads?.find((u) => u.id === uploadId)
+    if (!project || !upload) return
+
+    btn.disabled = true
+    btn.textContent = 'Loading…'
+
+    try {
+      const { siteId } = getSpConfig()
+      const tree = (await downloadDriveItem(siteId, upload.treeItemId)) as TreeNode
+      const conflicts = detectMappingConflicts(tree, getState().mappings)
+
+      const newProjectData = { ...project.projectData, activeUploadId: uploadId }
+      await updateProject(project.id, { projectData: newProjectData })
+      setState({ treeData: tree, currentProject: { ...project, projectData: newProjectData } })
+
+      renderUploadPanel(container)
+      if (conflicts.length > 0) showConflictWarning(container, conflicts)
+    } catch (err) {
+      btn.disabled = false
+      btn.textContent = 'Use This'
+      const status = container.querySelector('#upload-status') as HTMLElement
+      status.className = 'upload-status upload-status--error'
+      status.textContent = `Failed to switch: ${(err as Error).message}`
+      status.style.display = 'block'
+    }
+  })
+}
+
+// ─── Drop zone / upload flow ──────────────────────────────────────────────────
+
+function setupDropZone(container: HTMLElement): void {
+  const dropZone = container.querySelector('#drop-zone') as HTMLElement
+  const fileInput = container.querySelector('#file-input') as HTMLInputElement
+  const browseBtn = container.querySelector('#btn-browse') as HTMLButtonElement
+
+  browseBtn.addEventListener('click', () => fileInput.click())
+  fileInput.addEventListener('change', () => {
+    if (fileInput.files?.[0]) void handleFile(container, fileInput.files[0])
+  })
+  dropZone.addEventListener('dragover', (e) => {
+    e.preventDefault()
+    dropZone.classList.add('drop-zone--active')
+  })
+  dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drop-zone--active'))
+  dropZone.addEventListener('drop', (e) => {
+    e.preventDefault()
+    dropZone.classList.remove('drop-zone--active')
+    const file = e.dataTransfer?.files[0]
+    if (file) void handleFile(container, file)
+  })
+}
+
+async function handleFile(container: HTMLElement, file: File): Promise<void> {
+  const status = container.querySelector('#upload-status') as HTMLElement
+  const statsSection = container.querySelector('#stats-section') as HTMLElement
+
+  function setStatus(type: 'info' | 'success' | 'error', msg: string, spin = false): void {
+    status.className = `upload-status upload-status--${type}`
+    status.innerHTML = spin ? `<span class="spinner"></span>${msg}` : msg
+    status.style.display = 'block'
+  }
+
+  setStatus('info', `Parsing <strong>${escHtml(file.name)}</strong> — this may take a moment for large files…`, true)
+  statsSection.style.display = 'none'
+
+  let tree: TreeNode
+  try {
+    tree = await parseFileWithWorker(file)
+  } catch (err) {
+    setStatus('error', `Parse error: ${(err as Error).message ?? 'Unknown error'}`)
+    return
+  }
+
+  const project = getState().currentProject
+  if (!project) {
+    // No active project — just update state (fallback, shouldn't normally happen)
+    setState({ treeData: tree })
+    setStatus('success', `✓ Parsed — ${formatSummary(tree)}`)
+    statsSection.style.display = ''
+    const statsCards = container.querySelector('#stats-cards') as HTMLElement
+    statsCards.innerHTML = renderStatsCards(tree)
+    return
+  }
+
+  setStatus('info', 'Uploading to SharePoint…', true)
+
+  try {
+    const { siteId } = getSpConfig()
+    const folderId = await getOrCreateProjectFolder(siteId, project.title, project.id)
+
+    const ts = Date.now().toString()
+    const safeName = file.name.replace(/["*:<>?/\\|#%]/g, '_')
+
+    setStatus('info', `Uploading <strong>${escHtml(file.name)}</strong>…`, true)
+    const excelItemId = await uploadFileToDrive(siteId, folderId, `${ts}_${safeName}`, await file.arrayBuffer())
+
+    setStatus('info', 'Saving report data…', true)
+    const treeItemId = await uploadFileToDrive(
+      siteId, folderId, `${ts}_${safeName}.tree.json`, JSON.stringify(tree)
+    )
+
+    const newUpload: ExcelUpload = {
+      id: ts,
+      fileName: file.name,
+      uploadedAt: new Date().toISOString(),
+      excelItemId,
+      treeItemId,
+    }
+
+    // Detect mapping conflicts against currently mapped folders
+    const conflicts = detectMappingConflicts(tree, getState().mappings)
+    let updatedMappings = getState().mappings
+    if (conflicts.length > 0) {
+      const errorIds = new Set(conflicts.map((c) => c.id))
+      updatedMappings = updatedMappings.map((m) =>
+        errorIds.has(m.id) ? { ...m, status: 'error' as const } : m
+      )
+    }
+
+    const newProjectData = {
+      ...project.projectData,
+      uploads: [...(project.projectData.uploads ?? []), newUpload],
+      activeUploadId: ts,
+      mappings: updatedMappings,
+      treeData: undefined,  // retire the legacy inline field
+    }
+
+    await updateProject(project.id, { projectData: newProjectData })
+    setState({
+      treeData: tree,
+      mappings: updatedMappings,
+      currentProject: { ...project, projectData: newProjectData },
+    })
+
+    // Re-render to show updated history and stats, then restore status
+    renderUploadPanel(container)
+    const newStatus = container.querySelector('#upload-status') as HTMLElement
+    newStatus.className = 'upload-status upload-status--success'
+    newStatus.textContent = `✓ Saved to SharePoint — ${formatSummary(tree)}`
+    newStatus.style.display = 'block'
+
+    if (conflicts.length > 0) showConflictWarning(container, conflicts)
+  } catch (err) {
+    setStatus('error', `Upload failed: ${(err as Error).message}`)
+  }
+}
+
+// ─── Worker ───────────────────────────────────────────────────────────────────
+
+function parseFileWithWorker(file: File): Promise<TreeNode> {
+  return new Promise((resolve, reject) => {
+    const worker = new Worker(
+      new URL('../../parsers/parseWorker.ts', import.meta.url), { type: 'module' }
+    )
+    worker.postMessage(file)
+    worker.onmessage = (e: MessageEvent<{ ok: boolean; tree?: TreeNode; error?: string }>) => {
+      worker.terminate()
+      if (e.data.ok && e.data.tree) resolve(e.data.tree)
+      else reject(new Error(e.data.error ?? 'Parse failed'))
+    }
+    worker.onerror = (e) => {
+      worker.terminate()
+      reject(new Error(e.message ?? 'Worker error'))
+    }
+  })
+}
+
+// ─── Conflict detection ───────────────────────────────────────────────────────
+
+function detectMappingConflicts(newTree: TreeNode, mappings: MigrationMapping[]): MigrationMapping[] {
+  const allPaths = new Set<string>()
+  function collect(n: TreeNode): void {
+    allPaths.add(n.path)
+    for (const child of n.children) collect(child)
+  }
+  collect(newTree)
+  // Only flag mappings that have a site target — pending/unconfigured ones don't matter
+  return mappings.filter((m) => m.targetSite && !allPaths.has(m.sourceNode.path))
+}
+
+function showConflictWarning(container: HTMLElement, conflicts: MigrationMapping[]): void {
+  const warning = container.querySelector('#conflict-warning') as HTMLElement
+  const msg = container.querySelector('#conflict-msg') as HTMLElement
+  const list = container.querySelector('#conflict-list') as HTMLElement
+
+  msg.textContent = `${conflicts.length} mapped folder${conflicts.length !== 1 ? 's' : ''} could not be found in the new report. They remain in your mappings with an error status — review them in the Map tab.`
+  list.innerHTML = conflicts
+    .map((m) => `<li><code>${escHtml(m.sourceNode.originalPath || m.sourceNode.path)}</code></li>`)
+    .join('')
+  warning.style.display = ''
+
+  container.querySelector('#btn-dismiss-conflicts')?.addEventListener('click', () => {
+    warning.style.display = 'none'
+  }, { once: true })
 }
 
 // ─── Stats ────────────────────────────────────────────────────────────────────
@@ -60,96 +315,12 @@ function renderStatsCards(tree: TreeNode): string {
 }
 
 function computeStats(root: TreeNode): { totalFiles: number; totalFolders: number; totalBytes: number } {
-  // Use the highest node's values directly — TreeSize stores cumulative totals on each row
-  return {
-    totalFiles: root.fileCount,
-    totalFolders: root.folderCount,
-    totalBytes: root.sizeBytes,
-  }
+  return { totalFiles: root.fileCount, totalFolders: root.folderCount, totalBytes: root.sizeBytes }
 }
 
-// ─── Drop zone / file handling ────────────────────────────────────────────────
-
-function setupDropZone(container: HTMLElement): void {
-  const dropZone = container.querySelector('#drop-zone') as HTMLElement
-  const fileInput = container.querySelector('#file-input') as HTMLInputElement
-  const browseBtn = container.querySelector('#btn-browse') as HTMLButtonElement
-
-  browseBtn.addEventListener('click', () => fileInput.click())
-  fileInput.addEventListener('change', () => {
-    if (fileInput.files?.[0]) handleFile(container, fileInput.files[0])
-  })
-
-  dropZone.addEventListener('dragover', (e) => {
-    e.preventDefault()
-    dropZone.classList.add('drop-zone--active')
-  })
-  dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drop-zone--active'))
-  dropZone.addEventListener('drop', (e) => {
-    e.preventDefault()
-    dropZone.classList.remove('drop-zone--active')
-    const file = e.dataTransfer?.files[0]
-    if (file) handleFile(container, file)
-  })
-}
-
-function handleFile(container: HTMLElement, file: File): void {
-  const status = container.querySelector('#upload-status') as HTMLElement
-  const statsSection = container.querySelector('#stats-section') as HTMLElement
-  const statsCards = container.querySelector('#stats-cards') as HTMLElement
-
-  const fileName = String(file?.name ?? 'file')
-
-  status.className = 'upload-status upload-status--info'
-  status.innerHTML = `
-    <span class="spinner"></span>
-    Parsing <strong>${escHtml(fileName)}</strong> — this may take a moment for large files…
-  `
-  status.style.display = 'block'
-  statsSection.style.display = 'none'
-
-  // Run parsing in a Web Worker so the UI stays responsive
-  const worker = new Worker(new URL('../../parsers/parseWorker.ts', import.meta.url), { type: 'module' })
-  worker.postMessage(file)
-
-  worker.onmessage = (e: MessageEvent<{ ok: boolean; tree?: TreeNode; error?: string }>) => {
-    worker.terminate()
-    if (!e.data.ok || !e.data.tree) {
-      status.className = 'upload-status upload-status--error'
-      status.textContent = `Error: ${e.data.error ?? 'Unknown error'}`
-      return
-    }
-
-    const tree = e.data.tree
-    setState({ treeData: tree })
-
-    const stats = computeStats(tree)
-    status.className = 'upload-status upload-status--success'
-    status.textContent = `✓ Parsed successfully — ${formatBytes(stats.totalBytes)} · ${stats.totalFiles.toLocaleString()} files · ${stats.totalFolders.toLocaleString()} folders`
-
-    statsCards.innerHTML = renderStatsCards(tree)
-    statsSection.style.display = ''
-
-    // Persist to SharePoint (non-critical)
-    const project = getState().currentProject
-    if (project) {
-      updateProject(project.id, {
-        projectData: { ...project.projectData, treeData: tree },
-      })
-        .then(() => {
-          setState({
-            currentProject: { ...project, projectData: { ...project.projectData, treeData: tree } },
-          })
-        })
-        .catch(() => console.warn('[Upload] Could not persist tree to SharePoint'))
-    }
-  }
-
-  worker.onerror = (e) => {
-    worker.terminate()
-    status.className = 'upload-status upload-status--error'
-    status.textContent = `Error: ${e.message ?? 'Parse worker failed'}`
-  }
+function formatSummary(tree: TreeNode): string {
+  const { totalFiles, totalFolders, totalBytes } = computeStats(tree)
+  return `${formatBytes(totalBytes)} · ${totalFiles.toLocaleString()} files · ${totalFolders.toLocaleString()} folders`
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -161,8 +332,14 @@ function formatBytes(bytes: number): string {
   return `${(bytes / Math.pow(1024, i)).toFixed(1)} ${units[i]}`
 }
 
+function formatDate(d: Date): string {
+  return d.toLocaleDateString(undefined, {
+    year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
+  })
+}
+
 function escHtml(s: string): string {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
 }
 
 // ─── Styles ───────────────────────────────────────────────────────────────────
@@ -177,6 +354,33 @@ function injectUploadStyles(): void {
     .panel-section h3 { font-size: 1.05rem; font-weight: 600; margin-bottom: 8px; }
     .panel-desc { font-size: 0.88rem; color: var(--color-text-muted); margin-bottom: 16px; }
 
+    /* Upload history list */
+    .upload-history-list { border: 1px solid var(--color-border); border-radius: 6px; overflow: hidden; }
+    .history-item { display: flex; align-items: center; gap: 12px; padding: 10px 14px;
+      border-bottom: 1px solid var(--color-border); }
+    .history-item:last-child { border-bottom: none; }
+    .history-item--active { background: rgba(16, 124, 16, 0.06); }
+    .history-item-icon { font-size: 1.2rem; flex-shrink: 0; }
+    .history-item-info { flex: 1; min-width: 0; }
+    .history-item-name { display: block; font-size: 0.875rem; font-weight: 500;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-family: 'Consolas', monospace; }
+    .history-item-date { font-size: 0.78rem; color: var(--color-text-muted); }
+    .history-active-badge { font-size: 0.78rem; color: #107c10; font-weight: 600;
+      white-space: nowrap; flex-shrink: 0; }
+
+    /* Conflict warning */
+    .conflict-warning { margin-bottom: 24px; background: #fff4ce; border: 1px solid #f3e06b;
+      border-left: 4px solid #f3c00a; border-radius: 6px; padding: 12px 16px; }
+    .conflict-warning-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+    .btn-dismiss-conflicts { background: none; border: none; cursor: pointer; color: #7d5900;
+      font-size: 0.9rem; padding: 2px 4px; border-radius: 3px; line-height: 1; }
+    .btn-dismiss-conflicts:hover { background: rgba(0,0,0,0.08); }
+    .conflict-msg { font-size: 0.85rem; color: #7d5900; margin: 0 0 6px; }
+    .conflict-list { font-size: 0.82rem; color: #7d5900; padding-left: 20px; margin: 4px 0 0;
+      max-height: 120px; overflow-y: auto; }
+    .conflict-list li { margin: 2px 0; }
+    .conflict-list code { font-family: 'Consolas', monospace; font-size: 0.78rem; }
+
     /* Drop zone */
     .drop-zone { border: 2px dashed var(--color-border); border-radius: 8px; padding: 40px 24px;
       text-align: center; transition: border-color 0.15s, background 0.15s; cursor: default; }
@@ -185,7 +389,6 @@ function injectUploadStyles(): void {
     .drop-icon { font-size: 2.5rem; margin-bottom: 12px; }
     .drop-label { font-size: 0.9rem; color: var(--color-text-muted); margin-bottom: 12px; }
     .drop-hint { font-size: 0.8rem; color: var(--color-text-muted); margin-top: 8px; }
-    .btn-sm { padding: 6px 14px; font-size: 0.85rem; }
 
     /* Status */
     .upload-status { padding: 10px 14px; border-radius: 4px; font-size: 0.875rem; margin-top: 12px;
@@ -199,7 +402,7 @@ function injectUploadStyles(): void {
       border-top-color: transparent; border-radius: 50%; animation: spin 0.7s linear infinite; flex-shrink: 0; }
     @keyframes spin { to { transform: rotate(360deg); } }
 
-    /* Stats cards */
+    /* Stats */
     .stats-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-top: 12px; }
     .stat-card { background: var(--color-surface, #faf9f8); border: 1px solid var(--color-border);
       border-radius: 8px; padding: 20px 24px; display: flex; flex-direction: column; align-items: center;

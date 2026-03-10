@@ -152,3 +152,82 @@ function mapDrive(d: GraphDrive): SharePointDrive {
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
+
+// ─── Drive file operations ────────────────────────────────────────────────────
+//
+// Used for per-project Excel/CSV upload history.
+// Files are stored in: Documents/SPMigration/{projectTitle}_{projectId}/
+
+function sanitizeSegment(s: string): string {
+  // Remove characters that SharePoint/OneDrive disallows in names
+  return s.replace(/["*:<>?/\\|#%]/g, '_').replace(/\.+$/, '').trim()
+}
+
+export async function getOrCreateProjectFolder(
+  siteId: string,
+  projectTitle: string,
+  projectId: string
+): Promise<string> {
+  const folderName = `${sanitizeSegment(projectTitle).slice(0, 60)}_${projectId}`
+
+  // 1. Fast path — folder already exists
+  try {
+    const item = await client()
+      .api(`/sites/${siteId}/drive/root:/SPMigration/${folderName}:`)
+      .get() as { id: string }
+    return item.id
+  } catch { /* will create below */ }
+
+  // 2. Ensure SPMigration parent exists (ignore 409 conflict = already exists)
+  try {
+    await client()
+      .api(`/sites/${siteId}/drive/root/children`)
+      .post({ name: 'SPMigration', folder: {}, '@microsoft.graph.conflictBehavior': 'fail' })
+  } catch { /* already exists — that's fine */ }
+
+  // 3. Create project subfolder
+  const result = await client()
+    .api(`/sites/${siteId}/drive/root:/SPMigration:/children`)
+    .post({ name: folderName, folder: {}, '@microsoft.graph.conflictBehavior': 'rename' }) as { id: string }
+  return result.id
+}
+
+export async function uploadFileToDrive(
+  siteId: string,
+  folderId: string,
+  fileName: string,
+  content: ArrayBuffer | string
+): Promise<string> {
+  const token = await getToken()
+  const safeFileName = encodeURIComponent(sanitizeSegment(fileName))
+  const contentType = typeof content === 'string' ? 'application/json' : 'application/octet-stream'
+
+  const response = await fetch(
+    `https://graph.microsoft.com/v1.0/sites/${siteId}/drive/items/${folderId}:/${safeFileName}:/content`,
+    {
+      method: 'PUT',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': contentType },
+      body: content,
+    }
+  )
+  if (!response.ok) {
+    const text = await response.text().catch(() => '')
+    throw new Error(`File upload failed (${response.status}): ${text}`)
+  }
+  const item = await response.json() as { id: string }
+  return item.id
+}
+
+export async function downloadDriveItem(siteId: string, itemId: string): Promise<unknown> {
+  const token = await getToken()
+  // Graph returns a redirect to the actual file content — fetch follows it automatically
+  const response = await fetch(
+    `https://graph.microsoft.com/v1.0/sites/${siteId}/drive/items/${itemId}/content`,
+    { headers: { Authorization: `Bearer ${token}` } }
+  )
+  if (!response.ok) {
+    throw new Error(`File download failed (${response.status})`)
+  }
+  const text = await response.text()
+  return JSON.parse(text)
+}

@@ -29,9 +29,18 @@ export interface SharePointUser {
 
 // ─── ProjectData (JSON blob stored in SharePoint) ────────────────────────────
 
+export interface ExcelUpload {
+  id: string           // timestamp string used as unique ID, e.g. "1741234567890"
+  fileName: string     // original filename shown in the UI
+  uploadedAt: string   // ISO datetime string
+  excelItemId: string  // Graph driveItem ID for the uploaded Excel/CSV file
+  treeItemId: string   // Graph driveItem ID for the companion .tree.json file
+}
+
 export interface ProjectData {
-  sourcePaths?: string[]
-  treeData?: TreeNode | null
+  uploads?: ExcelUpload[]       // ordered oldest → newest; new upload model
+  activeUploadId?: string       // which upload is currently active (defaults to last)
+  treeData?: TreeNode | null    // LEGACY: pre-upload-history projects store tree here
   mappings?: MigrationMapping[]
   settings?: ProjectSettings
   lastSaved?: string          // ISO date string

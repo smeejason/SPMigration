@@ -1,6 +1,7 @@
 import { Client } from '@microsoft/microsoft-graph-client'
 import { getToken } from '../auth/authService'
-import type { MigrationProject, ProjectData, ProjectStatus, GraphListItem, SharePointUser } from '../types'
+import { downloadDriveItem } from './graphClient'
+import type { MigrationProject, ProjectData, ProjectStatus, GraphListItem, SharePointUser, TreeNode } from '../types'
 
 // ─── Config ───────────────────────────────────────────────────────────────────
 
@@ -9,7 +10,7 @@ interface SPConfig {
   listId: string
 }
 
-function getSpConfig(): SPConfig {
+export function getSpConfig(): SPConfig {
   const win = window as Window & {
     __APP_CONFIG__?: { spSiteId?: string; spListId?: string }
   }
@@ -167,6 +168,31 @@ export async function updateProject(
 
 export async function deleteProject(id: string): Promise<void> {
   await client().api(`${listItemsUrl()}/${id}`).delete()
+}
+
+// ─── Tree loading ─────────────────────────────────────────────────────────────
+//
+// Resolves the active TreeNode for a project, handling both the new upload-file
+// model (tree stored as .tree.json in SharePoint Documents) and the legacy model
+// (tree embedded directly in the ProjectData JSON field).
+
+export async function loadProjectTree(project: MigrationProject): Promise<TreeNode | null> {
+  const { uploads, activeUploadId, treeData } = project.projectData
+
+  if (uploads && uploads.length > 0) {
+    const { siteId } = getSpConfig()
+    const activeId = activeUploadId ?? uploads[uploads.length - 1].id
+    const upload = uploads.find((u) => u.id === activeId) ?? uploads[uploads.length - 1]
+    try {
+      return (await downloadDriveItem(siteId, upload.treeItemId)) as TreeNode
+    } catch (err) {
+      console.warn('[ProjectService] Could not download tree file:', err)
+      return null
+    }
+  }
+
+  // Legacy: tree data was stored inline in the ProjectData field
+  return treeData ?? null
 }
 
 // ─── Mapping ──────────────────────────────────────────────────────────────────
