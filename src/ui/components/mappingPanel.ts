@@ -35,9 +35,6 @@ export function renderMappingPanel(container: HTMLElement): void {
         <div id="mapping-search-results" class="mapping-tree" style="display:none"></div>
       </div>
       <div class="mapping-right">
-        <div class="mapping-section-header">
-          <h3>Target: SharePoint</h3>
-        </div>
         <div id="mapping-target" class="mapping-target">
           <p class="mapping-placeholder">← Select a folder on the left to configure its target</p>
         </div>
@@ -253,60 +250,93 @@ async function openTargetPanel(
   targetEl.innerHTML = `
     <div class="target-panel">
 
-      <div class="source-detail-card">
-        <div class="source-detail-title">
-          <span class="source-detail-icon">📁</span>
-          <span class="source-detail-name">${escHtml(String(node.name || node.path))}</span>
-        </div>
-        <dl class="source-detail-grid">
-          <dt>Full Path</dt>
-          <dd class="source-detail-path" title="${escHtml(node.originalPath)}">${escHtml(node.originalPath)}</dd>
-          <dt>Size</dt>
-          <dd>${sizeStr}</dd>
-          <dt>Files</dt>
-          <dd>${fileStr}</dd>
-          <dt>Subfolders</dt>
-          <dd>${folderStr}</dd>
-          <dt>Direct Children</dt>
-          <dd>${childStr}</dd>
-          <dt>Last Modified</dt>
-          <dd>${lastModStr}</dd>
-          <dt>Last Accessed</dt>
-          <dd>${lastAccStr}</dd>
-        </dl>
-      </div>
-
-      <div class="form-group">
-        <label>SharePoint Site</label>
-        <div class="site-search-row">
-          <input id="site-search" type="text" class="form-input" placeholder="Search sites…"
-            value="${escHtml(existing?.targetSite?.displayName ?? '')}" />
-          <button id="btn-search-sites" class="btn btn-primary btn-sm">Search</button>
-        </div>
-        <div id="site-results" class="site-results"></div>
-        <div id="selected-site" class="selected-badge" style="${existing?.targetSite ? '' : 'display:none'}">
-          ✓ ${escHtml(existing?.targetSite?.displayName ?? '')}
-          <button class="btn-clear" id="btn-clear-site">✕</button>
+      <!-- ── Section 1: Folder Summary (collapsible) ── -->
+      <div class="target-section" id="summary-section">
+        <button type="button" class="target-section-toggle" id="btn-toggle-summary" aria-expanded="true">
+          <span class="target-section-title">Folder Summary Information</span>
+          <span class="target-section-chevron" aria-hidden="true">▼</span>
+        </button>
+        <div class="target-section-body" id="summary-body">
+          <div class="source-detail-card">
+            <div class="source-detail-title">
+              <span class="source-detail-icon">📁</span>
+              <span class="source-detail-name">${escHtml(String(node.name || node.path))}</span>
+            </div>
+            <dl class="source-detail-grid">
+              <dt>Full Path</dt>
+              <dd class="source-detail-path" title="${escHtml(node.originalPath)}">${escHtml(node.originalPath)}</dd>
+              <dt>Size</dt>
+              <dd>${sizeStr}</dd>
+              <dt>Files</dt>
+              <dd>${fileStr}</dd>
+              <dt>Subfolders</dt>
+              <dd>${folderStr}</dd>
+              <dt>Direct Children</dt>
+              <dd>${childStr}</dd>
+              <dt>Last Modified</dt>
+              <dd>${lastModStr}</dd>
+              <dt>Last Accessed</dt>
+              <dd>${lastAccStr}</dd>
+            </dl>
+          </div>
         </div>
       </div>
 
-      <div class="form-group" id="library-group" style="${existing?.targetSite ? '' : 'display:none'}">
-        <label>Document Library</label>
-        <select id="library-select" class="form-input">
-          <option value="">Loading libraries…</option>
-        </select>
+      <!-- ── Section 2: Target SharePoint Location ── -->
+      <div class="target-section">
+        <div class="target-section-header-static">
+          <span class="target-section-title">Target SharePoint Location</span>
+        </div>
+        <div class="target-section-body target-section-body--sp">
+
+          <div class="form-group">
+            <label>SharePoint Site</label>
+            <div class="site-search-row">
+              <input id="site-search" type="text" class="form-input" placeholder="Search sites…"
+                value="${escHtml(existing?.targetSite?.displayName ?? '')}" />
+              <button type="button" id="btn-search-sites" class="btn btn-primary btn-sm">Search</button>
+            </div>
+            <div id="site-results" class="site-results"></div>
+            <div id="selected-site" class="selected-badge" style="${existing?.targetSite ? '' : 'display:none'}">
+              ✓ ${escHtml(existing?.targetSite?.displayName ?? '')}
+              <button type="button" class="btn-clear" id="btn-clear-site">✕</button>
+            </div>
+          </div>
+
+          <div class="form-group" id="library-group" style="${existing?.targetSite ? '' : 'display:none'}">
+            <label>Document Library</label>
+            <select id="library-select" class="form-input">
+              <option value="">Loading libraries…</option>
+            </select>
+          </div>
+
+          <div class="form-group">
+            <label>Subfolder Path <span class="hint">(optional)</span></label>
+            <input id="folder-path" type="text" class="form-input" placeholder="e.g. /Migrations/Phase1"
+              value="${escHtml(existing?.targetFolderPath ?? '')}" />
+          </div>
+
+          <div class="target-action-row">
+            <button type="button" id="btn-save-mapping" class="btn btn-primary">Save Mapping</button>
+            ${existing ? `<button type="button" id="btn-remove-mapping" class="btn btn-ghost">Remove</button>` : ''}
+          </div>
+
+        </div>
       </div>
 
-      <div class="form-group">
-        <label>Subfolder Path <span class="hint">(optional)</span></label>
-        <input id="folder-path" type="text" class="form-input" placeholder="e.g. /Migrations/Phase1"
-          value="${escHtml(existing?.targetFolderPath ?? '')}" />
-      </div>
-
-      <button id="btn-save-mapping" class="btn btn-primary" style="margin-top:8px">Save Mapping</button>
-      ${existing ? `<button id="btn-remove-mapping" class="btn btn-ghost" style="margin-top:8px;margin-left:8px">Remove</button>` : ''}
     </div>
   `
+
+  // ── Collapsible summary toggle ────────────────────────────────────────────
+  const summaryToggleBtn = targetEl.querySelector('#btn-toggle-summary') as HTMLButtonElement
+  const summaryBody = targetEl.querySelector('#summary-body') as HTMLElement
+  summaryToggleBtn?.addEventListener('click', () => {
+    const isOpen = summaryBody.style.display !== 'none'
+    summaryBody.style.display = isOpen ? 'none' : ''
+    summaryToggleBtn.setAttribute('aria-expanded', String(!isOpen))
+    const chevron = summaryToggleBtn.querySelector('.target-section-chevron') as HTMLElement
+    if (chevron) chevron.textContent = isOpen ? '▶' : '▼'
+  })
 
   let selectedSite: SharePointSite | null = existing?.targetSite ?? null
   let selectedDrive: SharePointDrive | null = existing?.targetDrive ?? null
@@ -484,7 +514,32 @@ function injectMappingStyles(): void {
 
     /* Target panel */
     .mapping-placeholder { padding: 32px; text-align: center; color: var(--color-text-muted); font-size: 0.88rem; }
-    .target-panel { padding: 16px; display: flex; flex-direction: column; gap: 20px; }
+    .target-panel { display: flex; flex-direction: column; }
+
+    /* Two-section layout */
+    .target-section { border-bottom: 1px solid var(--color-border); }
+    .target-section:last-child { border-bottom: none; }
+
+    .target-section-toggle {
+      width: 100%; display: flex; align-items: center; justify-content: space-between;
+      padding: 12px 16px; background: var(--color-surface-alt);
+      border: none; border-bottom: 1px solid var(--color-border);
+      cursor: pointer; text-align: left; font-family: inherit;
+    }
+    .target-section-toggle:hover { background: var(--color-primary-light); }
+
+    .target-section-header-static {
+      display: flex; align-items: center; padding: 12px 16px;
+      background: var(--color-surface-alt); border-bottom: 1px solid var(--color-border);
+    }
+
+    .target-section-title { font-size: 0.9rem; font-weight: 600; color: var(--color-text); }
+    .target-section-chevron { font-size: 0.7rem; color: var(--color-text-muted); flex-shrink: 0; }
+
+    .target-section-body { }
+    .target-section-body--sp { padding: 16px; display: flex; flex-direction: column; gap: 16px; }
+    .target-section-body--sp .form-group { margin-bottom: 0; }
+    .target-action-row { display: flex; gap: 8px; padding-top: 4px; }
 
     /* Source detail card */
     .source-detail-card { background: var(--color-surface-alt); border: 1px solid var(--color-border);

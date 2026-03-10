@@ -123,6 +123,10 @@ export function mountApp(root: HTMLElement): void {
         renderPanel(view)
         prevView = view
         setActiveTab(view)
+        // Sync store so that any subsequent setState call (e.g. site search results)
+        // doesn't see a stale activeView and re-render the wrong panel.
+        setState({ ui: { activeView: view, loading: false, error: null } })
+        prevView = view // re-assert after synchronous store notification
       })
     })
 
