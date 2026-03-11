@@ -69,6 +69,16 @@ export function renderMappingPanel(container: HTMLElement): void {
     rootToggle?.click()
   }
 
+  // Auto-expand tree to reveal mapped nodes (without expanding their children)
+  const mappedPaths = new Set(
+    getState().mappings
+      .filter((m) => m.targetSite || m.plannedSite)
+      .map((m) => m.sourceNode.path)
+  )
+  if (mappedPaths.size > 0) {
+    autoExpandToMappedNodes(ul, topNodes, mappedPaths)
+  }
+
   // ── Search ────────────────────────────────────────────────────────────────
   const searchInput = container.querySelector('#tree-search') as HTMLInputElement
   const treeDiv = container.querySelector('#mapping-tree') as HTMLElement
@@ -255,6 +265,14 @@ function createMappingNodeEl(node: TreeNode, targetEl: HTMLElement, isRoot = fal
     row.addEventListener('click', () => {
       document.querySelectorAll('.mapping-row--active').forEach((r) => r.classList.remove('mapping-row--active'))
       row.classList.add('mapping-row--active')
+
+      // Dynamically check if any ancestor is mapped — block mapping and show info panel
+      const ancestorMapping = findAncestorMapping(node.path)
+      if (ancestorMapping) {
+        openBlockedPanel(targetEl, node, ancestorMapping)
+        return
+      }
+
       openTargetPanel(targetEl, node, (siteName, isPlanned) => {
         const isSelfMapped = !!siteName
         applyMappedState(isSelfMapped || isAncestorMapped, siteName ?? undefined, isPlanned)
@@ -655,6 +673,123 @@ async function persistMappings(mappings: MigrationMapping[]): Promise<void> {
   }
 }
 
+// ─── Auto-expand helpers ───────────────────────────────────────────────────────
+
+/**
+ * Expands tree nodes so that every mapped node is visible, without expanding
+ * the mapped nodes themselves (their children carry the "parent mapped" style).
+ */
+function autoExpandToMappedNodes(
+  rootUl: HTMLUListElement,
+  topNodes: TreeNode[],
+  mappedPaths: Set<string>
+): void {
+  for (const mappedPath of mappedPaths) {
+    const ancestors = findAncestorPaths(topNodes, mappedPath)
+    if (!ancestors) continue
+    let container: Element = rootUl
+    for (const ancestorPath of ancestors) {
+      const li = findDirectChildLi(container, ancestorPath)
+      if (!li) break
+      if (!li.classList.contains('mapping-node--open')) {
+        li.querySelector<HTMLButtonElement>(':scope > .mapping-row > .mapping-toggle-btn:not(.invisible)')?.click()
+      }
+      const childUl = li.querySelector<HTMLElement>(':scope > .tree-children')
+      if (childUl) container = childUl
+      else break
+    }
+  }
+}
+
+/** Returns the ordered list of ancestor paths (excluding the target) needed to reach targetPath. */
+function findAncestorPaths(nodes: TreeNode[], targetPath: string): string[] | null {
+  for (const node of nodes) {
+    if (node.path === targetPath) return []
+    if (node.children.length > 0) {
+      const sub = findAncestorPaths(node.children, targetPath)
+      if (sub !== null) return [node.path, ...sub]
+    }
+  }
+  return null
+}
+
+/** Finds a direct li.mapping-node child of the given UL whose mapping-row has the given path. */
+function findDirectChildLi(ul: Element, path: string): HTMLLIElement | null {
+  for (const li of Array.from(ul.children)) {
+    const row = (li as HTMLElement).querySelector<HTMLElement>(':scope > .mapping-row')
+    if (row?.dataset.path === path) return li as HTMLLIElement
+  }
+  return null
+}
+
+// ─── Ancestor-mapped block helpers ────────────────────────────────────────────
+
+/** Returns the nearest ancestor mapping for a given node path, or null if none. */
+function findAncestorMapping(nodePath: string): MigrationMapping | null {
+  for (const m of getState().mappings) {
+    const sp = m.sourceNode.path
+    if (sp && nodePath !== sp && (m.targetSite || m.plannedSite)) {
+      if (nodePath.startsWith(sp + '\\') || nodePath.startsWith(sp + '/')) {
+        return m
+      }
+    }
+  }
+  return null
+}
+
+/** Renders the "parent already mapped" info panel in place of the mapping form. */
+function openBlockedPanel(targetEl: HTMLElement, node: TreeNode, ancestor: MigrationMapping): void {
+  const mappedName = ancestor.targetSite?.displayName ?? ancestor.plannedSite?.displayName ?? '(unknown)'
+  const isPlanned = !ancestor.targetSite && !!ancestor.plannedSite
+
+  let destinationHtml = ''
+  if (ancestor.targetSite) {
+    const rel = computeRelativePath(node.path, ancestor.sourceNode.path)
+    const library = ancestor.targetDrive?.name ?? 'Shared Documents'
+    const parts: string[] = [ancestor.targetSite.webUrl.replace(/\/$/, ''), library]
+    if (ancestor.targetFolderPath) parts.push(ancestor.targetFolderPath.replace(/^[/\\]+/, ''))
+    if (rel) parts.push(rel)
+    const url = parts.join('/')
+    destinationHtml = `<a href="${escHtml(url)}" target="_blank" class="ancestor-url">${escHtml(url)}</a>`
+  } else if (ancestor.plannedSite) {
+    const ps = ancestor.plannedSite
+    const rel = computeRelativePath(node.path, ancestor.sourceNode.path)
+    const library = ps.libraryName || 'Documents'
+    const parts: string[] = [`[Planned] …/sites/${ps.alias}`, library]
+    if (ps.folderPath) parts.push(ps.folderPath.replace(/^[/\\]+/, ''))
+    if (rel) parts.push(rel)
+    destinationHtml = `<span class="ancestor-url ancestor-url--planned">${escHtml(parts.join('/'))}</span>`
+  }
+
+  targetEl.innerHTML = `
+    <div class="ancestor-blocked-panel">
+      <div class="ancestor-blocked-icon">🔒</div>
+      <h4 class="ancestor-blocked-title">Parent folder is already mapped</h4>
+      <p class="ancestor-blocked-msg">
+        <strong>${escHtml(String(node.name || node.path))}</strong> is a subfolder of a mapped location
+        and cannot be mapped separately.
+      </p>
+      <div class="ancestor-blocked-info">
+        <div class="ancestor-info-row">
+          <span class="ancestor-info-label">Mapped to</span>
+          <span class="ancestor-info-value">${escHtml(mappedName)}${isPlanned ? ' <em>(planned)</em>' : ''}</span>
+        </div>
+        <div class="ancestor-info-row ancestor-info-row--url">
+          <span class="ancestor-info-label">Destination URL</span>
+          <div class="ancestor-info-value">${destinationHtml || '—'}</div>
+        </div>
+      </div>
+    </div>
+  `
+}
+
+function computeRelativePath(nodePath: string, ancestorPath: string): string {
+  if (nodePath.startsWith(ancestorPath)) {
+    return nodePath.slice(ancestorPath.length).replace(/^[/\\]+/, '').replace(/\\/g, '/')
+  }
+  return ''
+}
+
 // ─── Descendant highlight propagation ─────────────────────────────────────────
 
 function updateDescendantHighlights(parentLi: HTMLLIElement, parentIsMapped: boolean): void {
@@ -837,6 +972,29 @@ function injectMappingStyles(): void {
     .btn-clear { background: none; border: none; cursor: pointer; color: inherit; font-size: 0.9rem; }
     .searching, .no-results { padding: 8px 12px; font-size: 0.85rem; color: var(--color-text-muted); display: block; }
     .hint { font-size: 0.78rem; color: var(--color-text-muted); font-weight: 400; }
+
+    /* Ancestor-blocked panel */
+    .ancestor-blocked-panel {
+      display: flex; flex-direction: column; align-items: flex-start; gap: 14px;
+      padding: 24px; }
+    .ancestor-blocked-icon { font-size: 1.8rem; line-height: 1; }
+    .ancestor-blocked-title { font-size: 1rem; font-weight: 600; color: var(--color-text); margin: 0; }
+    .ancestor-blocked-msg { font-size: 0.875rem; color: var(--color-text-muted); margin: 0; line-height: 1.5; }
+    .ancestor-blocked-info {
+      width: 100%; background: var(--color-surface-alt); border: 1px solid var(--color-border);
+      border-radius: 6px; overflow: hidden; }
+    .ancestor-info-row {
+      display: grid; grid-template-columns: 110px 1fr; gap: 8px; align-items: baseline;
+      padding: 10px 14px; border-bottom: 1px solid var(--color-border); }
+    .ancestor-info-row:last-child { border-bottom: none; }
+    .ancestor-info-row--url { align-items: start; }
+    .ancestor-info-label { font-size: 0.8rem; font-weight: 600; color: var(--color-text-muted); white-space: nowrap; }
+    .ancestor-info-value { font-size: 0.85rem; color: var(--color-text); word-break: break-all; }
+    .ancestor-url {
+      font-family: 'Consolas', monospace; font-size: 0.8rem; color: var(--color-primary);
+      text-decoration: none; word-break: break-all; display: block; }
+    .ancestor-url:hover { text-decoration: underline; }
+    .ancestor-url--planned { color: var(--color-text-muted); font-style: italic; }
   `
   document.head.appendChild(style)
 }
