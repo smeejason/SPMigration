@@ -3,41 +3,21 @@ import { setState, getState } from '../../state/store'
 import type { AppUser, MigrationProject } from '../../types'
 
 export async function renderProjectList(container: HTMLElement): Promise<void> {
-  container.innerHTML = `
-    <div class="projects-page">
-      <div class="projects-header">
-        <h2>Your Migration Projects</h2>
-        <button id="btn-new-project" class="btn btn-primary">+ New Project</button>
-      </div>
-      <div id="projects-body">
-        <div class="loading-spinner">Loading projects…</div>
-      </div>
-    </div>
-  `
   injectProjectStyles()
-
-  container.querySelector('#btn-new-project')!.addEventListener('click', () => {
-    setState({ currentProject: null, ui: { activeView: 'projects', loading: false, error: null } })
-    // Signal to app shell to open new project form
-    container.dispatchEvent(new CustomEvent('new-project', { bubbles: true }))
-  })
-
+  container.innerHTML = `<div class="loading-spinner">Loading projects…</div>`
   await loadProjects(container)
 }
 
 async function loadProjects(container: HTMLElement): Promise<void> {
-  const body = container.querySelector('#projects-body') as HTMLElement
   try {
     const allProjects = await getProjects()
-    // Only show projects where the current user is listed as an owner.
-    // Projects with no owners (legacy data) are shown to everyone.
     const currentUser = getState().auth.user
     const projects = filterByOwnership(allProjects, currentUser)
     setState({ projects })
-    renderProjectCards(body, projects, container)
+    renderProjectCards(container, projects)
   } catch (err) {
     const isConfigMissing = !import.meta.env.VITE_SP_SITE_ID
-    body.innerHTML = `
+    container.innerHTML = `
       <div class="projects-empty">
         ${isConfigMissing
           ? `<p class="error-text">SharePoint list not configured. Set <code>VITE_SP_SITE_ID</code> and <code>VITE_SP_LIST_ID</code> in your <code>.env.local</code> file.</p>`
@@ -48,28 +28,25 @@ async function loadProjects(container: HTMLElement): Promise<void> {
   }
 }
 
-function renderProjectCards(
-  body: HTMLElement,
-  projects: MigrationProject[],
-  container: HTMLElement
-): void {
+function renderProjectCards(container: HTMLElement, projects: MigrationProject[]): void {
   if (projects.length === 0) {
-    body.innerHTML = `
+    container.innerHTML = `
       <div class="projects-empty">
-        <p>No projects yet. Create your first migration project to get started.</p>
+        <p>No projects yet. Click <strong>+ New Project</strong> to get started.</p>
       </div>
     `
     return
   }
 
-  body.innerHTML = `
+  container.innerHTML = `
     <div class="project-grid">
       ${projects.map((p) => projectCardHtml(p)).join('')}
     </div>
   `
 
-  body.querySelectorAll('[data-project-id]').forEach((card) => {
+  container.querySelectorAll('[data-project-id]').forEach((card) => {
     const id = card.getAttribute('data-project-id')!
+
     card.querySelector('.project-open')?.addEventListener('click', async () => {
       const project = getState().projects.find((p) => p.id === id)
       if (!project) return
@@ -95,14 +72,15 @@ function renderProjectCards(
         alert('Could not load project data from SharePoint. Please try again.')
       }
     })
+
     card.querySelector('.project-delete')?.addEventListener('click', async (e) => {
       e.stopPropagation()
       if (!confirm(`Delete project "${getState().projects.find((p) => p.id === id)?.title}"?`)) return
       try {
         await deleteProject(id)
-        const projects = getState().projects.filter((p) => p.id !== id)
-        setState({ projects })
-        renderProjectCards(body, projects, container)
+        const updated = getState().projects.filter((p) => p.id !== id)
+        setState({ projects: updated })
+        renderProjectCards(container, updated)
       } catch (err) {
         alert(`Delete failed: ${(err as Error).message}`)
       }
@@ -113,7 +91,6 @@ function renderProjectCards(
 function filterByOwnership(projects: MigrationProject[], user: AppUser | null): MigrationProject[] {
   if (!user) return []
   return projects.filter((p) => {
-    // Legacy projects with no owners are visible to everyone
     if (p.owners.length === 0) return true
     return p.owners.some((o) => o.email === user.mail || o.id === user.id)
   })
@@ -125,7 +102,6 @@ function projectCardHtml(p: MigrationProject): string {
   const sizeLabel = uploadCount > 0
     ? `${uploadCount} upload${uploadCount !== 1 ? 's' : ''}`
     : stats.treeData ? formatBytes(stats.treeData.sizeBytes) : '—'
-  // Use the denormalized count first; fall back to inline array length for legacy projects
   const mappingCount = stats.mappingCount ?? (stats.mappings ?? []).length
   const modified = p.lastModified ? formatDate(p.lastModified) : '—'
   const statusClass = p.status.toLowerCase().replace(' ', '-')
@@ -135,7 +111,7 @@ function projectCardHtml(p: MigrationProject): string {
   return `
     <div class="project-card" data-project-id="${p.id}">
       <div class="project-card-header">
-        <div>
+        <div class="project-card-title-wrap">
           <h3 class="project-name">${escHtml(p.title)}</h3>
           ${p.description ? `<p class="project-desc">${escHtml(p.description)}</p>` : ''}
         </div>
@@ -151,8 +127,8 @@ function projectCardHtml(p: MigrationProject): string {
       </div>
       ${ownerNames ? `<div class="project-owners">👤 ${ownerNames}</div>` : ''}
       <div class="project-actions">
-        <button class="btn btn-primary project-open">Open</button>
-        <button class="btn btn-ghost project-delete" title="Delete project">🗑</button>
+        <button class="btn btn-primary btn-sm project-open">Open</button>
+        <button class="btn btn-ghost btn-sm project-delete" title="Delete project">🗑</button>
       </div>
     </div>
   `
@@ -178,33 +154,39 @@ function injectProjectStyles(): void {
   const style = document.createElement('style')
   style.id = 'project-styles'
   style.textContent = `
-    .projects-page { padding: 32px; max-width: 900px; margin: 0 auto; }
-    .projects-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 24px; }
-    .projects-header h2 { font-size: 1.4rem; font-weight: 600; }
-    .project-grid { display: grid; gap: 16px; }
-    .project-card { background: white; border: 1px solid var(--color-border); border-radius: 8px;
-      padding: 20px; transition: box-shadow 0.15s; }
+    .project-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+      gap: 16px;
+      padding: 24px 32px;
+      align-items: start;
+    }
+    .project-card {
+      background: white; border: 1px solid var(--color-border); border-radius: 8px;
+      padding: 20px; transition: box-shadow 0.15s; display: flex; flex-direction: column; gap: 10px;
+    }
     .project-card:hover { box-shadow: var(--shadow); }
-    .project-card-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 12px; gap: 12px; }
+    .project-card-header {
+      display: flex; justify-content: space-between; align-items: flex-start; gap: 12px;
+    }
+    .project-card-title-wrap { flex: 1; min-width: 0; }
     .project-card-badges { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; flex-shrink: 0; }
     .type-badge { padding: 2px 8px; border-radius: 12px; font-size: 0.72rem; font-weight: 600; }
     .type-sharepoint { background: #e8f0fe; color: #1a56db; }
     .type-onedrive { background: #e8f4fd; color: #0078d4; }
-    .project-name { font-size: 1.05rem; font-weight: 600; margin-bottom: 4px; }
+    .project-name { font-size: 1.05rem; font-weight: 600; margin-bottom: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .project-desc { font-size: 0.85rem; color: var(--color-text-muted); }
-    .project-stats { display: flex; gap: 16px; font-size: 0.85rem; color: var(--color-text-muted); margin-bottom: 8px; flex-wrap: wrap; }
-    .project-owners { font-size: 0.82rem; color: var(--color-text-muted); margin-bottom: 16px; }
-    .project-actions { display: flex; gap: 8px; }
+    .project-stats { display: flex; gap: 12px; font-size: 0.82rem; color: var(--color-text-muted); flex-wrap: wrap; }
+    .project-owners { font-size: 0.82rem; color: var(--color-text-muted); }
+    .project-actions { display: flex; gap: 8px; margin-top: auto; }
     .status-badge { padding: 3px 10px; border-radius: 12px; font-size: 0.78rem; font-weight: 600; white-space: nowrap; }
     .status-planning { background: #deecf9; color: #005a9e; }
     .status-in-progress { background: #fff4ce; color: #7d5900; }
     .status-completed { background: #dff6dd; color: #107c10; }
     .status-on-hold { background: #f3f2f1; color: #605e5c; }
-    .projects-empty { padding: 48px; text-align: center; color: var(--color-text-muted); }
+    .projects-empty { padding: 48px 32px; color: var(--color-text-muted); }
     .error-text { color: var(--color-danger); }
-    .loading-spinner { padding: 48px; text-align: center; color: var(--color-text-muted); }
-    .btn-ghost { background: transparent; border: 1px solid var(--color-border); color: var(--color-text-muted); }
-    .btn-ghost:hover { background: var(--color-surface-alt); }
+    .loading-spinner { padding: 48px 32px; color: var(--color-text-muted); }
   `
   document.head.appendChild(style)
 }
