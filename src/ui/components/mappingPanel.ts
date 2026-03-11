@@ -165,8 +165,9 @@ function createMappingNodeEl(node: TreeNode, targetEl: HTMLElement, isRoot = fal
 
   // Name
   const nameEl = document.createElement('span')
-  nameEl.className = 'tree-name'
-  nameEl.textContent = String(node.name || node.path || '(unnamed)')
+  const isLooseFiles = !isFolder
+  nameEl.className = `tree-name${isLooseFiles ? ' tree-name--loose' : ''}`
+  nameEl.textContent = isLooseFiles ? 'Loose files' : String(node.name || node.path || '(unnamed)')
   if (node.originalPath) nameEl.title = node.originalPath
 
   // Size
@@ -617,6 +618,7 @@ function injectMappingStyles(): void {
 
     .tree-name { flex: 1; font-size: 0.875rem; font-family: 'Consolas', monospace;
       white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+    .tree-name--loose { font-style: italic; color: var(--color-text-muted); }
     .tree-size-sm { font-size: 0.75rem; color: var(--color-text-muted); white-space: nowrap; flex-shrink: 0; }
     .mapping-tag { font-size: 0.72rem; background: #dff6dd; color: #107c10; padding: 2px 6px;
       border-radius: 10px; white-space: nowrap; flex-shrink: 0; }
