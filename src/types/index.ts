@@ -187,7 +187,7 @@ export interface GraphListItem {
     Title: string
     Description?: string
     Status?: string
-    Type?: string
+    ProjectType?: string
     ProjectData?: string
     Owners?: GraphUser[]
     Modified?: string
