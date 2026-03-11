@@ -76,9 +76,9 @@ function renderHistoryItems(uploads: ExcelUpload[], activeId?: string, activeTre
       const topNode = findTopDataNode(activeTree)
       rowCount = countAllNodes(activeTree)
       topFolderName = topNode.name || topNode.path || 'Root'
-      fileCount = activeTree.fileCount
-      folderCount = activeTree.folderCount
-      sizeBytes = activeTree.sizeBytes
+      fileCount = topNode.fileCount
+      folderCount = topNode.folderCount
+      sizeBytes = topNode.sizeBytes
     }
     const hasStats = rowCount !== undefined
 
@@ -193,7 +193,7 @@ async function handleFile(container: HTMLElement, file: File): Promise<void> {
   if (!project) {
     // No active project — just update state (fallback, shouldn't normally happen)
     setState({ treeData: tree })
-    setStatus('success', `✓ Parsed — ${formatSummary(tree)}`)
+    setStatus('success', `✓ Parsed — ${formatSummary(findTopDataNode(tree))}`)
     return
   }
 
@@ -223,9 +223,9 @@ async function handleFile(container: HTMLElement, file: File): Promise<void> {
       treeItemId,
       rowCount: countAllNodes(tree),
       topFolderName: topNode.name || topNode.path || 'Root',
-      fileCount: tree.fileCount,
-      folderCount: tree.folderCount,
-      sizeBytes: tree.sizeBytes,
+      fileCount: topNode.fileCount,
+      folderCount: topNode.folderCount,
+      sizeBytes: topNode.sizeBytes,
     }
 
     // Detect mapping conflicts against currently mapped folders
