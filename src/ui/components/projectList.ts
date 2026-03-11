@@ -125,9 +125,11 @@ function projectCardHtml(p: MigrationProject): string {
   const sizeLabel = uploadCount > 0
     ? `${uploadCount} upload${uploadCount !== 1 ? 's' : ''}`
     : stats.treeData ? formatBytes(stats.treeData.sizeBytes) : '—'
-  const mappingCount = (stats.mappings ?? []).length
+  // Use the denormalized count first; fall back to inline array length for legacy projects
+  const mappingCount = stats.mappingCount ?? (stats.mappings ?? []).length
   const modified = p.lastModified ? formatDate(p.lastModified) : '—'
   const statusClass = p.status.toLowerCase().replace(' ', '-')
+  const typeClass = (p.type ?? 'SharePoint') === 'OneDrive' ? 'type-onedrive' : 'type-sharepoint'
   const ownerNames = p.owners.map((o) => escHtml(o.displayName || o.email)).join(', ')
 
   return `
@@ -137,7 +139,10 @@ function projectCardHtml(p: MigrationProject): string {
           <h3 class="project-name">${escHtml(p.title)}</h3>
           ${p.description ? `<p class="project-desc">${escHtml(p.description)}</p>` : ''}
         </div>
-        <span class="status-badge status-${statusClass}">${escHtml(p.status)}</span>
+        <div class="project-card-badges">
+          <span class="type-badge ${typeClass}">${escHtml(p.type ?? 'SharePoint')}</span>
+          <span class="status-badge status-${statusClass}">${escHtml(p.status)}</span>
+        </div>
       </div>
       <div class="project-stats">
         <span>📦 ${sizeLabel}</span>
@@ -181,6 +186,10 @@ function injectProjectStyles(): void {
       padding: 20px; transition: box-shadow 0.15s; }
     .project-card:hover { box-shadow: var(--shadow); }
     .project-card-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 12px; gap: 12px; }
+    .project-card-badges { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; flex-shrink: 0; }
+    .type-badge { padding: 2px 8px; border-radius: 12px; font-size: 0.72rem; font-weight: 600; }
+    .type-sharepoint { background: #e8f0fe; color: #1a56db; }
+    .type-onedrive { background: #e8f4fd; color: #0078d4; }
     .project-name { font-size: 1.05rem; font-weight: 600; margin-bottom: 4px; }
     .project-desc { font-size: 0.85rem; color: var(--color-text-muted); }
     .project-stats { display: flex; gap: 16px; font-size: 0.85rem; color: var(--color-text-muted); margin-bottom: 8px; flex-wrap: wrap; }

@@ -1,7 +1,7 @@
 import { createProject, updateProject } from '../../graph/projectService'
 import { searchUsers } from '../../graph/graphClient'
 import { setState, getState } from '../../state/store'
-import type { MigrationProject, ProjectStatus, SharePointUser, AppUser } from '../../types'
+import type { MigrationProject, ProjectStatus, ProjectType, SharePointUser, AppUser } from '../../types'
 
 export function renderProjectForm(
   container: HTMLElement,
@@ -40,6 +40,25 @@ export function renderProjectForm(
             <label for="f-desc">Description</label>
             <textarea id="f-desc" class="form-input" rows="3"
               placeholder="Optional notes about this migration project">${escHtml(project?.description ?? '')}</textarea>
+          </div>
+          <div class="form-group">
+            <label>Type <span class="required">*</span></label>
+            <div class="type-radio-group">
+              <label class="type-radio-label">
+                <input type="radio" name="f-type" value="SharePoint" ${(project?.type ?? 'SharePoint') === 'SharePoint' ? 'checked' : ''} />
+                <span class="type-radio-content">
+                  <span class="type-radio-title">SharePoint</span>
+                  <span class="type-radio-desc">Migrate files to SharePoint document libraries</span>
+                </span>
+              </label>
+              <label class="type-radio-label">
+                <input type="radio" name="f-type" value="OneDrive" ${project?.type === 'OneDrive' ? 'checked' : ''} />
+                <span class="type-radio-content">
+                  <span class="type-radio-title">OneDrive</span>
+                  <span class="type-radio-desc">Migrate files to OneDrive for Business</span>
+                </span>
+              </label>
+            </div>
           </div>
           <div class="form-group">
             <label for="f-status">Status</label>
@@ -150,6 +169,7 @@ export function renderProjectForm(
     e.preventDefault()
     const title = (container.querySelector('#f-title') as HTMLInputElement).value.trim()
     const description = (container.querySelector('#f-desc') as HTMLTextAreaElement).value.trim()
+    const type = (container.querySelector('input[name="f-type"]:checked') as HTMLInputElement | null)?.value as ProjectType ?? 'SharePoint'
     const status = (container.querySelector('#f-status') as HTMLSelectElement).value as ProjectStatus
     const errorEl = container.querySelector('#form-error') as HTMLElement
     const saveBtn = container.querySelector('#btn-save') as HTMLButtonElement
@@ -172,13 +192,13 @@ export function renderProjectForm(
     try {
       let saved: MigrationProject
       if (isEdit && project) {
-        await updateProject(project.id, { title, description, status, owners: selectedOwners })
-        saved = { ...project, title, description, status, owners: selectedOwners }
+        await updateProject(project.id, { title, description, status, type, owners: selectedOwners })
+        saved = { ...project, title, description, status, type, owners: selectedOwners }
         setState({
           projects: getState().projects.map((p) => (p.id === saved.id ? saved : p)),
         })
       } else {
-        saved = await createProject({ title, description, status, owners: selectedOwners })
+        saved = await createProject({ title, description, status, type, owners: selectedOwners })
         setState({ projects: [...getState().projects, saved] })
       }
       container.innerHTML = ''
@@ -241,6 +261,15 @@ function injectFormStyles(): void {
     .form-error { padding: 10px 12px; background: #fde7e9; color: #a4262c;
       border-radius: 4px; font-size: 0.85rem; margin-bottom: 12px; }
     .form-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 24px; }
+    .type-radio-group { display: flex; flex-direction: column; gap: 8px; }
+    .type-radio-label { display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px;
+      border: 1px solid var(--color-border); border-radius: 6px; cursor: pointer;
+      transition: border-color 0.15s, background 0.15s; }
+    .type-radio-label:has(input:checked) { border-color: var(--color-primary); background: var(--color-primary-light); }
+    .type-radio-label input[type="radio"] { margin-top: 2px; flex-shrink: 0; }
+    .type-radio-content { display: flex; flex-direction: column; gap: 2px; }
+    .type-radio-title { font-size: 0.88rem; font-weight: 600; }
+    .type-radio-desc { font-size: 0.78rem; color: var(--color-text-muted); }
   `
   document.head.appendChild(style)
 }

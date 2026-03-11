@@ -640,15 +640,16 @@ async function persistMappings(mappings: MigrationMapping[]): Promise<void> {
     const { siteId } = getSpConfig()
     await saveMappingsFile(siteId, project.title, project.id, mappings)
 
-    // Remove any inline mappings from ProjectData so the field stays small.
+    // Remove any inline mappings from ProjectData but keep a denormalized count
+    // so the project list scorecard can display the correct number without loading the file.
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
     const { mappings: _removed, ...restData } = project.projectData
-    const updatedProjectData = { ...restData }
+    const updatedProjectData = { ...restData, mappingCount: mappings.length }
     await updateProject(project.id, { projectData: updatedProjectData })
     setState({ mappings, currentProject: { ...project, projectData: updatedProjectData } })
   } else {
-    // Legacy model (no upload folder yet): store inline as before.
-    const updatedProjectData = { ...project.projectData, mappings }
+    // Legacy model (no upload folder yet): store inline as before; keep count in sync too.
+    const updatedProjectData = { ...project.projectData, mappings, mappingCount: mappings.length }
     await updateProject(project.id, { projectData: updatedProjectData })
     setState({ mappings, currentProject: { ...project, projectData: updatedProjectData } })
   }

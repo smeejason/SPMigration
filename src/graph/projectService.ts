@@ -1,7 +1,7 @@
 import { Client } from '@microsoft/microsoft-graph-client'
 import { getToken } from '../auth/authService'
 import { downloadDriveItem, loadMappingsFile } from './graphClient'
-import type { MigrationProject, ProjectData, ProjectStatus, GraphListItem, SharePointUser, TreeNode, MigrationMapping } from '../types'
+import type { MigrationProject, ProjectData, ProjectStatus, ProjectType, GraphListItem, SharePointUser, TreeNode, MigrationMapping } from '../types'
 
 // ─── Config ───────────────────────────────────────────────────────────────────
 
@@ -114,7 +114,7 @@ export async function getProject(id: string): Promise<MigrationProject> {
 }
 
 export async function createProject(
-  data: Pick<MigrationProject, 'title' | 'description' | 'status'> & { owners?: SharePointUser[] }
+  data: Pick<MigrationProject, 'title' | 'description' | 'status' | 'type'> & { owners?: SharePointUser[] }
 ): Promise<MigrationProject> {
   const owners = data.owners ?? []
 
@@ -122,6 +122,7 @@ export async function createProject(
     Title: data.title,
     Description: data.description,
     Status: data.status,
+    Type: data.type ?? 'SharePoint',
     ProjectData: JSON.stringify({}),
   }
 
@@ -142,6 +143,7 @@ export async function updateProject(
     title: string
     description: string
     status: ProjectStatus
+    type: ProjectType
     projectData: ProjectData
     owners: SharePointUser[]
   }>
@@ -150,6 +152,7 @@ export async function updateProject(
   if (fields.title !== undefined) spFields['Title'] = fields.title
   if (fields.description !== undefined) spFields['Description'] = fields.description
   if (fields.status !== undefined) spFields['Status'] = fields.status
+  if (fields.type !== undefined) spFields['Type'] = fields.type
   if (fields.projectData !== undefined) spFields['ProjectData'] = JSON.stringify(fields.projectData)
 
   // Owners are stored exclusively in the SharePoint Owners person field
@@ -250,6 +253,7 @@ function mapItem(item: GraphListItem): MigrationProject {
     title: f.Title ?? '',
     description: (f.Description as string | undefined) ?? '',
     status: ((f.Status as string | undefined) ?? 'Planning') as ProjectStatus,
+    type: ((f.Type as string | undefined) ?? 'SharePoint') as ProjectType,
     owners,
     projectData,
     lastModified: f.Modified ? new Date(f.Modified as string) : undefined,

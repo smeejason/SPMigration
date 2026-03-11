@@ -10,12 +10,14 @@ export interface AppUser {
 // ─── Projects ────────────────────────────────────────────────────────────────
 
 export type ProjectStatus = 'Planning' | 'In Progress' | 'Completed' | 'On Hold'
+export type ProjectType = 'SharePoint' | 'OneDrive'
 
 export interface MigrationProject {
   id: string                  // SharePoint list item ID
   title: string
   description: string
   status: ProjectStatus
+  type: ProjectType
   owners: SharePointUser[]
   projectData: ProjectData
   lastModified?: Date
@@ -42,6 +44,7 @@ export interface ProjectData {
   activeUploadId?: string       // which upload is currently active (defaults to last)
   treeData?: TreeNode | null    // LEGACY: pre-upload-history projects store tree here
   mappings?: MigrationMapping[]
+  mappingCount?: number         // denormalized count kept in sync with the mappings file
   settings?: ProjectSettings
   lastSaved?: string          // ISO date string
 }
@@ -184,6 +187,7 @@ export interface GraphListItem {
     Title: string
     Description?: string
     Status?: string
+    Type?: string
     ProjectData?: string
     Owners?: GraphUser[]
     Modified?: string
