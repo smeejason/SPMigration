@@ -1,6 +1,6 @@
 import { Client } from '@microsoft/microsoft-graph-client'
 import { getToken } from '../auth/authService'
-import { downloadDriveItem, loadMappingsFile } from './graphClient'
+import { downloadDriveItem, loadMappingsFile, loadOneDriveMappingsFile } from './graphClient'
 import type { MigrationProject, ProjectData, ProjectStatus, ProjectType, GraphListItem, SharePointUser, TreeNode, MigrationMapping } from '../types'
 
 // ─── Config ───────────────────────────────────────────────────────────────────
@@ -218,6 +218,17 @@ export async function loadProjectMappings(project: MigrationProject): Promise<Mi
   }
 
   return inlineMappings ?? []
+}
+
+export async function loadProjectOneDriveMappings(project: MigrationProject): Promise<import('../types').OneDriveUserMapping[]> {
+  if (!project.projectData.uploads?.length) return []
+  const { siteId } = getSpConfig()
+  try {
+    const result = await loadOneDriveMappingsFile(siteId, project.title, project.id)
+    return result ?? []
+  } catch {
+    return []
+  }
 }
 
 // ─── Mapping ──────────────────────────────────────────────────────────────────

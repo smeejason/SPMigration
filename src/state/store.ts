@@ -8,6 +8,7 @@ const initialState: AppState = {
   currentProject: null,
   treeData: null,
   mappings: [],
+  oneDriveMappings: [],
   sites: [],
   pendingSiteCreations: [],
   ui: {

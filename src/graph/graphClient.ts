@@ -9,6 +9,7 @@ import type {
   GraphDrive,
   GraphUser,
   MigrationMapping,
+  OneDriveUserMapping,
 } from '../types'
 
 // ─── Graph client factory ─────────────────────────────────────────────────────
@@ -89,6 +90,119 @@ export async function searchUsers(query: string): Promise<AppUser[]> {
     mail: u.mail ?? u.userPrincipalName,
     userPrincipalName: u.userPrincipalName,
   }))
+}
+
+// ─── OneDrive (personal drives) ───────────────────────────────────────────────
+
+/**
+ * Get a user's OneDrive drive object (id + webUrl).
+ * Returns null if the user has no OneDrive or the token lacks permission.
+ */
+export async function getUserDrive(userId: string): Promise<SharePointDrive | null> {
+  try {
+    const drive = await client().api(`/users/${userId}/drive`).get() as GraphDrive
+    return mapDrive(drive)
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Check whether the currently signed-in token can read a user's OneDrive root.
+ * Returns 'accessible' | 'no-access' | 'no-drive' | 'error'.
+ */
+export async function checkUserDriveAccess(userId: string): Promise<'accessible' | 'no-access' | 'no-drive' | 'error'> {
+  try {
+    await client().api(`/users/${userId}/drive/root`).get()
+    return 'accessible'
+  } catch (err) {
+    const status = (err as { statusCode?: number }).statusCode
+    if (status === 404) return 'no-drive'
+    if (status === 403 || status === 401) return 'no-access'
+    return 'error'
+  }
+}
+
+/**
+ * Grant the migration account write access to a user's OneDrive root.
+ * Requires Files.ReadWrite.All or SharePoint admin consent.
+ */
+export async function grantUserDriveAccess(userId: string, migrationAccountEmail: string): Promise<void> {
+  await client().api(`/users/${userId}/drive/root/invite`).post({
+    requireSignIn: true,
+    sendInvitation: false,
+    roles: ['write'],
+    recipients: [{ email: migrationAccountEmail }],
+  })
+}
+
+/**
+ * Search for a user by display name using exact match first, then a broad search.
+ * Returns matched user + status to distinguish single-match vs ambiguous vs not found.
+ */
+export async function findUserForOneDrive(displayName: string): Promise<{
+  user: AppUser | null
+  status: 'matched' | 'not-found' | 'ambiguous' | 'error'
+  candidates: AppUser[]
+}> {
+  try {
+    // Exact match
+    const exact = await client()
+      .api('/users')
+      .filter(`displayName eq '${displayName.replace(/'/g, "''")}'`)
+      .select('id,displayName,mail,userPrincipalName')
+      .top(5)
+      .get() as { value: GraphUser[] }
+
+    const exactUsers = (exact.value ?? []).map(mapGraphUser)
+    if (exactUsers.length === 1) return { user: exactUsers[0], status: 'matched', candidates: [] }
+    if (exactUsers.length > 1) return { user: null, status: 'ambiguous', candidates: exactUsers }
+
+    // Broad search using ConsistencyLevel + $search
+    try {
+      const broad = await client()
+        .api('/users')
+        .header('ConsistencyLevel', 'eventual')
+        .query({ $search: `"displayName:${displayName}"`, $count: 'true' })
+        .select('id,displayName,mail,userPrincipalName')
+        .top(5)
+        .get() as { value: GraphUser[] }
+
+      const broadUsers = (broad.value ?? []).map(mapGraphUser)
+      if (broadUsers.length === 0) return { user: null, status: 'not-found', candidates: [] }
+
+      // Prefer case-insensitive exact display name match from broad results
+      const nameMatch = broadUsers.find(
+        (u) => u.displayName.toLowerCase() === displayName.toLowerCase()
+      )
+      if (nameMatch) return { user: nameMatch, status: 'matched', candidates: [] }
+      if (broadUsers.length === 1) return { user: broadUsers[0], status: 'matched', candidates: [] }
+      return { user: null, status: 'ambiguous', candidates: broadUsers }
+    } catch {
+      // Some tenants don't support $search — fall back to startsWith
+      const prefix = displayName.split(' ')[0]
+      const fallback = await client()
+        .api('/users')
+        .filter(`startsWith(displayName,'${prefix.replace(/'/g, "''")}')`)
+        .select('id,displayName,mail,userPrincipalName')
+        .top(10)
+        .get() as { value: GraphUser[] }
+
+      const fallbackUsers = (fallback.value ?? []).map(mapGraphUser)
+      const match = fallbackUsers.find(
+        (u) => u.displayName.toLowerCase() === displayName.toLowerCase()
+      )
+      if (match) return { user: match, status: 'matched', candidates: [] }
+      if (fallbackUsers.length === 0) return { user: null, status: 'not-found', candidates: [] }
+      return { user: null, status: 'ambiguous', candidates: fallbackUsers.slice(0, 5) }
+    }
+  } catch (err) {
+    return { user: null, status: 'error', candidates: [] }
+  }
+}
+
+function mapGraphUser(u: GraphUser): AppUser {
+  return { id: u.id, displayName: u.displayName, mail: u.mail ?? u.userPrincipalName, userPrincipalName: u.userPrincipalName }
 }
 
 // ─── Site creation ────────────────────────────────────────────────────────────
@@ -271,6 +385,48 @@ export async function saveMappingsFile(
     const text = await response.text().catch(() => '')
     throw new Error(`Mappings save failed (${response.status}): ${text}`)
   }
+}
+
+export async function saveOneDriveMappingsFile(
+  siteId: string,
+  projectTitle: string,
+  projectId: string,
+  mappings: OneDriveUserMapping[]
+): Promise<void> {
+  // Strip children from sourceNode to keep the file lean
+  const slim = mappings.map((m) => ({ ...m, sourceNode: { ...m.sourceNode, children: [] } }))
+  const token = await getToken()
+  const folderName = getProjectFolderName(projectTitle, projectId)
+  const filePath = encodeURIComponent(`SPMigration/${folderName}/${projectId}.odmappings.json`)
+  const response = await fetch(
+    `https://graph.microsoft.com/v1.0/sites/${siteId}/drive/root:/${filePath}:/content`,
+    {
+      method: 'PUT',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(slim),
+    }
+  )
+  if (!response.ok) {
+    const text = await response.text().catch(() => '')
+    throw new Error(`OneDrive mappings save failed (${response.status}): ${text}`)
+  }
+}
+
+export async function loadOneDriveMappingsFile(
+  siteId: string,
+  projectTitle: string,
+  projectId: string
+): Promise<OneDriveUserMapping[] | null> {
+  const token = await getToken()
+  const folderName = getProjectFolderName(projectTitle, projectId)
+  const filePath = encodeURIComponent(`SPMigration/${folderName}/${projectId}.odmappings.json`)
+  const response = await fetch(
+    `https://graph.microsoft.com/v1.0/sites/${siteId}/drive/root:/${filePath}:/content`,
+    { headers: { Authorization: `Bearer ${token}` } }
+  )
+  if (response.status === 404) return null
+  if (!response.ok) throw new Error(`OneDrive mappings load failed (${response.status})`)
+  return JSON.parse(await response.text()) as OneDriveUserMapping[]
 }
 
 export async function loadMappingsFile(

@@ -52,7 +52,10 @@ export interface ProjectData {
   mappings?: MigrationMapping[]
   mappingCount?: number         // denormalized count kept in sync with the mappings file
   settings?: ProjectSettings
-  lastSaved?: string          // ISO date string
+  lastSaved?: string            // ISO date string
+  // OneDrive-specific
+  autoMapSettings?: AutoMapSettings    // persisted level + account settings from Auto Map tab
+  oneDriveMappingCount?: number        // denormalized count of auto-mapped OneDrive users
 }
 
 export interface ProjectSettings {
@@ -86,7 +89,32 @@ export interface ParsedTreeSizeRow {
   lastAccessed?: Date
 }
 
-// ─── SharePoint / Graph ──────────────────────────────────────────────────────
+// ─── OneDrive Auto Map ────────────────────────────────────────────────────────
+
+export type OneDriveMatchStatus = 'pending' | 'matched' | 'not-found' | 'ambiguous' | 'error'
+export type OneDriveAccessStatus = 'unknown' | 'accessible' | 'granted' | 'no-access' | 'no-drive' | 'error'
+
+export interface OneDriveUserMapping {
+  id: string                       // = sourceNode.path (unique key)
+  sourceNode: TreeNode             // the user folder in the tree
+  folderName: string               // raw folder name, e.g. "MarisaBruan"
+  resolvedDisplayName: string      // camelCase-split name, e.g. "Marisa Bruan"
+  matchedUser: AppUser | null      // matched M365 user (null until resolved)
+  matchStatus: OneDriveMatchStatus
+  driveId: string                  // Graph drive ID (once resolved)
+  driveWebUrl: string              // user's OneDrive root URL
+  accessStatus: OneDriveAccessStatus
+  targetFolderPath: string         // destination within their OneDrive, e.g. "Migration/Files"
+  error?: string
+}
+
+export interface AutoMapSettings {
+  selectedLevel: number        // tree depth (0-based) that holds user home-drive folders
+  migrationAccount: string     // UPN of the account that will run the migration
+  targetFolderPath: string     // folder path within each user's OneDrive (may be empty = root)
+}
+
+
 
 export interface SharePointSite {
   id: string
@@ -154,10 +182,11 @@ export interface AppState {
   currentProject: MigrationProject | null
   treeData: TreeNode | null
   mappings: MigrationMapping[]
+  oneDriveMappings: OneDriveUserMapping[]
   sites: SharePointSite[]
   pendingSiteCreations: SiteRequest[]
   ui: {
-    activeView: 'login' | 'projects' | 'project-upload' | 'project-map' | 'project-sites' | 'project-summary'
+    activeView: 'login' | 'projects' | 'project-upload' | 'project-automap' | 'project-map' | 'project-sites' | 'project-summary'
     loading: boolean
     error: string | null
   }

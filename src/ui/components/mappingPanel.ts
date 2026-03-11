@@ -1,7 +1,7 @@
-import { searchSites, getSiteDrives, saveMappingsFile } from '../../graph/graphClient'
+import { searchSites, getSiteDrives, saveMappingsFile, searchUsers, getUserDrive, checkUserDriveAccess } from '../../graph/graphClient'
 import { updateProject, getSpConfig } from '../../graph/projectService'
 import { setState, getState } from '../../state/store'
-import type { TreeNode, MigrationMapping, SharePointSite, SharePointDrive, PlannedSiteTarget } from '../../types'
+import type { TreeNode, MigrationMapping, SharePointSite, SharePointDrive, PlannedSiteTarget, AppUser } from '../../types'
 
 // Live references to mapping tag elements so we can update them without re-rendering
 const tagRegistry = new Map<string, HTMLSpanElement>()
@@ -291,6 +291,11 @@ async function openTargetPanel(
   node: TreeNode,
   onMappingChange: (siteName: string | null, isPlanned?: boolean) => void
 ): Promise<void> {
+  if (getState().currentProject?.type === 'OneDrive') {
+    await openOneDriveTargetPanel(targetEl, node, onMappingChange)
+    return
+  }
+
   const existing = getState().mappings.find((m) => m.sourceNode.path === node.path)
   const initialTab = existing?.plannedSite && !existing?.targetSite ? 'planned' : 'existing'
 
@@ -625,6 +630,254 @@ async function openTargetPanel(
     onMappingChange(null)
     removeBtn.remove()
   })
+}
+
+// ─── OneDrive target panel ─────────────────────────────────────────────────────
+
+async function openOneDriveTargetPanel(
+  targetEl: HTMLElement,
+  node: TreeNode,
+  onMappingChange: (siteName: string | null, isPlanned?: boolean) => void
+): Promise<void> {
+  const existing = getState().mappings.find((m) => m.sourceNode.path === node.path)
+  const existingUser: AppUser | null = existing?.targetSite
+    ? { id: existing.targetSite.id, displayName: existing.targetSite.displayName,
+        mail: existing.targetSite.webUrl, userPrincipalName: existing.targetSite.webUrl }
+    : null
+
+  const fmtDate = (d?: Date | string) =>
+    d ? new Date(d).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }) : '—'
+
+  targetEl.innerHTML = `
+    <div class="target-panel">
+
+      <!-- Folder Summary (collapsible) -->
+      <div class="target-section" id="summary-section">
+        <button type="button" class="target-section-toggle" id="btn-toggle-summary" aria-expanded="true">
+          <span class="target-section-title">Folder Summary Information</span>
+          <span class="target-section-chevron" aria-hidden="true">▼</span>
+        </button>
+        <div class="target-section-body" id="summary-body">
+          <div class="source-detail-card">
+            <div class="source-detail-title">
+              <span class="source-detail-icon">📁</span>
+              <span class="source-detail-name">${escHtml(String(node.name || node.path))}</span>
+            </div>
+            <dl class="source-detail-grid">
+              <dt>Full Path</dt>
+              <dd class="source-detail-path" title="${escHtml(node.originalPath)}">${escHtml(node.originalPath)}</dd>
+              <dt>Size</dt><dd>${node.sizeBytes > 0 ? formatBytes(node.sizeBytes) : '—'}</dd>
+              <dt>Files</dt><dd>${node.fileCount > 0 ? node.fileCount.toLocaleString() : '—'}</dd>
+              <dt>Last Modified</dt><dd>${fmtDate(node.lastModified)}</dd>
+            </dl>
+          </div>
+        </div>
+      </div>
+
+      <!-- OneDrive user selection -->
+      <div class="target-section">
+        <div class="sp-tabs-bar">
+          <span class="sp-tab sp-tab--active" style="cursor:default">OneDrive User</span>
+        </div>
+        <div class="target-section-body--sp">
+
+          <div class="form-group">
+            <label>Select User</label>
+            <div class="site-search-row">
+              <input id="od-user-search" type="text" class="form-input"
+                placeholder="Search by name or UPN…"
+                value="${escHtml(existingUser?.displayName ?? '')}" />
+              <button type="button" id="btn-od-search" class="btn btn-primary btn-sm">Search</button>
+            </div>
+            <div id="od-user-results" class="site-results"></div>
+            <div id="od-selected-user" class="selected-badge" style="${existingUser ? '' : 'display:none'}">
+              ✓ ${escHtml(existingUser?.displayName ?? '')}
+              <button type="button" class="btn-clear" id="btn-clear-od-user">✕</button>
+            </div>
+          </div>
+
+          <div id="od-drive-info" style="${existing?.targetDrive ? '' : 'display:none'}">
+            <div class="od-drive-card">
+              <div class="od-drive-row">
+                <span class="od-drive-label">OneDrive URL</span>
+                <span id="od-drive-url" class="od-drive-value">${escHtml(existing?.targetSite?.webUrl ?? '')}</span>
+              </div>
+              <div class="od-drive-row">
+                <span class="od-drive-label">Library</span>
+                <span id="od-drive-lib" class="od-drive-value">${escHtml(existing?.targetDrive?.name ?? 'OneDrive')}</span>
+              </div>
+              <div class="od-drive-row">
+                <span class="od-drive-label">Access</span>
+                <span id="od-access-status" class="od-drive-value">⏳ Checking…</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label>Subfolder Path <span class="hint">(optional)</span></label>
+            <input id="od-folder-path" type="text" class="form-input" placeholder="e.g. Migration/Files"
+              value="${escHtml(existing?.targetFolderPath ?? '')}" />
+          </div>
+
+          <div class="target-action-row">
+            <button type="button" id="btn-save-od-mapping" class="btn btn-primary">Save Mapping</button>
+            ${existing?.targetSite ? `<button type="button" id="btn-remove-od-mapping" class="btn btn-ghost">Remove</button>` : ''}
+          </div>
+
+        </div>
+      </div>
+    </div>
+  `
+
+  // ── Collapsible summary ────────────────────────────────────────────────────
+  const summaryToggleBtn = targetEl.querySelector('#btn-toggle-summary') as HTMLButtonElement
+  const summaryBody = targetEl.querySelector('#summary-body') as HTMLElement
+  summaryToggleBtn?.addEventListener('click', () => {
+    const isOpen = summaryBody.style.display !== 'none'
+    summaryBody.style.display = isOpen ? 'none' : ''
+    summaryToggleBtn.setAttribute('aria-expanded', String(!isOpen))
+    ;(summaryToggleBtn.querySelector('.target-section-chevron') as HTMLElement).textContent = isOpen ? '▶' : '▼'
+  })
+
+  // ── State ──────────────────────────────────────────────────────────────────
+  let selectedUser: AppUser | null = existingUser
+  let selectedDriveId = existing?.targetDrive?.id ?? ''
+  let selectedDriveWebUrl = existing?.targetSite?.webUrl ?? ''
+
+  // Check access for existing user on load
+  if (existing?.targetSite?.id) {
+    checkAndShowAccess(targetEl, existing.targetSite.id)
+  }
+
+  // ── User search ────────────────────────────────────────────────────────────
+  targetEl.querySelector('#btn-od-search')?.addEventListener('click', async () => {
+    const query = (targetEl.querySelector('#od-user-search') as HTMLInputElement).value.trim()
+    const resultsEl = targetEl.querySelector('#od-user-results') as HTMLElement
+    resultsEl.innerHTML = '<span class="searching">Searching…</span>'
+    try {
+      const users = await searchUsers(query)
+      if (users.length === 0) {
+        resultsEl.innerHTML = '<span class="no-results">No users found.</span>'
+        return
+      }
+      resultsEl.innerHTML = users.map((u) =>
+        `<div class="site-result-item" data-uid="${escHtml(u.id)}">
+          ${escHtml(u.displayName)}<br>
+          <small>${escHtml(u.userPrincipalName ?? u.mail ?? '')}</small>
+        </div>`
+      ).join('')
+
+      resultsEl.querySelectorAll('.site-result-item').forEach((item) => {
+        item.addEventListener('click', async () => {
+          const uid = item.getAttribute('data-uid')!
+          selectedUser = users.find(u => u.id === uid) ?? null
+          if (!selectedUser) return
+          resultsEl.innerHTML = ''
+
+          const badge = targetEl.querySelector('#od-selected-user') as HTMLElement
+          badge.innerHTML = `✓ ${escHtml(selectedUser.displayName)} <button class="btn-clear" id="btn-clear-od-user">✕</button>`
+          badge.style.display = ''
+          attachClearUser()
+
+          // Load drive info
+          const driveInfo = targetEl.querySelector('#od-drive-info') as HTMLElement
+          driveInfo.style.display = ''
+          ;(targetEl.querySelector('#od-drive-url') as HTMLElement).textContent = '⏳ Loading…'
+          ;(targetEl.querySelector('#od-access-status') as HTMLElement).textContent = '⏳ Checking…'
+
+          const drive = await getUserDrive(selectedUser.id)
+          selectedDriveId = drive?.id ?? ''
+          selectedDriveWebUrl = drive?.webUrl ?? ''
+          ;(targetEl.querySelector('#od-drive-url') as HTMLElement).textContent = selectedDriveWebUrl || '—'
+          ;(targetEl.querySelector('#od-drive-lib') as HTMLElement).textContent = drive?.name ?? 'OneDrive'
+
+          checkAndShowAccess(targetEl, selectedUser.id)
+        })
+      })
+    } catch {
+      resultsEl.innerHTML = '<span class="no-results">Search failed.</span>'
+    }
+  })
+
+  function attachClearUser(): void {
+    targetEl.querySelector('#btn-clear-od-user')?.addEventListener('click', () => {
+      selectedUser = null
+      selectedDriveId = ''
+      selectedDriveWebUrl = ''
+      ;(targetEl.querySelector('#od-selected-user') as HTMLElement).style.display = 'none'
+      ;(targetEl.querySelector('#od-drive-info') as HTMLElement).style.display = 'none'
+    })
+  }
+  attachClearUser()
+
+  // ── Save ──────────────────────────────────────────────────────────────────
+  targetEl.querySelector('#btn-save-od-mapping')?.addEventListener('click', async () => {
+    if (!selectedUser) { alert('Select a user first.'); return }
+    const folderPath = (targetEl.querySelector('#od-folder-path') as HTMLInputElement).value.trim()
+
+    const mapping: MigrationMapping = {
+      id: node.path,
+      sourceNode: node,
+      targetSite: { id: selectedUser.id, displayName: selectedUser.displayName, webUrl: selectedDriveWebUrl, name: selectedUser.displayName },
+      targetDrive: selectedDriveId ? { id: selectedDriveId, name: 'OneDrive', webUrl: selectedDriveWebUrl, driveType: 'personal' } : null,
+      targetFolderPath: folderPath,
+      status: 'ready',
+    }
+
+    const mappings = [...getState().mappings.filter(m => m.sourceNode.path !== node.path), mapping]
+    setState({ mappings })
+    onMappingChange(selectedUser.displayName, false)
+
+    const saveBtn = targetEl.querySelector('#btn-save-od-mapping') as HTMLButtonElement
+    saveBtn.disabled = true
+    saveBtn.textContent = 'Saving…'
+    try {
+      await persistMappings(mappings)
+      saveBtn.textContent = '✓ Saved'
+    } catch {
+      saveBtn.textContent = '⚠ Save failed — retry'
+    } finally {
+      saveBtn.disabled = false
+      setTimeout(() => { if (saveBtn.textContent !== '⚠ Save failed — retry') saveBtn.textContent = 'Save Mapping' }, 2000)
+    }
+  })
+
+  // ── Remove ────────────────────────────────────────────────────────────────
+  targetEl.querySelector('#btn-remove-od-mapping')?.addEventListener('click', async () => {
+    const removeBtn = targetEl.querySelector('#btn-remove-od-mapping') as HTMLButtonElement
+    removeBtn.disabled = true
+    removeBtn.textContent = 'Removing…'
+    const mappings = getState().mappings.filter(m => m.sourceNode.path !== node.path)
+    setState({ mappings })
+    try {
+      await persistMappings(mappings)
+    } catch {
+      removeBtn.disabled = false
+      removeBtn.textContent = 'Remove'
+      return
+    }
+    onMappingChange(null)
+    removeBtn.remove()
+  })
+}
+
+async function checkAndShowAccess(targetEl: HTMLElement, userId: string): Promise<void> {
+  const statusEl = targetEl.querySelector('#od-access-status') as HTMLElement | null
+  if (!statusEl) return
+  statusEl.textContent = '⏳ Checking…'
+  try {
+    const access = await checkUserDriveAccess(userId)
+    const labels: Record<string, string> = {
+      accessible: '✓ Accessible',
+      'no-access': '✗ No access — grant via Phase 2',
+      'no-drive': '✗ No OneDrive provisioned',
+      error: '⚠ Could not check',
+    }
+    statusEl.textContent = labels[access] ?? access
+    statusEl.style.color = access === 'accessible' ? 'var(--color-success, #107c10)' : 'var(--color-danger, #a4262c)'
+  } catch {
+    statusEl.textContent = '⚠ Could not check'
+  }
 }
 
 async function loadLibraries(
@@ -995,6 +1248,16 @@ function injectMappingStyles(): void {
       text-decoration: none; word-break: break-all; display: block; }
     .ancestor-url:hover { text-decoration: underline; }
     .ancestor-url--planned { color: var(--color-text-muted); font-style: italic; }
+
+    /* OneDrive drive info card */
+    .od-drive-card { background: var(--color-surface-alt); border: 1px solid var(--color-border);
+      border-radius: 6px; overflow: hidden; margin-bottom: 0; }
+    .od-drive-row { display: grid; grid-template-columns: 100px 1fr; gap: 8px; align-items: baseline;
+      padding: 8px 14px; border-bottom: 1px solid var(--color-border); }
+    .od-drive-row:last-child { border-bottom: none; }
+    .od-drive-label { font-size: 0.8rem; font-weight: 600; color: var(--color-text-muted); white-space: nowrap; }
+    .od-drive-value { font-size: 0.82rem; color: var(--color-text); word-break: break-all;
+      font-family: 'Consolas', monospace; }
   `
   document.head.appendChild(style)
 }

@@ -7,6 +7,7 @@ import { renderUploadPanel } from './components/uploadPanel'
 import { renderMappingPanel } from './components/mappingPanel'
 import { renderSiteCreator } from './components/siteCreator'
 import { renderSummaryPanel } from './components/summaryPanel'
+import { renderAutoMapPanel } from './components/autoMapPanel'
 import type { AppState, MigrationProject } from '../types'
 
 // ─── Waffle SVG ───────────────────────────────────────────────────────────────
@@ -65,13 +66,21 @@ function projectsContextualNavHtml(): string {
   `
 }
 
-function projectWorkspaceHtml(projectTitle: string): string {
-  return `
-    <nav class="workspace-tabs">
+function projectWorkspaceHtml(projectTitle: string, projectType: string): string {
+  const tabs = projectType === 'OneDrive'
+    ? `
+      <button class="tab-btn" data-view="project-upload">Upload</button>
+      <button class="tab-btn" data-view="project-automap">Auto Map</button>
+      <button class="tab-btn" data-view="project-map">Map</button>
+      <button class="tab-btn" data-view="project-summary">Summary</button>`
+    : `
       <button class="tab-btn" data-view="project-upload">Upload</button>
       <button class="tab-btn" data-view="project-map">Map</button>
       <button class="tab-btn" data-view="project-sites">Create Sites</button>
-      <button class="tab-btn" data-view="project-summary">Summary</button>
+      <button class="tab-btn" data-view="project-summary">Summary</button>`
+  return `
+    <nav class="workspace-tabs">
+      ${tabs}
       <div class="tab-spacer"></div>
       <span class="workspace-project-name">${escHtml(projectTitle)}</span>
       <button id="btn-back-projects" class="btn btn-ghost btn-sm">← Projects</button>
@@ -140,7 +149,7 @@ export function mountApp(root: HTMLElement): void {
     attachWaffle(root)
 
     const main = root.querySelector('#app-main') as HTMLElement
-    main.innerHTML = projectWorkspaceHtml(project.title)
+    main.innerHTML = projectWorkspaceHtml(project.title, project.type)
 
     const panel = main.querySelector('#workspace-panel') as HTMLElement
     const tabs = main.querySelectorAll('.tab-btn[data-view]')
@@ -152,6 +161,7 @@ export function mountApp(root: HTMLElement): void {
     const renderPanel = (view: AppState['ui']['activeView']): void => {
       panel.innerHTML = ''
       if (view === 'project-upload') renderUploadPanel(panel)
+      else if (view === 'project-automap') renderAutoMapPanel(panel)
       else if (view === 'project-map') renderMappingPanel(panel)
       else if (view === 'project-sites') renderSiteCreator(panel)
       else if (view === 'project-summary') renderSummaryPanel(panel)
