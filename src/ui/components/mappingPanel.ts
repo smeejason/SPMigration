@@ -97,7 +97,7 @@ export function renderMappingPanel(container: HTMLElement): void {
     if (!term) { clearSearch(); return }
 
     const matches = allNodes.filter(
-      (n) => n.name.toLowerCase().includes(term) || n.originalPath.toLowerCase().includes(term) || n.path.toLowerCase().includes(term)
+      (n) => n.name.toLowerCase().includes(term)
     )
 
     treeDiv.style.display = 'none'
@@ -137,7 +137,7 @@ export function renderMappingPanel(container: HTMLElement): void {
 
 // ─── Lazy node element factory ────────────────────────────────────────────────
 
-function createMappingNodeEl(node: TreeNode, targetEl: HTMLElement, isRoot = false): HTMLLIElement {
+function createMappingNodeEl(node: TreeNode, targetEl: HTMLElement, isRoot = false, isAncestorMapped = false): HTMLLIElement {
   const li = document.createElement('li')
   li.className = `mapping-node${isRoot ? ' mapping-node--root' : ''}`
 
@@ -201,7 +201,7 @@ function createMappingNodeEl(node: TreeNode, targetEl: HTMLElement, isRoot = fal
   }
 
   const isMappedInitially = !!existingMapping?.targetSite
-  applyMappedState(isMappedInitially, existingMapping?.targetSite?.displayName)
+  applyMappedState(isMappedInitially || isAncestorMapped, existingMapping?.targetSite?.displayName)
 
   row.appendChild(toggleBtn)
   row.appendChild(iconWrap)
@@ -227,8 +227,9 @@ function createMappingNodeEl(node: TreeNode, targetEl: HTMLElement, isRoot = fal
         if (!childrenLoaded) {
           const childUl = document.createElement('ul')
           childUl.className = 'tree-list tree-children'
+          const isCurrentlyMapped = row.classList.contains('mapping-row--mapped')
           for (const child of node.children) {
-            childUl.appendChild(createMappingNodeEl(child, targetEl))
+            childUl.appendChild(createMappingNodeEl(child, targetEl, false, isCurrentlyMapped))
           }
           li.appendChild(childUl)
           childrenLoaded = true
@@ -248,7 +249,9 @@ function createMappingNodeEl(node: TreeNode, targetEl: HTMLElement, isRoot = fal
       document.querySelectorAll('.mapping-row--active').forEach((r) => r.classList.remove('mapping-row--active'))
       row.classList.add('mapping-row--active')
       openTargetPanel(targetEl, node, (siteName) => {
-        applyMappedState(!!siteName, siteName ?? undefined)
+        const isSelfMapped = !!siteName
+        applyMappedState(isSelfMapped || isAncestorMapped, siteName ?? undefined)
+        updateDescendantHighlights(li, isSelfMapped || isAncestorMapped)
       })
     })
   }
@@ -513,6 +516,26 @@ async function persistMappings(mappings: MigrationMapping[]): Promise<void> {
     await updateProject(project.id, { projectData: updatedProjectData })
     setState({ mappings, currentProject: { ...project, projectData: updatedProjectData } })
   }
+}
+
+// ─── Descendant highlight propagation ─────────────────────────────────────────
+
+function updateDescendantHighlights(parentLi: HTMLLIElement, parentIsMapped: boolean): void {
+  const childUl = parentLi.querySelector<HTMLElement>(':scope > .tree-children')
+  if (!childUl) return
+  childUl.querySelectorAll<HTMLLIElement>(':scope > .mapping-node').forEach((childLi) => {
+    const childRow = childLi.querySelector<HTMLElement>(':scope > .mapping-row')
+    if (!childRow) return
+    const childPath = childRow.dataset.path ?? ''
+    const childSelfMapped = !!getState().mappings.find((m) => m.sourceNode.path === childPath && m.targetSite)
+    const shouldBeMapped = parentIsMapped || childSelfMapped
+    if (shouldBeMapped) {
+      childRow.classList.add('mapping-row--mapped')
+    } else {
+      childRow.classList.remove('mapping-row--mapped')
+    }
+    updateDescendantHighlights(childLi, shouldBeMapped)
+  })
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
