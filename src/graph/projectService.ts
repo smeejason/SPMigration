@@ -222,6 +222,8 @@ export async function loadProjectMappings(project: MigrationProject): Promise<Mi
 
 export async function loadProjectOneDriveMappings(project: MigrationProject): Promise<import('../types').OneDriveUserMapping[]> {
   if (!project.projectData.uploads?.length) return []
+  // Skip the network request entirely if Phase 1 has never been run — avoids a 404 log
+  if (!project.projectData.oneDriveMappingCount) return []
   const { siteId } = getSpConfig()
   try {
     const result = await loadOneDriveMappingsFile(siteId, project.title, project.id)

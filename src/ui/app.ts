@@ -129,6 +129,11 @@ export function mountApp(root: HTMLElement): void {
           (saved: MigrationProject) => {
             setState({
               currentProject: saved,
+              treeData: null,
+              mappings: [],
+              oneDriveMappings: [],
+              sites: [],
+              pendingSiteCreations: [],
               ui: { activeView: 'project-upload', loading: false, error: null },
             })
           },
@@ -183,7 +188,7 @@ export function mountApp(root: HTMLElement): void {
     })
 
     main.querySelector('#btn-back-projects')?.addEventListener('click', () => {
-      setState({ currentProject: null, ui: { activeView: 'projects', loading: false, error: null } })
+      setState({ currentProject: null, treeData: null, mappings: [], oneDriveMappings: [], sites: [], pendingSiteCreations: [], ui: { activeView: 'projects', loading: false, error: null } })
     })
   }
 
@@ -229,7 +234,7 @@ function attachWaffle(root: HTMLElement): void {
 
   root.querySelector('#waffle-projects')?.addEventListener('click', () => {
     menu.hidden = true
-    setState({ currentProject: null, ui: { activeView: 'projects', loading: false, error: null } })
+    setState({ currentProject: null, treeData: null, mappings: [], oneDriveMappings: [], sites: [], pendingSiteCreations: [], ui: { activeView: 'projects', loading: false, error: null } })
   })
 }
 
