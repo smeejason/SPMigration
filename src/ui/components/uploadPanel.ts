@@ -73,7 +73,7 @@ function renderHistoryItems(uploads: ExcelUpload[], activeId?: string, activeTre
     let folderCount = u.folderCount
     let sizeBytes = u.sizeBytes
     if (isActive && activeTree && rowCount === undefined) {
-      const topNode = !activeTree.path && activeTree.children.length > 0 ? activeTree.children[0] : activeTree
+      const topNode = findTopDataNode(activeTree)
       rowCount = countAllNodes(activeTree)
       topFolderName = topNode.name || topNode.path || 'Root'
       fileCount = activeTree.fileCount
@@ -214,7 +214,7 @@ async function handleFile(container: HTMLElement, file: File): Promise<void> {
       siteId, folderId, `${ts}_${safeName}.tree.json`, JSON.stringify(tree)
     )
 
-    const topNode = !tree.path && tree.children.length > 0 ? tree.children[0] : tree
+    const topNode = findTopDataNode(tree)
     const newUpload: ExcelUpload = {
       id: ts,
       fileName: file.name,
@@ -326,6 +326,19 @@ function showConflictWarning(container: HTMLElement, conflicts: MigrationMapping
 
 function countAllNodes(node: TreeNode): number {
   return 1 + node.children.reduce((s, c) => s + countAllNodes(c), 0)
+}
+
+/**
+ * Finds the first node in the tree that has real data (size or file count > 0).
+ * Walks down single-child implicit ancestor nodes (e.g. a UNC server node like
+ * \\BHFP03 that was created synthetically because the report starts at
+ * \\BHFP03\NationalDataDrive\ — the server segment has no row of its own).
+ * Stops as soon as it finds a node with data, or when the path branches.
+ */
+function findTopDataNode(node: TreeNode): TreeNode {
+  if (node.sizeBytes > 0 || node.fileCount > 0) return node
+  if (node.children.length === 1) return findTopDataNode(node.children[0])
+  return node
 }
 
 function formatSummary(tree: TreeNode): string {
