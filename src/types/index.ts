@@ -37,6 +37,12 @@ export interface ExcelUpload {
   uploadedAt: string   // ISO datetime string
   excelItemId: string  // Graph driveItem ID for the uploaded Excel/CSV file
   treeItemId: string   // Graph driveItem ID for the companion .tree.json file
+  // Summary stats stored at upload time so history can display without reloading the tree
+  rowCount?: number        // total node count across the whole tree
+  topFolderName?: string   // name/path of the root folder
+  fileCount?: number       // root node's total file count
+  folderCount?: number     // root node's total folder count
+  sizeBytes?: number       // root node's total size in bytes
 }
 
 export interface ProjectData {

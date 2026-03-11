@@ -21,7 +21,7 @@ export function renderUploadPanel(container: HTMLElement): void {
         <h3>Upload History</h3>
         <p class="panel-desc">All TreeSize reports uploaded for this project, stored in SharePoint. The <strong>Active</strong> report drives the mapping view.</p>
         <div class="upload-history-list" id="history-list">
-          ${renderHistoryItems(uploads, activeId)}
+          ${renderHistoryItems(uploads, activeId, existingTree)}
         </div>
       </div>
       ` : ''}
@@ -52,13 +52,6 @@ export function renderUploadPanel(container: HTMLElement): void {
         <div id="upload-status" class="upload-status" style="display:none"></div>
       </div>
 
-      <div id="stats-section" class="panel-section" style="${existingTree ? '' : 'display:none'}">
-        <h3>File System Summary</h3>
-        <div id="stats-cards" class="stats-grid">
-          ${existingTree ? renderStatsCards(existingTree) : ''}
-        </div>
-      </div>
-
     </div>
   `
   injectUploadStyles()
@@ -68,21 +61,51 @@ export function renderUploadPanel(container: HTMLElement): void {
 
 // ─── History ──────────────────────────────────────────────────────────────────
 
-function renderHistoryItems(uploads: ExcelUpload[], activeId?: string): string {
+function renderHistoryItems(uploads: ExcelUpload[], activeId?: string, activeTree?: TreeNode | null): string {
   return [...uploads].reverse().map((u) => {
     const isActive = u.id === activeId
     const date = formatDate(new Date(u.uploadedAt))
+
+    // Prefer stored stats; fall back to live tree for the active item (covers legacy uploads)
+    let rowCount = u.rowCount
+    let topFolderName = u.topFolderName
+    let fileCount = u.fileCount
+    let folderCount = u.folderCount
+    let sizeBytes = u.sizeBytes
+    if (isActive && activeTree && rowCount === undefined) {
+      const topNode = !activeTree.path && activeTree.children.length > 0 ? activeTree.children[0] : activeTree
+      rowCount = countAllNodes(activeTree)
+      topFolderName = topNode.name || topNode.path || 'Root'
+      fileCount = activeTree.fileCount
+      folderCount = activeTree.folderCount
+      sizeBytes = activeTree.sizeBytes
+    }
+    const hasStats = rowCount !== undefined
+
     return `
       <div class="history-item${isActive ? ' history-item--active' : ''}">
-        <span class="history-item-icon">📊</span>
-        <div class="history-item-info">
-          <span class="history-item-name" title="${escHtml(u.fileName)}">${escHtml(u.fileName)}</span>
-          <span class="history-item-date">${date}</span>
+        <div class="history-item-header">
+          <span class="history-item-icon">📊</span>
+          <div class="history-item-info">
+            <span class="history-item-name" title="${escHtml(u.fileName)}">${escHtml(u.fileName)}</span>
+            <span class="history-item-meta">${date}${hasStats && rowCount !== undefined ? ` · ${rowCount.toLocaleString()} rows` : ''}</span>
+          </div>
+          ${isActive
+            ? '<span class="history-active-badge">● Active</span>'
+            : `<button type="button" class="btn btn-ghost btn-sm history-switch-btn" data-upload-id="${escHtml(u.id)}">Use This</button>`
+          }
         </div>
-        ${isActive
-          ? '<span class="history-active-badge">● Active</span>'
-          : `<button type="button" class="btn btn-ghost btn-sm history-switch-btn" data-upload-id="${escHtml(u.id)}">Use This</button>`
-        }
+        ${hasStats ? `
+        <div class="history-item-detail">
+          <span class="history-detail-folder">📁 ${escHtml(topFolderName ?? '')}</span>
+          <span class="history-detail-divider">·</span>
+          <span class="history-detail-stat">${(folderCount ?? 0).toLocaleString()} folders</span>
+          <span class="history-detail-divider">·</span>
+          <span class="history-detail-stat">${(fileCount ?? 0).toLocaleString()} files</span>
+          <span class="history-detail-divider">·</span>
+          <span class="history-detail-stat">${formatBytes(sizeBytes ?? 0)}</span>
+        </div>
+        ` : ''}
       </div>
     `
   }).join('')
@@ -149,7 +172,6 @@ function setupDropZone(container: HTMLElement): void {
 
 async function handleFile(container: HTMLElement, file: File): Promise<void> {
   const status = container.querySelector('#upload-status') as HTMLElement
-  const statsSection = container.querySelector('#stats-section') as HTMLElement
 
   function setStatus(type: 'info' | 'success' | 'error', msg: string, spin = false): void {
     status.className = `upload-status upload-status--${type}`
@@ -158,7 +180,6 @@ async function handleFile(container: HTMLElement, file: File): Promise<void> {
   }
 
   setStatus('info', `Parsing <strong>${escHtml(file.name)}</strong> — this may take a moment for large files…`, true)
-  statsSection.style.display = 'none'
 
   let tree: TreeNode
   try {
@@ -173,9 +194,6 @@ async function handleFile(container: HTMLElement, file: File): Promise<void> {
     // No active project — just update state (fallback, shouldn't normally happen)
     setState({ treeData: tree })
     setStatus('success', `✓ Parsed — ${formatSummary(tree)}`)
-    statsSection.style.display = ''
-    const statsCards = container.querySelector('#stats-cards') as HTMLElement
-    statsCards.innerHTML = renderStatsCards(tree)
     return
   }
 
@@ -196,12 +214,18 @@ async function handleFile(container: HTMLElement, file: File): Promise<void> {
       siteId, folderId, `${ts}_${safeName}.tree.json`, JSON.stringify(tree)
     )
 
+    const topNode = !tree.path && tree.children.length > 0 ? tree.children[0] : tree
     const newUpload: ExcelUpload = {
       id: ts,
       fileName: file.name,
       uploadedAt: new Date().toISOString(),
       excelItemId,
       treeItemId,
+      rowCount: countAllNodes(tree),
+      topFolderName: topNode.name || topNode.path || 'Root',
+      fileCount: tree.fileCount,
+      folderCount: tree.folderCount,
+      sizeBytes: tree.sizeBytes,
     }
 
     // Detect mapping conflicts against currently mapped folders
@@ -298,36 +322,14 @@ function showConflictWarning(container: HTMLElement, conflicts: MigrationMapping
   }, { once: true })
 }
 
-// ─── Stats ────────────────────────────────────────────────────────────────────
+// ─── Tree helpers ──────────────────────────────────────────────────────────────
 
-function renderStatsCards(tree: TreeNode): string {
-  const { totalFiles, totalFolders, totalBytes } = computeStats(tree)
-  return `
-    <div class="stat-card">
-      <div class="stat-icon">📄</div>
-      <div class="stat-value">${totalFiles.toLocaleString()}</div>
-      <div class="stat-label">Total Files</div>
-    </div>
-    <div class="stat-card">
-      <div class="stat-icon">📁</div>
-      <div class="stat-value">${totalFolders.toLocaleString()}</div>
-      <div class="stat-label">Total Folders</div>
-    </div>
-    <div class="stat-card">
-      <div class="stat-icon">💾</div>
-      <div class="stat-value">${formatBytes(totalBytes)}</div>
-      <div class="stat-label">Space Used</div>
-    </div>
-  `
-}
-
-function computeStats(root: TreeNode): { totalFiles: number; totalFolders: number; totalBytes: number } {
-  return { totalFiles: root.fileCount, totalFolders: root.folderCount, totalBytes: root.sizeBytes }
+function countAllNodes(node: TreeNode): number {
+  return 1 + node.children.reduce((s, c) => s + countAllNodes(c), 0)
 }
 
 function formatSummary(tree: TreeNode): string {
-  const { totalFiles, totalFolders, totalBytes } = computeStats(tree)
-  return `${formatBytes(totalBytes)} · ${totalFiles.toLocaleString()} files · ${totalFolders.toLocaleString()} folders`
+  return `${formatBytes(tree.sizeBytes)} · ${tree.fileCount.toLocaleString()} files · ${tree.folderCount.toLocaleString()} folders`
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -363,17 +365,25 @@ function injectUploadStyles(): void {
 
     /* Upload history list */
     .upload-history-list { border: 1px solid var(--color-border); border-radius: 6px; overflow: hidden; }
-    .history-item { display: flex; align-items: center; gap: 12px; padding: 10px 14px;
-      border-bottom: 1px solid var(--color-border); }
+    .history-item { border-bottom: 1px solid var(--color-border); }
     .history-item:last-child { border-bottom: none; }
     .history-item--active { background: rgba(16, 124, 16, 0.06); }
+    .history-item-header { display: flex; align-items: center; gap: 12px; padding: 10px 14px; }
     .history-item-icon { font-size: 1.2rem; flex-shrink: 0; }
     .history-item-info { flex: 1; min-width: 0; }
     .history-item-name { display: block; font-size: 0.875rem; font-weight: 500;
       white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-family: 'Consolas', monospace; }
-    .history-item-date { font-size: 0.78rem; color: var(--color-text-muted); }
+    .history-item-meta { font-size: 0.78rem; color: var(--color-text-muted); }
     .history-active-badge { font-size: 0.78rem; color: #107c10; font-weight: 600;
       white-space: nowrap; flex-shrink: 0; }
+    .history-item-detail {
+      display: flex; align-items: center; flex-wrap: wrap; gap: 4px;
+      padding: 0 14px 10px 42px; font-size: 0.8rem; color: var(--color-text-muted);
+    }
+    .history-detail-folder { font-family: 'Consolas', monospace; color: var(--color-text);
+      font-weight: 500; max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .history-detail-divider { color: var(--color-border); }
+    .history-detail-stat { white-space: nowrap; }
 
     /* Conflict warning */
     .conflict-warning { margin-bottom: 24px; background: #fff4ce; border: 1px solid #f3e06b;
@@ -409,16 +419,6 @@ function injectUploadStyles(): void {
       border-top-color: transparent; border-radius: 50%; animation: spin 0.7s linear infinite; flex-shrink: 0; }
     @keyframes spin { to { transform: rotate(360deg); } }
 
-    /* Stats */
-    .stats-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-top: 12px; }
-    .stat-card { background: var(--color-surface, #faf9f8); border: 1px solid var(--color-border);
-      border-radius: 8px; padding: 20px 24px; display: flex; flex-direction: column; align-items: center;
-      gap: 6px; text-align: center; }
-    .stat-icon { font-size: 2rem; }
-    .stat-value { font-size: 1.6rem; font-weight: 700; color: var(--color-primary, #0078d4);
-      font-variant-numeric: tabular-nums; }
-    .stat-label { font-size: 0.8rem; color: var(--color-text-muted); text-transform: uppercase;
-      letter-spacing: 0.05em; font-weight: 500; }
   `
   document.head.appendChild(style)
 }
