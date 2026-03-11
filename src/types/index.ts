@@ -98,6 +98,15 @@ export interface SharePointDrive {
 
 export type MappingStatus = 'pending' | 'ready' | 'error'
 
+export interface PlannedSiteTarget {
+  displayName: string
+  alias: string
+  description: string
+  template: SiteTemplate
+  libraryName: string
+  folderPath: string
+}
+
 export interface MigrationMapping {
   id: string
   sourceNode: TreeNode
@@ -106,6 +115,7 @@ export interface MigrationMapping {
   targetFolderPath: string
   status: MappingStatus
   notes?: string
+  plannedSite?: PlannedSiteTarget
 }
 
 // ─── Site Creation ───────────────────────────────────────────────────────────

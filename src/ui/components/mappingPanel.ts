@@ -1,7 +1,7 @@
 import { searchSites, getSiteDrives, saveMappingsFile } from '../../graph/graphClient'
 import { updateProject, getSpConfig } from '../../graph/projectService'
 import { setState, getState } from '../../state/store'
-import type { TreeNode, MigrationMapping, SharePointSite, SharePointDrive } from '../../types'
+import type { TreeNode, MigrationMapping, SharePointSite, SharePointDrive, PlannedSiteTarget } from '../../types'
 
 // Live references to mapping tag elements so we can update them without re-rendering
 const tagRegistry = new Map<string, HTMLSpanElement>()
@@ -182,7 +182,7 @@ function createMappingNodeEl(node: TreeNode, targetEl: HTMLElement, isRoot = fal
   tagRegistry.set(node.path, tagEl)
 
   // Helper: apply/remove the mapped visual state on this row
-  function applyMappedState(isMapped: boolean, siteName?: string): void {
+  function applyMappedState(isMapped: boolean, siteName?: string, isPlanned = false): void {
     if (isFolder) {
       iconWrap.innerHTML = isMapped
         ? '📁<span class="mapped-folder-badge" aria-hidden="true">✓</span>'
@@ -193,16 +193,22 @@ function createMappingNodeEl(node: TreeNode, targetEl: HTMLElement, isRoot = fal
     }
     if (isMapped) {
       row.classList.add('mapping-row--mapped')
-      tagEl.textContent = siteName ? `→ ${siteName}` : ''
+      if (isPlanned) row.classList.add('mapping-row--planned'); else row.classList.remove('mapping-row--planned')
+      tagEl.textContent = siteName ? `→ ${siteName}${isPlanned ? ' (planned)' : ''}` : ''
       tagEl.style.display = siteName ? '' : 'none'
+      tagEl.className = `mapping-tag${isPlanned ? ' mapping-tag--planned' : ''}`
     } else {
       row.classList.remove('mapping-row--mapped')
+      row.classList.remove('mapping-row--planned')
       tagEl.style.display = 'none'
+      tagEl.className = 'mapping-tag'
     }
   }
 
-  const isMappedInitially = !!existingMapping?.targetSite
-  applyMappedState(isMappedInitially || isAncestorMapped, existingMapping?.targetSite?.displayName)
+  const isMappedInitially = !!(existingMapping?.targetSite || existingMapping?.plannedSite)
+  const initialSiteName = existingMapping?.targetSite?.displayName ?? existingMapping?.plannedSite?.displayName
+  const isPlannedInitially = !existingMapping?.targetSite && !!existingMapping?.plannedSite
+  applyMappedState(isMappedInitially || isAncestorMapped, initialSiteName, isPlannedInitially)
 
   row.appendChild(toggleBtn)
   row.appendChild(iconWrap)
@@ -249,9 +255,9 @@ function createMappingNodeEl(node: TreeNode, targetEl: HTMLElement, isRoot = fal
     row.addEventListener('click', () => {
       document.querySelectorAll('.mapping-row--active').forEach((r) => r.classList.remove('mapping-row--active'))
       row.classList.add('mapping-row--active')
-      openTargetPanel(targetEl, node, (siteName) => {
+      openTargetPanel(targetEl, node, (siteName, isPlanned) => {
         const isSelfMapped = !!siteName
-        applyMappedState(isSelfMapped || isAncestorMapped, siteName ?? undefined)
+        applyMappedState(isSelfMapped || isAncestorMapped, siteName ?? undefined, isPlanned)
         updateDescendantHighlights(li, isSelfMapped || isAncestorMapped)
       })
     })
@@ -265,9 +271,10 @@ function createMappingNodeEl(node: TreeNode, targetEl: HTMLElement, isRoot = fal
 async function openTargetPanel(
   targetEl: HTMLElement,
   node: TreeNode,
-  onMappingChange: (siteName: string | null) => void
+  onMappingChange: (siteName: string | null, isPlanned?: boolean) => void
 ): Promise<void> {
   const existing = getState().mappings.find((m) => m.sourceNode.path === node.path)
+  const initialTab = existing?.plannedSite && !existing?.targetSite ? 'planned' : 'existing'
 
   const fmtDate = (d?: Date | string) =>
     d ? new Date(d).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }) : '—'
@@ -296,30 +303,26 @@ async function openTargetPanel(
             <dl class="source-detail-grid">
               <dt>Full Path</dt>
               <dd class="source-detail-path" title="${escHtml(node.originalPath)}">${escHtml(node.originalPath)}</dd>
-              <dt>Size</dt>
-              <dd>${sizeStr}</dd>
-              <dt>Files</dt>
-              <dd>${fileStr}</dd>
-              <dt>Subfolders</dt>
-              <dd>${folderStr}</dd>
-              <dt>Direct Children</dt>
-              <dd>${childStr}</dd>
-              <dt>Last Modified</dt>
-              <dd>${lastModStr}</dd>
-              <dt>Last Accessed</dt>
-              <dd>${lastAccStr}</dd>
+              <dt>Size</dt><dd>${sizeStr}</dd>
+              <dt>Files</dt><dd>${fileStr}</dd>
+              <dt>Subfolders</dt><dd>${folderStr}</dd>
+              <dt>Direct Children</dt><dd>${childStr}</dd>
+              <dt>Last Modified</dt><dd>${lastModStr}</dd>
+              <dt>Last Accessed</dt><dd>${lastAccStr}</dd>
             </dl>
           </div>
         </div>
       </div>
 
-      <!-- ── Section 2: Target SharePoint Location ── -->
+      <!-- ── Section 2: SharePoint Location (tabbed) ── -->
       <div class="target-section">
-        <div class="target-section-header-static">
-          <span class="target-section-title">Target SharePoint Location</span>
+        <div class="sp-tabs-bar">
+          <button type="button" class="sp-tab${initialTab === 'existing' ? ' sp-tab--active' : ''}" data-tab="existing">Existing SharePoint Location</button>
+          <button type="button" class="sp-tab${initialTab === 'planned' ? ' sp-tab--active' : ''}" data-tab="planned">Planned SharePoint Location</button>
         </div>
-        <div class="target-section-body target-section-body--sp">
 
+        <!-- Tab: Existing -->
+        <div id="tab-existing" class="sp-tab-panel target-section-body--sp"${initialTab !== 'existing' ? ' style="display:none"' : ''}>
           <div class="form-group">
             <label>SharePoint Site</label>
             <div class="site-search-row">
@@ -333,30 +336,84 @@ async function openTargetPanel(
               <button type="button" class="btn-clear" id="btn-clear-site">✕</button>
             </div>
           </div>
-
           <div class="form-group" id="library-group" style="${existing?.targetSite ? '' : 'display:none'}">
             <label>Document Library</label>
             <select id="library-select" class="form-input">
               <option value="">Loading libraries…</option>
             </select>
           </div>
-
           <div class="form-group">
             <label>Subfolder Path <span class="hint">(optional)</span></label>
             <input id="folder-path" type="text" class="form-input" placeholder="e.g. /Migrations/Phase1"
               value="${escHtml(existing?.targetFolderPath ?? '')}" />
           </div>
-
           <div class="target-action-row">
             <button type="button" id="btn-save-mapping" class="btn btn-primary">Save Mapping</button>
-            ${existing ? `<button type="button" id="btn-remove-mapping" class="btn btn-ghost">Remove</button>` : ''}
+            ${existing?.targetSite ? `<button type="button" id="btn-remove-mapping" class="btn btn-ghost">Remove</button>` : ''}
           </div>
-
         </div>
-      </div>
 
+        <!-- Tab: Planned -->
+        <div id="tab-planned" class="sp-tab-panel target-section-body--sp"${initialTab !== 'planned' ? ' style="display:none"' : ''}>
+          <p class="form-hint" style="margin:0">Define the SharePoint site that will be created for this content.</p>
+          <div class="form-group">
+            <label>Site Display Name <span class="required">*</span></label>
+            <input id="planned-name" type="text" class="form-input" placeholder="e.g. Engineering"
+              value="${escHtml(existing?.plannedSite?.displayName ?? '')}" />
+          </div>
+          <div class="form-group">
+            <label>URL Alias <span class="required">*</span></label>
+            <div class="alias-row">
+              <span class="alias-prefix">.../sites/</span>
+              <input id="planned-alias" type="text" class="form-input" placeholder="engineering"
+                value="${escHtml(existing?.plannedSite?.alias ?? '')}" />
+            </div>
+            <small class="form-hint">Letters, numbers, and hyphens only.</small>
+          </div>
+          <div class="form-group">
+            <label>Description</label>
+            <textarea id="planned-desc" class="form-input" rows="2" placeholder="Optional description">${escHtml(existing?.plannedSite?.description ?? '')}</textarea>
+          </div>
+          <div class="form-group">
+            <label>Template</label>
+            <div class="template-row">
+              <label class="radio-label">
+                <input type="radio" name="planned-template" value="team" checked /> Team site (M365 Group)
+              </label>
+            </div>
+            <small class="form-hint">Team site support only in Phase 1.</small>
+          </div>
+          <div class="form-group">
+            <label>Document Library <span class="hint">(optional)</span></label>
+            <input id="planned-library" type="text" class="form-input" placeholder="e.g. Documents"
+              value="${escHtml(existing?.plannedSite?.libraryName ?? '')}" />
+          </div>
+          <div class="form-group">
+            <label>Subfolder Path <span class="hint">(optional)</span></label>
+            <input id="planned-folder" type="text" class="form-input" placeholder="e.g. /Migrations/Phase1"
+              value="${escHtml(existing?.plannedSite?.folderPath ?? '')}" />
+          </div>
+          <div class="target-action-row">
+            <button type="button" id="btn-save-planned" class="btn btn-primary">Save Mapping</button>
+            ${existing?.plannedSite ? `<button type="button" id="btn-remove-planned" class="btn btn-ghost">Remove</button>` : ''}
+          </div>
+        </div>
+
+      </div>
     </div>
   `
+
+  // ── Tab switching ─────────────────────────────────────────────────────────
+  targetEl.querySelectorAll<HTMLButtonElement>('.sp-tab').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const tab = btn.dataset.tab!
+      targetEl.querySelectorAll('.sp-tab').forEach((b) => b.classList.remove('sp-tab--active'))
+      btn.classList.add('sp-tab--active')
+      targetEl.querySelectorAll<HTMLElement>('.sp-tab-panel').forEach((p) => {
+        p.style.display = p.id === `tab-${tab}` ? '' : 'none'
+      })
+    })
+  })
 
   // ── Collapsible summary toggle ────────────────────────────────────────────
   const summaryToggleBtn = targetEl.querySelector('#btn-toggle-summary') as HTMLButtonElement
@@ -369,6 +426,7 @@ async function openTargetPanel(
     if (chevron) chevron.textContent = isOpen ? '▶' : '▼'
   })
 
+  // ── Existing tab logic ────────────────────────────────────────────────────
   let selectedSite: SharePointSite | null = existing?.targetSite ?? null
   let selectedDrive: SharePointDrive | null = existing?.targetDrive ?? null
 
@@ -440,7 +498,7 @@ async function openTargetPanel(
       mapping,
     ]
     setState({ mappings })
-    onMappingChange(selectedSite?.displayName ?? null)
+    onMappingChange(selectedSite?.displayName ?? null, false)
 
     const saveBtn = targetEl.querySelector('#btn-save-mapping') as HTMLButtonElement
     saveBtn.disabled = true
@@ -458,6 +516,83 @@ async function openTargetPanel(
 
   targetEl.querySelector('#btn-remove-mapping')?.addEventListener('click', async () => {
     const removeBtn = targetEl.querySelector('#btn-remove-mapping') as HTMLButtonElement
+    removeBtn.disabled = true
+    removeBtn.textContent = 'Removing…'
+    const mappings = getState().mappings.filter((m) => m.sourceNode.path !== node.path)
+    setState({ mappings })
+    try {
+      await persistMappings(mappings)
+    } catch {
+      removeBtn.disabled = false
+      removeBtn.textContent = 'Remove'
+      return
+    }
+    onMappingChange(null)
+    removeBtn.remove()
+  })
+
+  // ── Planned tab logic ─────────────────────────────────────────────────────
+  const plannedNameInput = targetEl.querySelector('#planned-name') as HTMLInputElement
+  const plannedAliasInput = targetEl.querySelector('#planned-alias') as HTMLInputElement
+
+  plannedNameInput?.addEventListener('input', () => {
+    if (plannedAliasInput.dataset.userEdited) return
+    plannedAliasInput.value = plannedNameInput.value
+      .toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-').slice(0, 60)
+  })
+  plannedAliasInput?.addEventListener('input', () => { plannedAliasInput.dataset.userEdited = '1' })
+
+  targetEl.querySelector('#btn-save-planned')?.addEventListener('click', async () => {
+    const plannedName = plannedNameInput.value.trim()
+    const plannedAlias = plannedAliasInput.value.trim()
+    const plannedDesc = (targetEl.querySelector('#planned-desc') as HTMLTextAreaElement).value.trim()
+    const plannedLibrary = (targetEl.querySelector('#planned-library') as HTMLInputElement).value.trim()
+    const plannedFolder = (targetEl.querySelector('#planned-folder') as HTMLInputElement).value.trim()
+
+    if (!plannedName) { plannedNameInput.focus(); return }
+
+    const plannedSite: PlannedSiteTarget = {
+      displayName: plannedName,
+      alias: plannedAlias,
+      description: plannedDesc,
+      template: 'team',
+      libraryName: plannedLibrary,
+      folderPath: plannedFolder,
+    }
+
+    const mapping: MigrationMapping = {
+      id: node.path,
+      sourceNode: node,
+      targetSite: null,
+      targetDrive: null,
+      targetFolderPath: plannedFolder,
+      status: 'pending',
+      plannedSite,
+    }
+
+    const mappings = [
+      ...getState().mappings.filter((m) => m.sourceNode.path !== node.path),
+      mapping,
+    ]
+    setState({ mappings })
+    onMappingChange(plannedName, true)
+
+    const saveBtn = targetEl.querySelector('#btn-save-planned') as HTMLButtonElement
+    saveBtn.disabled = true
+    saveBtn.textContent = 'Saving…'
+    try {
+      await persistMappings(mappings)
+      saveBtn.textContent = '✓ Saved'
+    } catch {
+      saveBtn.textContent = '⚠ Save failed — retry'
+    } finally {
+      saveBtn.disabled = false
+      setTimeout(() => { if (saveBtn.textContent !== '⚠ Save failed — retry') saveBtn.textContent = 'Save Mapping' }, 2000)
+    }
+  })
+
+  targetEl.querySelector('#btn-remove-planned')?.addEventListener('click', async () => {
+    const removeBtn = targetEl.querySelector('#btn-remove-planned') as HTMLButtonElement
     removeBtn.disabled = true
     removeBtn.textContent = 'Removing…'
     const mappings = getState().mappings.filter((m) => m.sourceNode.path !== node.path)
@@ -639,10 +774,29 @@ function injectMappingStyles(): void {
     }
     .target-section-toggle:hover { background: var(--color-primary-light); }
 
-    .target-section-header-static {
-      display: flex; align-items: center; padding: 12px 16px;
-      background: var(--color-surface-alt); border-bottom: 1px solid var(--color-border);
+    /* Tab bar */
+    .sp-tabs-bar { display: flex; border-bottom: 1px solid var(--color-border); background: var(--color-surface-alt); }
+    .sp-tab {
+      flex: 1; padding: 10px 14px; background: none; border: none;
+      border-bottom: 2px solid transparent; cursor: pointer; font-size: 0.8rem; font-weight: 500;
+      color: var(--color-text-muted); font-family: inherit; text-align: center;
+      transition: color 0.15s, border-color 0.15s;
     }
+    .sp-tab:hover { color: var(--color-text); background: var(--color-primary-light); }
+    .sp-tab--active { color: var(--color-primary); border-bottom-color: var(--color-primary); font-weight: 600; }
+
+    /* Planned mapping tag */
+    .mapping-tag--planned { background: #fff4ce; color: #7a5900; }
+
+    /* Planned form helpers (mirrors siteCreator styles) */
+    .alias-row { display: flex; align-items: center; gap: 0; }
+    .alias-prefix { background: var(--color-surface-alt); border: 1px solid var(--color-border);
+      border-right: none; padding: 8px 10px; border-radius: 4px 0 0 4px; font-size: 0.85rem;
+      color: var(--color-text-muted); white-space: nowrap; }
+    .alias-row .form-input { border-radius: 0 4px 4px 0; }
+    .template-row { margin-bottom: 4px; }
+    .radio-label { display: flex; align-items: center; gap: 6px; font-size: 0.88rem; cursor: pointer; }
+    .required { color: var(--color-danger); }
 
     .target-section-title { font-size: 0.9rem; font-weight: 600; color: var(--color-text); }
     .target-section-chevron { font-size: 0.7rem; color: var(--color-text-muted); flex-shrink: 0; }
