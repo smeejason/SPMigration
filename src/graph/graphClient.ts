@@ -92,6 +92,30 @@ export async function searchUsers(query: string): Promise<AppUser[]> {
   }))
 }
 
+// ─── SharePoint personal site helpers ─────────────────────────────────────────
+
+let _mySharePointHost: string | null = null
+
+/**
+ * Derives the tenant's -my.sharepoint.com hostname by calling /sites/root.
+ * Result is cached for the session.
+ */
+async function getMySharePointHost(): Promise<string> {
+  if (_mySharePointHost) return _mySharePointHost
+  const root = await client().api('/sites/root').select('webUrl').get() as { webUrl: string }
+  const tenantName = new URL(root.webUrl).hostname.split('.')[0] // e.g. "contoso"
+  _mySharePointHost = `${tenantName}-my.sharepoint.com`
+  return _mySharePointHost
+}
+
+/**
+ * Converts a UPN to the path segment used in personal OneDrive site URLs.
+ * e.g. "john.doe@contoso.com" → "john_doe_contoso_com"
+ */
+function formatUpnForPersonalSite(upn: string): string {
+  return upn.replace(/[@.]/g, '_').toLowerCase()
+}
+
 // ─── OneDrive (personal drives) ───────────────────────────────────────────────
 
 /**
@@ -123,60 +147,96 @@ export async function getUserById(userId: string): Promise<AppUser | null> {
 }
 
 /**
- * Check whether the currently signed-in token can read a user's OneDrive root.
+ * Check whether the admin can access a user's OneDrive.
  * Returns 'accessible' | 'no-access' | 'no-drive' | 'error'.
+ *
+ * Graph delegated permissions often can't reach personal OneDrives even with
+ * Files.ReadWrite.All.  When the Graph call returns 403 we fall back to the
+ * SharePoint REST API with AllSites.FullControl to distinguish a missing drive
+ * (no-drive) from an existing-but-inaccessible one (no-access).
  */
 export async function checkUserDriveAccess(userId: string): Promise<'accessible' | 'no-access' | 'no-drive' | 'error'> {
+  // Fast path — Graph API (works when Files.ReadWrite.All is sufficient)
   try {
     await client().api(`/users/${userId}/drive/root`).get()
     return 'accessible'
   } catch (err) {
     const status = (err as { statusCode?: number }).statusCode
     if (status === 404) return 'no-drive'
-    if (status === 403 || status === 401) return 'no-access'
-    return 'error'
+    if (status !== 403 && status !== 401) return 'error'
+  }
+
+  // Fallback — SharePoint REST API with AllSites.FullControl
+  // This correctly resolves 403 as either "site exists" or "site doesn't exist"
+  try {
+    const user = await getUserById(userId)
+    if (!user?.userPrincipalName) return 'no-access'
+
+    const myHost = await getMySharePointHost()
+    const sitePath = `/personal/${formatUpnForPersonalSite(user.userPrincipalName)}`
+    const spToken = await getToken([`https://${myHost}/AllSites.FullControl`])
+
+    const resp = await fetch(`https://${myHost}${sitePath}/_api/web`, {
+      headers: { Authorization: `Bearer ${spToken}`, Accept: 'application/json' },
+    })
+
+    if (resp.ok) return 'accessible'             // site exists, AllSites.FullControl confirmed
+    if (resp.status === 404) return 'no-drive'   // personal site never provisioned
+    return 'no-access'
+  } catch {
+    return 'no-access'
   }
 }
 
 /**
  * Grant the migration account write access to a user's OneDrive.
  *
- * Approach: fetch the user's drive to get its SharePoint site ID, then POST
- * to /sites/{siteId}/permissions with role "write".  This works via
- * Files.ReadWrite.All (to read the drive) + Sites.Manage.All (to write
- * permissions) and does NOT require existing access to the drive root —
- * avoiding the circular dependency of the sharing-invite API.
+ * Uses the SharePoint REST API with AllSites.FullControl — this works
+ * regardless of whether the Graph drive endpoints are accessible, and does
+ * not suffer from the delegated-permission limitations that cause 403s on
+ * the Graph drive API.
+ *
+ * The migration account is added to the site's Owners group, giving it
+ * full-control access needed to run migrations.
  */
 export async function grantUserDriveAccess(userId: string, migrationAccountEmail: string): Promise<void> {
-  // Step 1: get the drive webUrl — Files.ReadWrite.All (admin-consented) allows
-  // this regardless of whether the migration account already has access.
-  // drive.webUrl is the personal OneDrive site URL, e.g.:
-  //   https://contoso-my.sharepoint.com/personal/john_contoso_com
-  const drive = await client()
-    .api(`/users/${userId}/drive`)
-    .select('id,webUrl')
-    .get() as GraphDrive
-
-  if (!drive.webUrl) {
-    throw new Error('OneDrive not provisioned for this user — no site URL returned')
+  // Step 1: get the user's UPN — needed to construct the personal site URL.
+  const user = await getUserById(userId)
+  if (!user?.userPrincipalName) {
+    throw new Error('Could not retrieve UPN for user — cannot construct personal site URL')
   }
 
-  // Step 2: resolve the SharePoint site ID from the personal site URL.
-  // sharepointIds is a DriveItem property, not Drive — so we look up the site
-  // directly from its URL instead.
-  const driveUrl = new URL(drive.webUrl)
-  const site = await client()
-    .api(`/sites/${driveUrl.hostname}:${driveUrl.pathname}:`)
-    .select('id')
-    .get() as { id: string }
+  // Step 2: derive the personal OneDrive site URL.
+  // e.g. john.doe@contoso.com → https://contoso-my.sharepoint.com/personal/john_doe_contoso_com
+  const myHost = await getMySharePointHost()
+  const personalSiteUrl = `https://${myHost}/personal/${formatUpnForPersonalSite(user.userPrincipalName)}`
 
-  // Step 3: grant the migration account write access via the site permissions API.
-  await client().api(`/sites/${site.id}/permissions`).post({
-    roles: ['write'],
-    grantedToIdentities: [
-      { user: { email: migrationAccountEmail } },
-    ],
-  })
+  // Step 3: request a SharePoint-scoped token (AllSites.FullControl).
+  // This is separate from the Graph token — MSAL fetches it silently using
+  // the admin consent already granted in the app registration.
+  const spToken = await getToken([`https://${myHost}/AllSites.FullControl`])
+
+  // Step 4: add the migration account to the site Owners group via SharePoint REST.
+  const response = await fetch(
+    `${personalSiteUrl}/_api/web/sitegroups/getbyname('Owners')/users`,
+    {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${spToken}`,
+        'Content-Type': 'application/json;odata=verbose',
+        Accept: 'application/json;odata=verbose',
+      },
+      body: JSON.stringify({
+        __metadata: { type: 'SP.User' },
+        LoginName: `i:0#.f|membership|${migrationAccountEmail}`,
+      }),
+    }
+  )
+
+  if (!response.ok) {
+    const text = await response.text().catch(() => '')
+    throw new Error(`Failed to grant access (${response.status}): ${text}`)
+  }
 }
 
 /**
