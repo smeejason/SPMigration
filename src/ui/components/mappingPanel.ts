@@ -1,4 +1,4 @@
-import { searchSites, getSiteDrives, saveMappingsFile, searchUsers, getUserDrive, checkUserDriveAccess, grantUserDriveAccess } from '../../graph/graphClient'
+import { searchSites, getSiteDrives, saveMappingsFile, searchUsers, getUserDrive, checkUserDriveAccess, grantUserDriveAccess, getUserById } from '../../graph/graphClient'
 import { updateProject, getSpConfig } from '../../graph/projectService'
 import { setState, getState } from '../../state/store'
 import type { TreeNode, MigrationMapping, SharePointSite, SharePointDrive, PlannedSiteTarget, AppUser } from '../../types'
@@ -699,8 +699,16 @@ async function openOneDriveTargetPanel(
             </div>
           </div>
 
-          <div id="od-drive-info" style="${existing?.targetDrive ? '' : 'display:none'}">
+          <div id="od-drive-info" style="${existing?.targetSite ? '' : 'display:none'}">
             <div class="od-drive-card">
+              <div class="od-drive-row">
+                <span class="od-drive-label">Display Name</span>
+                <span id="od-user-displayname" class="od-drive-value">${escHtml(existing?.targetSite?.displayName ?? '')}</span>
+              </div>
+              <div class="od-drive-row">
+                <span class="od-drive-label">UPN</span>
+                <span id="od-user-upn" class="od-drive-value">${existing?.targetSite ? '⏳ Loading…' : ''}</span>
+              </div>
               <div class="od-drive-row">
                 <span class="od-drive-label">OneDrive URL</span>
                 <span id="od-drive-url" class="od-drive-value">${escHtml(existing?.targetSite?.webUrl ?? '')}</span>
@@ -777,9 +785,15 @@ async function openOneDriveTargetPanel(
 
   const migrationAccount = getState().currentProject?.projectData.autoMapSettings?.migrationAccount ?? ''
 
-  // Check access for existing user on load
+  // Fetch UPN and check access for existing user on load
   if (existing?.targetSite?.id) {
     checkAndShowAccess(targetEl, existing.targetSite.id, migrationAccount)
+    getUserById(existing.targetSite.id).then(user => {
+      const upnEl = targetEl.querySelector('#od-user-upn') as HTMLElement | null
+      if (upnEl) upnEl.textContent = user?.userPrincipalName ?? user?.mail ?? '—'
+      const dnEl = targetEl.querySelector('#od-user-displayname') as HTMLElement | null
+      if (dnEl && user?.displayName) dnEl.textContent = user.displayName
+    })
   }
 
   // ── User search ────────────────────────────────────────────────────────────
@@ -815,6 +829,8 @@ async function openOneDriveTargetPanel(
           // Load drive info
           const driveInfo = targetEl.querySelector('#od-drive-info') as HTMLElement
           driveInfo.style.display = ''
+          ;(targetEl.querySelector('#od-user-displayname') as HTMLElement).textContent = selectedUser.displayName
+          ;(targetEl.querySelector('#od-user-upn') as HTMLElement).textContent = selectedUser.userPrincipalName ?? selectedUser.mail ?? '—'
           ;(targetEl.querySelector('#od-drive-url') as HTMLElement).textContent = '⏳ Loading…'
           ;(targetEl.querySelector('#od-access-status') as HTMLElement).textContent = '⏳ Checking…'
 
@@ -907,7 +923,7 @@ async function checkAndShowAccess(targetEl: HTMLElement, userId: string, migrati
     } else if (access === 'no-access') {
       statusEl.style.color = 'var(--color-danger, #a4262c)'
       if (migrationAccount) {
-        statusEl.innerHTML = `✗ No access &nbsp;<button type="button" id="btn-grant-access" class="btn btn-sm btn-warning" style="font-size:0.75rem;padding:2px 8px;margin-left:4px;">Grant Access</button>`
+        statusEl.innerHTML = `✗ No access (or OneDrive not provisioned) &nbsp;<button type="button" id="btn-grant-access" class="btn btn-sm btn-warning" style="font-size:0.75rem;padding:2px 8px;margin-left:4px;">Grant Access</button>`
         statusEl.querySelector('#btn-grant-access')?.addEventListener('click', async () => {
           const btn = statusEl.querySelector('#btn-grant-access') as HTMLButtonElement
           btn.disabled = true
@@ -921,7 +937,7 @@ async function checkAndShowAccess(targetEl: HTMLElement, userId: string, migrati
           }
         })
       } else {
-        statusEl.textContent = '✗ No access — configure Migration Account in settings'
+        statusEl.textContent = '✗ No access or OneDrive not provisioned — configure Migration Account in settings to grant'
       }
     } else if (access === 'no-drive') {
       statusEl.textContent = '✗ No OneDrive provisioned'

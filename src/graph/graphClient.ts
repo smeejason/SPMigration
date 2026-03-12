@@ -108,6 +108,21 @@ export async function getUserDrive(userId: string): Promise<SharePointDrive | nu
 }
 
 /**
+ * Fetch a single user's profile by ID (for recovering UPN after a mapping is loaded).
+ */
+export async function getUserById(userId: string): Promise<AppUser | null> {
+  try {
+    const user = await client()
+      .api(`/users/${userId}`)
+      .select('id,displayName,mail,userPrincipalName')
+      .get() as GraphUser
+    return mapGraphUser(user)
+  } catch {
+    return null
+  }
+}
+
+/**
  * Check whether the currently signed-in token can read a user's OneDrive root.
  * Returns 'accessible' | 'no-access' | 'no-drive' | 'error'.
  */
