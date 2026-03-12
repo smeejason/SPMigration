@@ -4,11 +4,12 @@ import {
   checkUserDriveAccess,
   grantUserDriveAccess,
   saveOneDriveMappingsFile,
+  saveMappingsFile,
   searchUsers,
 } from '../../graph/graphClient'
 import { updateProject, getSpConfig } from '../../graph/projectService'
 import { setState, getState } from '../../state/store'
-import type { TreeNode, OneDriveUserMapping } from '../../types'
+import type { TreeNode, OneDriveUserMapping, MigrationMapping } from '../../types'
 
 // ─── Entry point ──────────────────────────────────────────────────────────────
 
@@ -376,10 +377,49 @@ async function runPhase1(
   try {
     const project = getState().currentProject!
     const { siteId } = getSpConfig()
+
+    // Save OneDrive-specific mappings file
     await saveOneDriveMappingsFile(siteId, project.title, project.id, accumulated)
-    const updatedData = { ...project.projectData, oneDriveMappingCount: accumulated.length }
+
+    // Convert matched users → MigrationMapping so the Map page reflects automap results
+    const autoMappings: MigrationMapping[] = accumulated
+      .filter(m => m.matchStatus === 'matched' && m.matchedUser && m.driveId)
+      .map(m => ({
+        id: m.id,
+        sourceNode: m.sourceNode,
+        targetSite: {
+          id: m.matchedUser!.id,
+          displayName: m.matchedUser!.displayName,
+          webUrl: m.driveWebUrl,
+          name: m.matchedUser!.displayName,
+        },
+        targetDrive: {
+          id: m.driveId,
+          name: 'OneDrive',
+          webUrl: m.driveWebUrl,
+          driveType: 'personal',
+        },
+        targetFolderPath: m.targetFolderPath,
+        status: 'ready' as const,
+      }))
+
+    // Merge: auto-mappings replace any previous auto entry; manual overrides (different driveType) are kept
+    const autoIds = new Set(autoMappings.map(m => m.id))
+    const merged: MigrationMapping[] = [
+      ...getState().mappings.filter(m => !autoIds.has(m.id)),
+      ...autoMappings,
+    ]
+    await saveMappingsFile(siteId, project.title, project.id, merged)
+
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const { mappings: _removed, ...restData } = project.projectData
+    const updatedData = {
+      ...restData,
+      oneDriveMappingCount: accumulated.length,
+      mappingCount: merged.length,
+    }
     await updateProject(project.id, { projectData: updatedData })
-    setState({ currentProject: { ...project, projectData: updatedData } })
+    setState({ mappings: merged, currentProject: { ...project, projectData: updatedData } })
   } catch (err) {
     console.warn('[AutoMap] Failed to persist mappings:', err)
   }

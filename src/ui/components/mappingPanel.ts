@@ -644,6 +644,9 @@ async function openOneDriveTargetPanel(
     ? { id: existing.targetSite.id, displayName: existing.targetSite.displayName,
         mail: existing.targetSite.webUrl, userPrincipalName: existing.targetSite.webUrl }
     : null
+  const projectDefaultSubfolder = getState().currentProject?.projectData.autoMapSettings?.targetFolderPath ?? ''
+  // A mapping is using the project default when its targetFolderPath is empty (unset means "use project default")
+  const isUsingProjectDefault = projectDefaultSubfolder !== '' && !existing?.targetFolderPath
 
   const fmtDate = (d?: Date | string) =>
     d ? new Date(d).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }) : '—'
@@ -715,8 +718,20 @@ async function openOneDriveTargetPanel(
 
           <div class="form-group">
             <label>Subfolder Path <span class="hint">(optional)</span></label>
+            ${projectDefaultSubfolder ? `
+            <div class="subfolder-mode-row">
+              <label class="radio-label">
+                <input type="radio" name="od-subfolder-mode" value="project" ${isUsingProjectDefault ? 'checked' : ''} />
+                Project default: <code class="subfolder-default-code">${escHtml(projectDefaultSubfolder)}</code>
+              </label>
+              <label class="radio-label">
+                <input type="radio" name="od-subfolder-mode" value="custom" ${!isUsingProjectDefault ? 'checked' : ''} />
+                Override for this folder
+              </label>
+            </div>` : ''}
             <input id="od-folder-path" type="text" class="form-input" placeholder="e.g. Migration/Files"
-              value="${escHtml(existing?.targetFolderPath ?? '')}" />
+              value="${escHtml(existing?.targetFolderPath ?? '')}"
+              ${projectDefaultSubfolder && isUsingProjectDefault ? 'style="display:none"' : ''} />
           </div>
 
           <div class="target-action-row">
@@ -738,6 +753,22 @@ async function openOneDriveTargetPanel(
     summaryToggleBtn.setAttribute('aria-expanded', String(!isOpen))
     ;(summaryToggleBtn.querySelector('.target-section-chevron') as HTMLElement).textContent = isOpen ? '▶' : '▼'
   })
+
+  // ── Subfolder mode radio ────────────────────────────────────────────────────
+  if (projectDefaultSubfolder) {
+    const folderPathInput = targetEl.querySelector('#od-folder-path') as HTMLInputElement
+    targetEl.querySelectorAll<HTMLInputElement>('input[name="od-subfolder-mode"]').forEach(radio => {
+      radio.addEventListener('change', () => {
+        if (radio.value === 'project') {
+          folderPathInput.value = ''
+          folderPathInput.style.display = 'none'
+        } else {
+          folderPathInput.style.display = ''
+          folderPathInput.focus()
+        }
+      })
+    })
+  }
 
   // ── State ──────────────────────────────────────────────────────────────────
   let selectedUser: AppUser | null = existingUser
@@ -1258,6 +1289,12 @@ function injectMappingStyles(): void {
     .od-drive-label { font-size: 0.8rem; font-weight: 600; color: var(--color-text-muted); white-space: nowrap; }
     .od-drive-value { font-size: 0.82rem; color: var(--color-text); word-break: break-all;
       font-family: 'Consolas', monospace; }
+
+    /* Subfolder mode */
+    .subfolder-mode-row { display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px; }
+    .subfolder-default-code { font-family: 'Consolas', monospace; font-size: 0.82rem;
+      background: var(--color-surface-alt); padding: 1px 5px; border-radius: 3px;
+      border: 1px solid var(--color-border); }
   `
   document.head.appendChild(style)
 }
