@@ -139,15 +139,33 @@ export async function checkUserDriveAccess(userId: string): Promise<'accessible'
 }
 
 /**
- * Grant the migration account write access to a user's OneDrive root.
- * Requires Files.ReadWrite.All or SharePoint admin consent.
+ * Grant the migration account write access to a user's OneDrive.
+ *
+ * Approach: fetch the user's drive to get its SharePoint site ID, then POST
+ * to /sites/{siteId}/permissions with role "write".  This works via
+ * Files.ReadWrite.All (to read the drive) + Sites.Manage.All (to write
+ * permissions) and does NOT require existing access to the drive root —
+ * avoiding the circular dependency of the sharing-invite API.
  */
 export async function grantUserDriveAccess(userId: string, migrationAccountEmail: string): Promise<void> {
-  await client().api(`/users/${userId}/drive/root/invite`).post({
-    requireSignIn: true,
-    sendInvitation: false,
+  // Step 1: get the drive — Files.ReadWrite.All (admin-consented) allows this
+  // regardless of whether the migration account already has access.
+  const drive = await client()
+    .api(`/users/${userId}/drive`)
+    .select('id,sharepointIds')
+    .get() as GraphDrive
+
+  const siteId = drive.sharepointIds?.siteId
+  if (!siteId) {
+    throw new Error('Could not determine OneDrive site ID — OneDrive may not be provisioned for this user')
+  }
+
+  // Step 2: grant the migration account write access via the site permissions API.
+  await client().api(`/sites/${siteId}/permissions`).post({
     roles: ['write'],
-    recipients: [{ email: migrationAccountEmail }],
+    grantedToIdentities: [
+      { user: { email: migrationAccountEmail } },
+    ],
   })
 }
 
