@@ -4,6 +4,7 @@ import {
   checkUserDriveAccess,
   grantUserDriveAccess,
   saveOneDriveMappingsFile,
+  searchUsers,
 } from '../../graph/graphClient'
 import { updateProject, getSpConfig } from '../../graph/projectService'
 import { setState, getState } from '../../state/store'
@@ -47,16 +48,18 @@ export function renderAutoMapPanel(container: HTMLElement): void {
 
           <div class="automap-settings">
             <div class="form-group">
-              <label>Migration Account UPN</label>
-              <input id="migration-account" type="text" class="form-input"
-                placeholder="admin@contoso.onmicrosoft.com"
-                value="${escHtml(settings?.migrationAccount ?? '')}" />
-            </div>
-            <div class="form-group">
-              <label>Target Folder Path <span class="automap-hint-inline">(optional, e.g. Migration/Files)</span></label>
-              <input id="target-folder" type="text" class="form-input"
-                placeholder="Migration/Files"
-                value="${escHtml(settings?.targetFolderPath ?? '')}" />
+              <label>Migration Account</label>
+              <div class="people-picker" id="migration-people-picker">
+                <div class="people-picker-input-wrap">
+                  <input id="migration-account-search" type="text" class="form-input people-picker-input"
+                    placeholder="Search for user…"
+                    autocomplete="off"
+                    value="${escHtml(settings?.migrationAccount ?? '')}" />
+                  <button type="button" class="people-picker-clear" id="migration-account-clear" style="display:${settings?.migrationAccount ? '' : 'none'}">✕</button>
+                </div>
+                <div class="people-picker-dropdown" id="migration-account-dropdown" style="display:none"></div>
+                <input type="hidden" id="migration-account" value="${escHtml(settings?.migrationAccount ?? '')}" />
+              </div>
             </div>
           </div>
 
@@ -129,13 +132,21 @@ export function renderAutoMapPanel(container: HTMLElement): void {
     ul.querySelector<HTMLButtonElement>('.automap-toggle-btn:not(.invisible)')?.click()
   }
 
+  // ── People Picker: Migration Account ──────────────────────────────────────
+  wirePeoplePicker(
+    container,
+    'migration-account-search',
+    'migration-account-dropdown',
+    'migration-account-clear',
+    'migration-account'
+  )
+
   // ── Confirm Level ──────────────────────────────────────────────────────────
   const confirmBtn = container.querySelector('#btn-confirm-level') as HTMLButtonElement
   confirmBtn.addEventListener('click', async () => {
     const migrationAccount = (container.querySelector('#migration-account') as HTMLInputElement).value.trim()
-    const targetFolderPath = (container.querySelector('#target-folder') as HTMLInputElement).value.trim()
     const project = getState().currentProject!
-    const updatedData = { ...project.projectData, autoMapSettings: { selectedLevel, migrationAccount, targetFolderPath } }
+    const updatedData = { ...project.projectData, autoMapSettings: { selectedLevel, migrationAccount, targetFolderPath: '' } }
     try {
       await updateProject(project.id, { projectData: updatedData })
       setState({ currentProject: { ...project, projectData: updatedData } })
@@ -149,7 +160,6 @@ export function renderAutoMapPanel(container: HTMLElement): void {
   const phase1Btn = container.querySelector('#btn-phase1') as HTMLButtonElement
   phase1Btn.addEventListener('click', async () => {
     if (selectedLevel < 0) return
-    const targetFolderPath = (container.querySelector('#target-folder') as HTMLInputElement).value.trim()
     const nodesToProcess = collectNodesAtDepth(tree, selectedLevel)
     if (nodesToProcess.length === 0) return
 
@@ -157,7 +167,7 @@ export function renderAutoMapPanel(container: HTMLElement): void {
     phase1Btn.textContent = 'Running…'
     ;(container.querySelector('#phase1-progress') as HTMLElement).style.display = ''
 
-    await runPhase1(container, nodesToProcess, targetFolderPath)
+    await runPhase1(container, nodesToProcess, '')
 
     phase1Btn.textContent = 'Re-run Phase 1'
     phase1Btn.disabled = false
@@ -491,6 +501,67 @@ function applyStatusIcon(el: HTMLElement, status: string): void {
   el.className = `automap-status-icon ${cls}`
 }
 
+function wirePeoplePicker(
+  container: HTMLElement,
+  searchId: string,
+  dropdownId: string,
+  clearId: string,
+  hiddenId: string
+): void {
+  const searchInput = container.querySelector(`#${searchId}`) as HTMLInputElement
+  const dropdown = container.querySelector(`#${dropdownId}`) as HTMLElement
+  const clearBtn = container.querySelector(`#${clearId}`) as HTMLElement
+  const hidden = container.querySelector(`#${hiddenId}`) as HTMLInputElement
+
+  let debounce: ReturnType<typeof setTimeout> | null = null
+
+  const closeDropdown = (): void => {
+    dropdown.style.display = 'none'
+    dropdown.innerHTML = ''
+  }
+
+  const selectUser = (displayName: string, upn: string): void => {
+    searchInput.value = `${displayName} (${upn})`
+    hidden.value = upn
+    clearBtn.style.display = ''
+    closeDropdown()
+  }
+
+  searchInput.addEventListener('input', () => {
+    const q = searchInput.value.trim()
+    if (!q) { hidden.value = ''; clearBtn.style.display = 'none'; closeDropdown(); return }
+    if (debounce) clearTimeout(debounce)
+    debounce = setTimeout(async () => {
+      try {
+        const users = await searchUsers(q)
+        if (users.length === 0) { closeDropdown(); return }
+        dropdown.innerHTML = ''
+        users.forEach(u => {
+          const item = document.createElement('div')
+          item.className = 'people-picker-item'
+          item.innerHTML = `<span class="pp-name">${escHtml(u.displayName)}</span><span class="pp-upn">${escHtml(u.userPrincipalName ?? '')}</span>`
+          item.addEventListener('mousedown', (e) => {
+            e.preventDefault()
+            selectUser(u.displayName, u.userPrincipalName ?? '')
+          })
+          dropdown.appendChild(item)
+        })
+        dropdown.style.display = ''
+      } catch { closeDropdown() }
+    }, 300)
+  })
+
+  searchInput.addEventListener('blur', () => { setTimeout(closeDropdown, 150) })
+
+  clearBtn.addEventListener('click', () => {
+    searchInput.value = ''
+    hidden.value = ''
+    clearBtn.style.display = 'none'
+    searchInput.focus()
+    closeDropdown()
+  })
+}
+
 function formatBytes(bytes: number): string {
   if (!bytes || bytes <= 0) return ''
   const units = ['B', 'KB', 'MB', 'GB', 'TB']
@@ -509,7 +580,7 @@ function injectAutoMapStyles(): void {
   const style = document.createElement('style')
   style.id = 'automap-styles'
   style.textContent = `
-    .automap-panel { display: grid; grid-template-columns: 1fr 1fr; height: calc(100vh - 140px); overflow: hidden; }
+    .automap-panel { display: grid; grid-template-columns: 2fr 1fr; height: calc(100vh - 140px); overflow: hidden; }
     .automap-left, .automap-right { overflow-y: auto; }
     .automap-left { border-right: 1px solid var(--color-border); }
     .automap-section-header { padding: 12px 16px; border-bottom: 1px solid var(--color-border);
@@ -520,6 +591,8 @@ function injectAutoMapStyles(): void {
     .automap-hint-inline { font-size: 0.78rem; color: var(--color-text-muted); font-weight: 400; }
 
     /* Tree */
+    .tree-list { list-style: none; padding: 0; margin: 0; }
+    .tree-children { padding-left: 20px; border-left: 1px solid var(--color-border); margin-left: 18px; }
     .automap-tree { padding: 8px; }
     .automap-node { margin: 1px 0; }
     .automap-node--root > .automap-row { font-weight: 600; }
@@ -584,6 +657,25 @@ function injectAutoMapStyles(): void {
     .stat-notfound { color: #a4262c; }
     .stat-ambiguous { color: #7a5900; }
     .stat-error { color: #a4262c; }
+
+    /* People picker */
+    .people-picker { position: relative; }
+    .people-picker-input-wrap { display: flex; align-items: center; position: relative; }
+    .people-picker-input { flex: 1; padding-right: 28px !important; }
+    .people-picker-clear { position: absolute; right: 6px; background: none; border: none;
+      cursor: pointer; color: var(--color-text-muted); font-size: 0.75rem; padding: 2px 4px;
+      line-height: 1; border-radius: 3px; }
+    .people-picker-clear:hover { background: var(--color-border); color: var(--color-text); }
+    .people-picker-dropdown { position: absolute; top: calc(100% + 2px); left: 0; right: 0;
+      background: var(--color-surface); border: 1px solid var(--color-border);
+      border-radius: 4px; box-shadow: 0 4px 12px rgba(0,0,0,0.12);
+      z-index: 100; max-height: 200px; overflow-y: auto; }
+    .people-picker-item { display: flex; flex-direction: column; padding: 8px 12px;
+      cursor: pointer; border-bottom: 1px solid var(--color-border); gap: 1px; }
+    .people-picker-item:last-child { border-bottom: none; }
+    .people-picker-item:hover { background: var(--color-primary-light); }
+    .pp-name { font-size: 0.875rem; font-weight: 500; color: var(--color-text); }
+    .pp-upn { font-size: 0.75rem; color: var(--color-text-muted); }
   `
   document.head.appendChild(style)
 }
