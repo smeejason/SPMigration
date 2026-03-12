@@ -1,4 +1,4 @@
-import { getProjects, deleteProject, loadProjectTree, loadProjectMappings, loadProjectOneDriveMappings } from '../../graph/projectService'
+import { getProjects, deleteProject, loadProjectTree, loadProjectMappings } from '../../graph/projectService'
 import { setState, getState } from '../../state/store'
 import type { AppUser, MigrationProject } from '../../types'
 
@@ -56,16 +56,15 @@ function renderProjectCards(container: HTMLElement, projects: MigrationProject[]
       btn.textContent = 'Opening…'
 
       try {
-        const [treeData, mappings, oneDriveMappings] = await Promise.all([
+        const [treeData, mappings] = await Promise.all([
           loadProjectTree(project),
           loadProjectMappings(project),
-          project.type === 'OneDrive' ? loadProjectOneDriveMappings(project) : Promise.resolve([]),
         ])
         setState({
           currentProject: project,
           treeData,
           mappings,
-          oneDriveMappings,
+          oneDriveMappings: [],
           ui: { activeView: 'project-upload', loading: false, error: null },
         })
       } catch {

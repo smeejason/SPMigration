@@ -946,12 +946,15 @@ async function persistMappings(mappings: MigrationMapping[]): Promise<void> {
     // so the project list scorecard can display the correct number without loading the file.
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
     const { mappings: _removed, ...restData } = project.projectData
-    const updatedProjectData = { ...restData, mappingCount: mappings.length }
+    // Count only entries with actual targets (not Phase 1 not-found/ambiguous entries)
+    const mappedCount = mappings.filter(m => m.targetSite || m.plannedSite).length
+    const updatedProjectData = { ...restData, mappingCount: mappedCount }
     await updateProject(project.id, { projectData: updatedProjectData })
     setState({ mappings, currentProject: { ...project, projectData: updatedProjectData } })
   } else {
     // Legacy model (no upload folder yet): store inline as before; keep count in sync too.
-    const updatedProjectData = { ...project.projectData, mappings, mappingCount: mappings.length }
+    const mappedCount = mappings.filter(m => m.targetSite || m.plannedSite).length
+    const updatedProjectData = { ...project.projectData, mappings, mappingCount: mappedCount }
     await updateProject(project.id, { projectData: updatedProjectData })
     setState({ mappings, currentProject: { ...project, projectData: updatedProjectData } })
   }

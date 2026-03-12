@@ -153,6 +153,10 @@ export interface MigrationMapping {
   status: MappingStatus
   notes?: string
   plannedSite?: PlannedSiteTarget
+  // OneDrive auto-map fields (optional — only set for Phase 1 results)
+  matchStatus?: OneDriveMatchStatus
+  accessStatus?: OneDriveAccessStatus
+  resolvedDisplayName?: string
 }
 
 // ─── Site Creation ───────────────────────────────────────────────────────────

@@ -3,13 +3,12 @@ import {
   getUserDrive,
   checkUserDriveAccess,
   grantUserDriveAccess,
-  saveOneDriveMappingsFile,
   saveMappingsFile,
   searchUsers,
 } from '../../graph/graphClient'
 import { updateProject, getSpConfig } from '../../graph/projectService'
 import { setState, getState } from '../../state/store'
-import type { TreeNode, OneDriveUserMapping, MigrationMapping } from '../../types'
+import type { TreeNode, MigrationMapping, OneDriveMatchStatus, OneDriveAccessStatus, AppUser } from '../../types'
 
 // ─── Entry point ──────────────────────────────────────────────────────────────
 
@@ -30,7 +29,8 @@ export function renderAutoMapPanel(container: HTMLElement): void {
   const settings = state.currentProject?.projectData.autoMapSettings
   let selectedLevel = settings?.selectedLevel ?? -1
   const topNodes = !tree.path ? tree.children : [tree]
-  const existingMappings = state.oneDriveMappings
+  // Phase 1 results are stored in state.mappings with matchStatus set
+  const existingMappings = state.mappings.filter(m => m.matchStatus !== undefined)
   const phase1Done = existingMappings.length > 0
   const hasMatchedUsers = existingMappings.some(m => m.matchStatus === 'matched')
   const totalAtLevel = selectedLevel >= 0 ? countNodesAtDepth(tree, selectedLevel) : 0
@@ -180,7 +180,7 @@ export function renderAutoMapPanel(container: HTMLElement): void {
   phase2Btn.addEventListener('click', async () => {
     const migrationAccount = (container.querySelector('#migration-account') as HTMLInputElement).value.trim()
     if (!migrationAccount) { alert('Enter a Migration Account UPN above first.'); return }
-    const matched = getState().oneDriveMappings.filter(m => m.matchStatus === 'matched' && m.matchedUser)
+    const matched = getState().mappings.filter(m => m.matchStatus === 'matched' && m.targetSite)
     if (matched.length === 0) return
 
     phase2Btn.disabled = true
@@ -199,7 +199,7 @@ export function renderAutoMapPanel(container: HTMLElement): void {
 function createAutoMapNodeEl(
   node: TreeNode,
   onLevelSelect: (depth: number) => void,
-  existingMappings: OneDriveUserMapping[],
+  existingMappings: MigrationMapping[],
   isRoot = false
 ): HTMLLIElement {
   const li = document.createElement('li')
@@ -243,7 +243,7 @@ function createAutoMapNodeEl(
   statusIcon.className = 'automap-status-icon'
   statusIcon.dataset.statusFor = node.path
   const existingMapping = existingMappings.find(m => m.id === node.path)
-  if (existingMapping) applyStatusIcon(statusIcon, existingMapping.matchStatus)
+  if (existingMapping?.matchStatus) applyStatusIcon(statusIcon, existingMapping.matchStatus)
 
   // Size
   const sizeEl = document.createElement('span')
@@ -278,7 +278,7 @@ function createAutoMapNodeEl(
           const childUl = document.createElement('ul')
           childUl.className = 'tree-list tree-children'
           for (const child of node.children) {
-            childUl.appendChild(createAutoMapNodeEl(child, onLevelSelect, getState().oneDriveMappings))
+            childUl.appendChild(createAutoMapNodeEl(child, onLevelSelect, getState().mappings.filter(m => m.matchStatus !== undefined)))
           }
           li.appendChild(childUl)
           childrenLoaded = true
@@ -302,7 +302,7 @@ async function runPhase1(
   targetFolderPath: string
 ): Promise<void> {
   const BATCH_SIZE = 5
-  const accumulated: OneDriveUserMapping[] = []
+  const accumulated: MigrationMapping[] = []
 
   const barEl = container.querySelector('#phase1-bar') as HTMLElement
   const countEl = container.querySelector('#phase1-count') as HTMLElement
@@ -328,8 +328,8 @@ async function runPhase1(
 
     await Promise.all(batch.map(async (node) => {
       const resolvedDisplayName = folderNameToDisplayName(node.name)
-      let matchStatus: OneDriveUserMapping['matchStatus'] = 'error'
-      let matchedUser: OneDriveUserMapping['matchedUser'] = null
+      let matchStatus: OneDriveMatchStatus = 'error'
+      let matchedUser: AppUser | null = null
       let driveId = ''
       let driveWebUrl = ''
       let errorMsg: string | undefined
@@ -348,18 +348,23 @@ async function runPhase1(
         errorMsg = (err as Error).message
       }
 
-      const mapping: OneDriveUserMapping = {
+      // Store ALL Phase 1 results (including not-found/ambiguous/error) in state.mappings
+      // so AutoMap and Map page share a single source of truth.
+      const mapping: MigrationMapping = {
         id: node.path,
         sourceNode: node,
-        folderName: node.name,
-        resolvedDisplayName,
-        matchedUser,
-        matchStatus,
-        driveId,
-        driveWebUrl,
-        accessStatus: 'unknown',
+        targetSite: matchedUser
+          ? { id: matchedUser.id, displayName: matchedUser.displayName, webUrl: driveWebUrl, name: matchedUser.displayName }
+          : null,
+        targetDrive: driveId
+          ? { id: driveId, name: 'OneDrive', webUrl: driveWebUrl, driveType: 'personal' }
+          : null,
         targetFolderPath,
-        ...(errorMsg ? { error: errorMsg } : {}),
+        status: matchedUser ? 'ready' : 'error',
+        matchStatus,
+        accessStatus: 'unknown',
+        resolvedDisplayName,
+        ...(errorMsg ? { notes: errorMsg } : {}),
       }
       accumulated.push(mapping)
 
@@ -368,7 +373,9 @@ async function runPhase1(
       if (statusEl) applyStatusIcon(statusEl, matchStatus)
     }))
 
-    setState({ oneDriveMappings: [...accumulated] })
+    // Merge accumulated into state.mappings: keep manual entries (no matchStatus), replace Phase 1 entries
+    const manualMappings = getState().mappings.filter(m => m.matchStatus === undefined)
+    setState({ mappings: [...manualMappings, ...accumulated] })
     updateUI()
     await new Promise(r => setTimeout(r, 0))
   }
@@ -378,36 +385,11 @@ async function runPhase1(
     const project = getState().currentProject!
     const { siteId } = getSpConfig()
 
-    // Save OneDrive-specific mappings file
-    await saveOneDriveMappingsFile(siteId, project.title, project.id, accumulated)
+    // Keep manual mappings that aren't overridden by Phase 1 results
+    const accIds = new Set(accumulated.map(m => m.id))
+    const manualMappings = getState().mappings.filter(m => m.matchStatus === undefined && !accIds.has(m.id))
+    const merged: MigrationMapping[] = [...manualMappings, ...accumulated]
 
-    // Convert matched users → MigrationMapping so the Map page reflects automap results.
-    // Include matched users even if getUserDrive returned 403 (driveId empty) — they still
-    // have a known user and access can be granted / drive loaded later.
-    const autoMappings: MigrationMapping[] = accumulated
-      .filter(m => m.matchStatus === 'matched' && m.matchedUser)
-      .map(m => ({
-        id: m.id,
-        sourceNode: m.sourceNode,
-        targetSite: {
-          id: m.matchedUser!.id,
-          displayName: m.matchedUser!.displayName,
-          webUrl: m.driveWebUrl,
-          name: m.matchedUser!.displayName,
-        },
-        targetDrive: m.driveId
-          ? { id: m.driveId, name: 'OneDrive', webUrl: m.driveWebUrl, driveType: 'personal' }
-          : null,
-        targetFolderPath: m.targetFolderPath,
-        status: 'ready' as const,
-      }))
-
-    // Merge: auto-mappings replace any previous auto entry; manual overrides (different driveType) are kept
-    const autoIds = new Set(autoMappings.map(m => m.id))
-    const merged: MigrationMapping[] = [
-      ...getState().mappings.filter(m => !autoIds.has(m.id)),
-      ...autoMappings,
-    ]
     await saveMappingsFile(siteId, project.title, project.id, merged)
 
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -415,7 +397,7 @@ async function runPhase1(
     const updatedData = {
       ...restData,
       oneDriveMappingCount: accumulated.length,
-      mappingCount: merged.length,
+      mappingCount: merged.filter(m => m.targetSite || m.plannedSite).length,
     }
     await updateProject(project.id, { projectData: updatedData })
     setState({ mappings: merged, currentProject: { ...project, projectData: updatedData } })
@@ -428,7 +410,7 @@ async function runPhase1(
 
 async function runPhase2(
   container: HTMLElement,
-  mappings: OneDriveUserMapping[],
+  mappings: MigrationMapping[],
   migrationAccount: string
 ): Promise<void> {
   const BATCH_SIZE = 5
@@ -456,16 +438,17 @@ async function runPhase2(
     const batch = mappings.slice(i, i + BATCH_SIZE)
 
     await Promise.all(batch.map(async (mapping) => {
-      if (!mapping.matchedUser) return
-      let newStatus: OneDriveUserMapping['accessStatus'] = 'error'
+      if (!mapping.targetSite) return
+      const userId = mapping.targetSite.id
+      let newStatus: OneDriveAccessStatus = 'error'
       try {
-        const access = await checkUserDriveAccess(mapping.matchedUser.id)
+        const access = await checkUserDriveAccess(userId)
         if (access === 'accessible') {
           newStatus = 'accessible'
           accessibleCount++
         } else if (access === 'no-access') {
           try {
-            await grantUserDriveAccess(mapping.matchedUser.id, migrationAccount)
+            await grantUserDriveAccess(userId, migrationAccount)
             newStatus = 'granted'
             grantedCount++
           } catch {
@@ -482,10 +465,9 @@ async function runPhase2(
       }
 
       processed++
-      const currentMappings = getState().oneDriveMappings.map(m =>
+      setState({ mappings: getState().mappings.map(m =>
         m.id === mapping.id ? { ...m, accessStatus: newStatus } : m
-      )
-      setState({ oneDriveMappings: currentMappings })
+      )})
     }))
 
     updateUI()
