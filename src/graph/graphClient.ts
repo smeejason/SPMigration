@@ -209,66 +209,64 @@ export async function checkUserDriveAccess(userId: string): Promise<'accessible'
  * full-control access needed to run migrations.
  */
 export async function grantUserDriveAccess(userId: string, migrationAccountEmail: string): Promise<void> {
-  // Step 1: get the user's UPN — needed to construct the personal site URL.
+  // Step 1: get the user's UPN — required for User Profile lookup.
   const user = await getUserById(userId)
   if (!user?.userPrincipalName) {
-    throw new Error('Could not retrieve UPN for user — cannot construct personal site URL')
+    throw new Error('Could not retrieve UPN for user')
   }
 
-  // Step 2: derive the personal OneDrive site URL.
-  const { root: rootHost, my: myHost, admin: adminHost } = await getSharePointHosts()
-  const personalSiteUrl = `https://${myHost}/personal/${formatUpnForPersonalSite(user.userPrincipalName)}`
-
-  // Step 3: request a SharePoint token scoped to the ROOT host.
-  // All SharePoint Online sites in a tenant share one Azure AD service principal
-  // identified by the root host — using the root scope produces a token accepted
-  // by both the -my and -admin hosts.
+  // Step 2: request a SharePoint token scoped to the ROOT host.
+  const { root: rootHost, admin: adminHost } = await getSharePointHosts()
   const spToken = await getToken([`https://${rootHost}/AllSites.FullControl`])
 
-  // Step 4: verify the personal OneDrive site actually exists before trying
-  // to set admin — if the user has never logged in to OneDrive the site will
-  // not be provisioned and SetSiteAdmin will 404.
-  const siteCheck = await fetch(`https://${myHost}/personal/${formatUpnForPersonalSite(user.userPrincipalName)}/_api/web`, {
-    headers: { Authorization: `Bearer ${spToken}`, Accept: 'application/json' },
-  })
-  if (siteCheck.status === 404) {
+  // Step 3: get the actual personal site URL from SharePoint User Profile Service.
+  // This is the definitive URL as stored by SharePoint and handles all UPN edge
+  // cases (B2B guests, federated users, special characters). An empty PersonalUrl
+  // means the user has never provisioned their OneDrive.
+  const encodedAccount = encodeURIComponent(`i:0#.f|membership|${user.userPrincipalName}`)
+  const profileResp = await fetch(
+    `https://${adminHost}/_api/SP.UserProfiles.PeopleManager/GetPropertiesFor(accountName=@v)?@v='${encodedAccount}'`,
+    { headers: { Authorization: `Bearer ${spToken}`, Accept: 'application/json;odata=nometadata' } },
+  )
+  if (!profileResp.ok) {
+    const text = await profileResp.text().catch(() => '')
+    throw new Error(`Could not load user profile (${profileResp.status}): ${text}`)
+  }
+  const profile = await profileResp.json() as { PersonalUrl?: string }
+  const personalSiteUrl = profile.PersonalUrl?.replace(/\/$/, '')
+  if (!personalSiteUrl) {
     throw new Error('OneDrive has not been provisioned for this user — they need to sign in to OneDrive at least once before access can be granted.')
   }
 
-  // Step 5: get a form digest — SharePoint admin REST POST endpoints require
-  // X-RequestDigest even with OAuth bearer token authentication.
-  const digestResp = await fetch(`https://${adminHost}/_api/contextinfo`, {
+  // Step 4: use CSOM ProcessQuery to call Tenant.SetSiteAdmin.
+  // This is the same mechanism PowerShell's Set-SPOUser uses internally and is
+  // more reliable than the SharePoint REST OData endpoint which returns 404.
+  // CSOM does not require a form digest — the bearer token is sufficient.
+  const csomBody = `<Request AddExpandoFieldTypeSuffix="true" SchemaVersion="15.0.0.0" LibraryVersion="16.0.0.0" ApplicationName="JavaScript Client" xmlns="http://schemas.microsoft.com/sharepoint/clientquery/2009"><Actions><ObjectPath Id="1" ObjectPathId="0" /><ObjectPath Id="3" ObjectPathId="2" /><Method Name="SetSiteAdmin" Id="4" ObjectPathId="2"><Parameters><Parameter Type="String">${personalSiteUrl}</Parameter><Parameter Type="String">i:0#.f|membership|${migrationAccountEmail}</Parameter><Parameter Type="Boolean">true</Parameter></Parameters></Method></Actions><ObjectPaths><StaticProperty Id="0" TypeId="{3747adcd-a3c3-41b9-bfab-4a64dd2f1e0a}" Name="Current" /><Constructor Id="2" TypeId="{268004ae-ef6b-4e9b-8425-127220d84719}" /></ObjectPaths></Request>`
+
+  const csomResp = await fetch(`https://${adminHost}/_vti_bin/client.svc/ProcessQuery`, {
     method: 'POST',
-    headers: { Authorization: `Bearer ${spToken}`, Accept: 'application/json;odata=nometadata' },
+    headers: {
+      Authorization: `Bearer ${spToken}`,
+      'Content-Type': 'text/xml',
+    },
+    body: csomBody,
   })
-  const digestJson = await digestResp.json() as { FormDigestValue?: string }
-  const formDigest = digestJson.FormDigestValue ?? ''
 
-  // Step 6: use the SPO Tenant admin API to make the migration account a site
-  // collection admin on the personal OneDrive.
-  // Use the fully-qualified OData type name — the short alias SPO.Tenant is not
-  // always resolved correctly and returned a 404 in testing.
-  const response = await fetch(
-    `https://${adminHost}/_api/Microsoft.Online.SharePoint.TenantAdministration.Tenant/SetSiteAdmin`,
-    {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${spToken}`,
-        'Content-Type': 'application/json',
-        Accept: 'application/json;odata=nometadata',
-        'X-RequestDigest': formDigest,
-      },
-      body: JSON.stringify({
-        siteUrl: personalSiteUrl,
-        loginName: `i:0#.f|membership|${migrationAccountEmail}`,
-        isAdmin: true,
-      }),
+  if (!csomResp.ok) {
+    const text = await csomResp.text().catch(() => '')
+    throw new Error(`Failed to grant access (${csomResp.status}): ${text}`)
+  }
+
+  // CSOM always returns HTTP 200; errors are embedded in the JSON response array.
+  const csomJson = await csomResp.json() as unknown[]
+  for (const item of csomJson) {
+    if (item && typeof item === 'object' && 'ErrorInfo' in item) {
+      const errorInfo = (item as { ErrorInfo: { ErrorMessage?: string } | null }).ErrorInfo
+      if (errorInfo?.ErrorMessage) {
+        throw new Error(`SetSiteAdmin failed: ${errorInfo.ErrorMessage}`)
+      }
     }
-  )
-
-  if (!response.ok) {
-    const text = await response.text().catch(() => '')
-    throw new Error(`Failed to grant access (${response.status}): ${text}`)
   }
 }
 
