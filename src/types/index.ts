@@ -211,10 +211,6 @@ export interface GraphDrive {
   name: string
   webUrl: string
   driveType: string
-  sharepointIds?: {
-    siteId: string
-    siteUrl: string
-  }
 }
 
 export interface GraphUser {

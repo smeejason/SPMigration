@@ -148,20 +148,30 @@ export async function checkUserDriveAccess(userId: string): Promise<'accessible'
  * avoiding the circular dependency of the sharing-invite API.
  */
 export async function grantUserDriveAccess(userId: string, migrationAccountEmail: string): Promise<void> {
-  // Step 1: get the drive — Files.ReadWrite.All (admin-consented) allows this
-  // regardless of whether the migration account already has access.
+  // Step 1: get the drive webUrl — Files.ReadWrite.All (admin-consented) allows
+  // this regardless of whether the migration account already has access.
+  // drive.webUrl is the personal OneDrive site URL, e.g.:
+  //   https://contoso-my.sharepoint.com/personal/john_contoso_com
   const drive = await client()
     .api(`/users/${userId}/drive`)
-    .select('id,sharepointIds')
+    .select('id,webUrl')
     .get() as GraphDrive
 
-  const siteId = drive.sharepointIds?.siteId
-  if (!siteId) {
-    throw new Error('Could not determine OneDrive site ID — OneDrive may not be provisioned for this user')
+  if (!drive.webUrl) {
+    throw new Error('OneDrive not provisioned for this user — no site URL returned')
   }
 
-  // Step 2: grant the migration account write access via the site permissions API.
-  await client().api(`/sites/${siteId}/permissions`).post({
+  // Step 2: resolve the SharePoint site ID from the personal site URL.
+  // sharepointIds is a DriveItem property, not Drive — so we look up the site
+  // directly from its URL instead.
+  const driveUrl = new URL(drive.webUrl)
+  const site = await client()
+    .api(`/sites/${driveUrl.hostname}:${driveUrl.pathname}:`)
+    .select('id')
+    .get() as { id: string }
+
+  // Step 3: grant the migration account write access via the site permissions API.
+  await client().api(`/sites/${site.id}/permissions`).post({
     roles: ['write'],
     grantedToIdentities: [
       { user: { email: migrationAccountEmail } },
