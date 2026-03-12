@@ -129,7 +129,11 @@ export function renderAutoMapPanel(container: HTMLElement): void {
   }
   treeWrap.appendChild(ul)
 
-  if (topNodes.length === 1) {
+  // Auto-expand: if a level is selected, open all ancestor depths so that level
+  // is visible; otherwise just open the root when there's a single top node.
+  if (selectedLevel >= 0) {
+    expandToLevel(treeWrap, selectedLevel)
+  } else if (topNodes.length === 1) {
     ul.querySelector<HTMLButtonElement>('.automap-toggle-btn:not(.invisible)')?.click()
   }
 
@@ -505,6 +509,21 @@ function folderNameToDisplayName(name: string): string {
     .filter(Boolean)
     .map(w => w[0].toUpperCase() + w.slice(1).toLowerCase())
     .join(' ')
+}
+
+/**
+ * Expand the tree so that nodes at `targetDepth` are visible.
+ * Works depth-by-depth because children are lazy-rendered on toggle click.
+ */
+function expandToLevel(treeWrap: HTMLElement, targetDepth: number): void {
+  for (let d = 0; d < targetDepth; d++) {
+    treeWrap.querySelectorAll<HTMLElement>(`.automap-row[data-depth="${d}"]`).forEach(row => {
+      const li = row.closest<HTMLElement>('.automap-node')
+      if (li && !li.classList.contains('automap-node--open')) {
+        li.querySelector<HTMLButtonElement>('.automap-toggle-btn:not(.invisible)')?.click()
+      }
+    })
+  }
 }
 
 function collectNodesAtDepth(root: TreeNode, depth: number): TreeNode[] {
