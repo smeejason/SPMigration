@@ -1,4 +1,4 @@
-import { searchSites, getSiteDrives, saveMappingsFile, searchUsers, getUserDrive, checkUserDriveAccess } from '../../graph/graphClient'
+import { searchSites, getSiteDrives, saveMappingsFile, searchUsers, getUserDrive, checkUserDriveAccess, grantUserDriveAccess } from '../../graph/graphClient'
 import { updateProject, getSpConfig } from '../../graph/projectService'
 import { setState, getState } from '../../state/store'
 import type { TreeNode, MigrationMapping, SharePointSite, SharePointDrive, PlannedSiteTarget, AppUser } from '../../types'
@@ -775,9 +775,11 @@ async function openOneDriveTargetPanel(
   let selectedDriveId = existing?.targetDrive?.id ?? ''
   let selectedDriveWebUrl = existing?.targetSite?.webUrl ?? ''
 
+  const migrationAccount = getState().currentProject?.projectData.autoMapSettings?.migrationAccount ?? ''
+
   // Check access for existing user on load
   if (existing?.targetSite?.id) {
-    checkAndShowAccess(targetEl, existing.targetSite.id)
+    checkAndShowAccess(targetEl, existing.targetSite.id, migrationAccount)
   }
 
   // ── User search ────────────────────────────────────────────────────────────
@@ -822,7 +824,7 @@ async function openOneDriveTargetPanel(
           ;(targetEl.querySelector('#od-drive-url') as HTMLElement).textContent = selectedDriveWebUrl || '—'
           ;(targetEl.querySelector('#od-drive-lib') as HTMLElement).textContent = drive?.name ?? 'OneDrive'
 
-          checkAndShowAccess(targetEl, selectedUser.id)
+          checkAndShowAccess(targetEl, selectedUser.id, migrationAccount)
         })
       })
     } catch {
@@ -892,22 +894,45 @@ async function openOneDriveTargetPanel(
   })
 }
 
-async function checkAndShowAccess(targetEl: HTMLElement, userId: string): Promise<void> {
+async function checkAndShowAccess(targetEl: HTMLElement, userId: string, migrationAccount: string): Promise<void> {
   const statusEl = targetEl.querySelector('#od-access-status') as HTMLElement | null
   if (!statusEl) return
   statusEl.textContent = '⏳ Checking…'
+  statusEl.style.color = ''
   try {
     const access = await checkUserDriveAccess(userId)
-    const labels: Record<string, string> = {
-      accessible: '✓ Accessible',
-      'no-access': '✗ No access — grant via Phase 2',
-      'no-drive': '✗ No OneDrive provisioned',
-      error: '⚠ Could not check',
+    if (access === 'accessible') {
+      statusEl.textContent = '✓ Accessible'
+      statusEl.style.color = 'var(--color-success, #107c10)'
+    } else if (access === 'no-access') {
+      statusEl.style.color = 'var(--color-danger, #a4262c)'
+      if (migrationAccount) {
+        statusEl.innerHTML = `✗ No access &nbsp;<button type="button" id="btn-grant-access" class="btn btn-sm btn-warning" style="font-size:0.75rem;padding:2px 8px;margin-left:4px;">Grant Access</button>`
+        statusEl.querySelector('#btn-grant-access')?.addEventListener('click', async () => {
+          const btn = statusEl.querySelector('#btn-grant-access') as HTMLButtonElement
+          btn.disabled = true
+          btn.textContent = 'Granting…'
+          try {
+            await grantUserDriveAccess(userId, migrationAccount)
+            await checkAndShowAccess(targetEl, userId, migrationAccount)
+          } catch {
+            btn.disabled = false
+            btn.textContent = '⚠ Failed — retry'
+          }
+        })
+      } else {
+        statusEl.textContent = '✗ No access — configure Migration Account in settings'
+      }
+    } else if (access === 'no-drive') {
+      statusEl.textContent = '✗ No OneDrive provisioned'
+      statusEl.style.color = 'var(--color-danger, #a4262c)'
+    } else {
+      statusEl.textContent = '⚠ Could not check'
+      statusEl.style.color = 'var(--color-danger, #a4262c)'
     }
-    statusEl.textContent = labels[access] ?? access
-    statusEl.style.color = access === 'accessible' ? 'var(--color-success, #107c10)' : 'var(--color-danger, #a4262c)'
   } catch {
     statusEl.textContent = '⚠ Could not check'
+    statusEl.style.color = 'var(--color-danger, #a4262c)'
   }
 }
 
