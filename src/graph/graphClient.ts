@@ -94,18 +94,21 @@ export async function searchUsers(query: string): Promise<AppUser[]> {
 
 // ─── SharePoint personal site helpers ─────────────────────────────────────────
 
-let _mySharePointHost: string | null = null
+let _spHosts: { root: string; my: string } | null = null
 
 /**
- * Derives the tenant's -my.sharepoint.com hostname by calling /sites/root.
+ * Derives the tenant's SharePoint hostnames from /sites/root.
+ * root = contoso.sharepoint.com  (used for token scope)
+ * my   = contoso-my.sharepoint.com  (used for personal site REST calls)
  * Result is cached for the session.
  */
-async function getMySharePointHost(): Promise<string> {
-  if (_mySharePointHost) return _mySharePointHost
-  const root = await client().api('/sites/root').select('webUrl').get() as { webUrl: string }
-  const tenantName = new URL(root.webUrl).hostname.split('.')[0] // e.g. "contoso"
-  _mySharePointHost = `${tenantName}-my.sharepoint.com`
-  return _mySharePointHost
+async function getSharePointHosts(): Promise<{ root: string; my: string }> {
+  if (_spHosts) return _spHosts
+  const site = await client().api('/sites/root').select('webUrl').get() as { webUrl: string }
+  const rootHost = new URL(site.webUrl).hostname          // contoso.sharepoint.com
+  const tenantName = rootHost.split('.')[0]               // contoso
+  _spHosts = { root: rootHost, my: `${tenantName}-my.sharepoint.com` }
+  return _spHosts
 }
 
 /**
@@ -167,21 +170,23 @@ export async function checkUserDriveAccess(userId: string): Promise<'accessible'
   }
 
   // Fallback — SharePoint REST API with AllSites.FullControl
-  // This correctly resolves 403 as either "site exists" or "site doesn't exist"
+  // Token scope MUST be the root SharePoint host (contoso.sharepoint.com), not
+  // -my — Azure AD issues SharePoint tokens against the root resource even when
+  // calling -my.sharepoint.com REST endpoints.
   try {
     const user = await getUserById(userId)
     if (!user?.userPrincipalName) return 'no-access'
 
-    const myHost = await getMySharePointHost()
+    const { root: rootHost, my: myHost } = await getSharePointHosts()
     const sitePath = `/personal/${formatUpnForPersonalSite(user.userPrincipalName)}`
-    const spToken = await getToken([`https://${myHost}/AllSites.FullControl`])
+    const spToken = await getToken([`https://${rootHost}/AllSites.FullControl`])
 
     const resp = await fetch(`https://${myHost}${sitePath}/_api/web`, {
       headers: { Authorization: `Bearer ${spToken}`, Accept: 'application/json' },
     })
 
-    if (resp.ok) return 'accessible'             // site exists, AllSites.FullControl confirmed
-    if (resp.status === 404) return 'no-drive'   // personal site never provisioned
+    if (resp.ok) return 'accessible'            // site exists, AllSites.FullControl confirmed
+    if (resp.status === 404) return 'no-drive'  // personal site never provisioned
     return 'no-access'
   } catch {
     return 'no-access'
@@ -208,13 +213,13 @@ export async function grantUserDriveAccess(userId: string, migrationAccountEmail
 
   // Step 2: derive the personal OneDrive site URL.
   // e.g. john.doe@contoso.com → https://contoso-my.sharepoint.com/personal/john_doe_contoso_com
-  const myHost = await getMySharePointHost()
+  const { root: rootHost, my: myHost } = await getSharePointHosts()
   const personalSiteUrl = `https://${myHost}/personal/${formatUpnForPersonalSite(user.userPrincipalName)}`
 
   // Step 3: request a SharePoint-scoped token (AllSites.FullControl).
-  // This is separate from the Graph token — MSAL fetches it silently using
-  // the admin consent already granted in the app registration.
-  const spToken = await getToken([`https://${myHost}/AllSites.FullControl`])
+  // Scope MUST reference the root SharePoint host, not -my — this is how
+  // Azure AD identifies the SharePoint Online resource for token issuance.
+  const spToken = await getToken([`https://${rootHost}/AllSites.FullControl`])
 
   // Step 4: add the migration account to the site Owners group via SharePoint REST.
   const response = await fetch(

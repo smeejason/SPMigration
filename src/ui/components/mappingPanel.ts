@@ -931,9 +931,16 @@ async function checkAndShowAccess(targetEl: HTMLElement, userId: string, migrati
           try {
             await grantUserDriveAccess(userId, migrationAccount)
             await checkAndShowAccess(targetEl, userId, migrationAccount)
-          } catch {
+          } catch (err) {
             btn.disabled = false
+            const msg = (err as Error)?.message ?? String(err)
             btn.textContent = '⚠ Failed — retry'
+            btn.title = msg
+            // Also show the error inline so it's visible without hovering
+            const errEl = document.createElement('div')
+            errEl.style.cssText = 'color:var(--color-danger,#a4262c);font-size:0.75rem;margin-top:4px;word-break:break-word;'
+            errEl.textContent = msg
+            statusEl.appendChild(errEl)
           }
         })
       } else {
