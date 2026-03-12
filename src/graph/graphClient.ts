@@ -293,12 +293,19 @@ export async function getOrCreateProjectFolder(
     return item.id
   } catch { /* will create below */ }
 
-  // 2. Ensure SPMigration parent exists (ignore 409 conflict = already exists)
+  // 2. Ensure SPMigration parent exists — GET first to avoid triggering a 409
+  let spMigrationExists = false
   try {
-    await client()
-      .api(`/sites/${siteId}/drive/root/children`)
-      .post({ name: 'SPMigration', folder: {}, '@microsoft.graph.conflictBehavior': 'fail' })
-  } catch { /* already exists — that's fine */ }
+    await client().api(`/sites/${siteId}/drive/root:/SPMigration:`).get()
+    spMigrationExists = true
+  } catch { /* doesn't exist yet */ }
+  if (!spMigrationExists) {
+    try {
+      await client()
+        .api(`/sites/${siteId}/drive/root/children`)
+        .post({ name: 'SPMigration', folder: {} })
+    } catch { /* race condition — another request just created it, continue */ }
+  }
 
   // 3. Create project subfolder
   const result = await client()

@@ -207,7 +207,7 @@ export async function loadProjectTree(project: MigrationProject): Promise<TreeNo
 export async function loadProjectMappings(project: MigrationProject): Promise<MigrationMapping[]> {
   const { uploads, mappings: inlineMappings } = project.projectData
 
-  if (uploads && uploads.length > 0) {
+  if (uploads && uploads.length > 0 && (project.projectData.mappingCount ?? 0) > 0) {
     const { siteId } = getSpConfig()
     try {
       const fileMappings = await loadMappingsFile(siteId, project.title, project.id)

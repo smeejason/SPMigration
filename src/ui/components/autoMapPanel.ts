@@ -381,9 +381,11 @@ async function runPhase1(
     // Save OneDrive-specific mappings file
     await saveOneDriveMappingsFile(siteId, project.title, project.id, accumulated)
 
-    // Convert matched users → MigrationMapping so the Map page reflects automap results
+    // Convert matched users → MigrationMapping so the Map page reflects automap results.
+    // Include matched users even if getUserDrive returned 403 (driveId empty) — they still
+    // have a known user and access can be granted / drive loaded later.
     const autoMappings: MigrationMapping[] = accumulated
-      .filter(m => m.matchStatus === 'matched' && m.matchedUser && m.driveId)
+      .filter(m => m.matchStatus === 'matched' && m.matchedUser)
       .map(m => ({
         id: m.id,
         sourceNode: m.sourceNode,
@@ -393,12 +395,9 @@ async function runPhase1(
           webUrl: m.driveWebUrl,
           name: m.matchedUser!.displayName,
         },
-        targetDrive: {
-          id: m.driveId,
-          name: 'OneDrive',
-          webUrl: m.driveWebUrl,
-          driveType: 'personal',
-        },
+        targetDrive: m.driveId
+          ? { id: m.driveId, name: 'OneDrive', webUrl: m.driveWebUrl, driveType: 'personal' }
+          : null,
         targetFolderPath: m.targetFolderPath,
         status: 'ready' as const,
       }))
