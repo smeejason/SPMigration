@@ -714,10 +714,6 @@ async function openOneDriveTargetPanel(
                 <span id="od-drive-url" class="od-drive-value">${escHtml(existing?.targetSite?.webUrl ?? '')}</span>
               </div>
               <div class="od-drive-row">
-                <span class="od-drive-label">Library</span>
-                <span id="od-drive-lib" class="od-drive-value">${escHtml(existing?.targetDrive?.name ?? 'OneDrive')}</span>
-              </div>
-              <div class="od-drive-row">
                 <span class="od-drive-label">Access</span>
                 <span id="od-access-status" class="od-drive-value">⏳ Checking…</span>
               </div>
@@ -785,7 +781,7 @@ async function openOneDriveTargetPanel(
 
   const migrationAccount = getState().currentProject?.projectData.autoMapSettings?.migrationAccount ?? ''
 
-  // Fetch UPN and check access for existing user on load
+  // Fetch UPN, drive URL, and check access for existing user on load
   if (existing?.targetSite?.id) {
     checkAndShowAccess(targetEl, existing.targetSite.id, migrationAccount)
     getUserById(existing.targetSite.id).then(user => {
@@ -794,6 +790,17 @@ async function openOneDriveTargetPanel(
       const dnEl = targetEl.querySelector('#od-user-displayname') as HTMLElement | null
       if (dnEl && user?.displayName) dnEl.textContent = user.displayName
     })
+    // Populate drive URL if not already saved (e.g. auto-mapped before access was granted)
+    if (!selectedDriveWebUrl) {
+      getUserDrive(existing.targetSite.id).then(drive => {
+        if (drive?.webUrl) {
+          selectedDriveId = drive.id
+          selectedDriveWebUrl = drive.webUrl
+          const urlEl = targetEl.querySelector('#od-drive-url') as HTMLElement | null
+          if (urlEl) urlEl.textContent = drive.webUrl
+        }
+      })
+    }
   }
 
   // ── User search ────────────────────────────────────────────────────────────
@@ -838,7 +845,6 @@ async function openOneDriveTargetPanel(
           selectedDriveId = drive?.id ?? ''
           selectedDriveWebUrl = drive?.webUrl ?? ''
           ;(targetEl.querySelector('#od-drive-url') as HTMLElement).textContent = selectedDriveWebUrl || '—'
-          ;(targetEl.querySelector('#od-drive-lib') as HTMLElement).textContent = drive?.name ?? 'OneDrive'
 
           checkAndShowAccess(targetEl, selectedUser.id, migrationAccount)
         })
@@ -930,6 +936,13 @@ async function checkAndShowAccess(targetEl: HTMLElement, userId: string, migrati
           btn.textContent = 'Granting…'
           try {
             await grantUserDriveAccess(userId, migrationAccount)
+            // Re-fetch drive URL now that we have access
+            getUserDrive(userId).then(drive => {
+              if (drive?.webUrl) {
+                const urlEl = targetEl.querySelector('#od-drive-url') as HTMLElement | null
+                if (urlEl) urlEl.textContent = drive.webUrl
+              }
+            })
             await checkAndShowAccess(targetEl, userId, migrationAccount)
           } catch (err) {
             btn.disabled = false
