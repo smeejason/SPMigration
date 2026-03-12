@@ -215,28 +215,48 @@ export async function grantUserDriveAccess(userId: string, migrationAccountEmail
     throw new Error('Could not retrieve UPN for user — cannot construct personal site URL')
   }
 
-  // Step 2: derive the personal OneDrive site URL and SharePoint admin endpoint.
-  const { my: myHost, admin: adminHost } = await getSharePointHosts()
+  // Step 2: derive the personal OneDrive site URL.
+  const { root: rootHost, my: myHost, admin: adminHost } = await getSharePointHosts()
   const personalSiteUrl = `https://${myHost}/personal/${formatUpnForPersonalSite(user.userPrincipalName)}`
 
-  // Step 3: request a SharePoint-scoped token.
-  // The admin site shares the same Azure AD service principal as the root
-  // SharePoint host, so scope against the admin host for admin API calls.
-  const spToken = await getToken([`https://${adminHost}/AllSites.FullControl`])
+  // Step 3: request a SharePoint token scoped to the ROOT host.
+  // All SharePoint Online sites in a tenant share one Azure AD service principal
+  // identified by the root host — using the root scope produces a token accepted
+  // by both the -my and -admin hosts.
+  const spToken = await getToken([`https://${rootHost}/AllSites.FullControl`])
 
-  // Step 4: use the SPO Tenant admin API to set the migration account as a
-  // site collection admin on the personal OneDrive.
-  // This is the correct admin-level operation — modifying site groups directly
-  // (e.g. /_api/web/sitegroups) requires being an existing site collection
-  // admin and returns 403 otherwise, even with AllSites.FullControl.
+  // Step 4: verify the personal OneDrive site actually exists before trying
+  // to set admin — if the user has never logged in to OneDrive the site will
+  // not be provisioned and SetSiteAdmin will 404.
+  const siteCheck = await fetch(`https://${myHost}/personal/${formatUpnForPersonalSite(user.userPrincipalName)}/_api/web`, {
+    headers: { Authorization: `Bearer ${spToken}`, Accept: 'application/json' },
+  })
+  if (siteCheck.status === 404) {
+    throw new Error('OneDrive has not been provisioned for this user — they need to sign in to OneDrive at least once before access can be granted.')
+  }
+
+  // Step 5: get a form digest — SharePoint admin REST POST endpoints require
+  // X-RequestDigest even with OAuth bearer token authentication.
+  const digestResp = await fetch(`https://${adminHost}/_api/contextinfo`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${spToken}`, Accept: 'application/json;odata=nometadata' },
+  })
+  const digestJson = await digestResp.json() as { FormDigestValue?: string }
+  const formDigest = digestJson.FormDigestValue ?? ''
+
+  // Step 6: use the SPO Tenant admin API to make the migration account a site
+  // collection admin on the personal OneDrive.
+  // Use the fully-qualified OData type name — the short alias SPO.Tenant is not
+  // always resolved correctly and returned a 404 in testing.
   const response = await fetch(
-    `https://${adminHost}/_api/SPO.Tenant/SetSiteAdmin`,
+    `https://${adminHost}/_api/Microsoft.Online.SharePoint.TenantAdministration.Tenant/SetSiteAdmin`,
     {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${spToken}`,
-        'Content-Type': 'application/json;odata=verbose',
-        Accept: 'application/json;odata=verbose',
+        'Content-Type': 'application/json',
+        Accept: 'application/json;odata=nometadata',
+        'X-RequestDigest': formDigest,
       },
       body: JSON.stringify({
         siteUrl: personalSiteUrl,
