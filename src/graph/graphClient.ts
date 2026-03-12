@@ -94,7 +94,7 @@ export async function searchUsers(query: string): Promise<AppUser[]> {
 
 // ─── SharePoint personal site helpers ─────────────────────────────────────────
 
-let _spHosts: { root: string; my: string } | null = null
+let _spHosts: { root: string; my: string; admin: string } | null = null
 
 /**
  * Derives the tenant's SharePoint hostnames from /sites/root.
@@ -102,12 +102,16 @@ let _spHosts: { root: string; my: string } | null = null
  * my   = contoso-my.sharepoint.com  (used for personal site REST calls)
  * Result is cached for the session.
  */
-async function getSharePointHosts(): Promise<{ root: string; my: string }> {
+async function getSharePointHosts(): Promise<{ root: string; my: string; admin: string }> {
   if (_spHosts) return _spHosts
   const site = await client().api('/sites/root').select('webUrl').get() as { webUrl: string }
   const rootHost = new URL(site.webUrl).hostname          // contoso.sharepoint.com
   const tenantName = rootHost.split('.')[0]               // contoso
-  _spHosts = { root: rootHost, my: `${tenantName}-my.sharepoint.com` }
+  _spHosts = {
+    root: rootHost,                                       // contoso.sharepoint.com
+    my: `${tenantName}-my.sharepoint.com`,               // contoso-my.sharepoint.com
+    admin: `${tenantName}-admin.sharepoint.com`,         // contoso-admin.sharepoint.com
+  }
   return _spHosts
 }
 
@@ -211,19 +215,22 @@ export async function grantUserDriveAccess(userId: string, migrationAccountEmail
     throw new Error('Could not retrieve UPN for user — cannot construct personal site URL')
   }
 
-  // Step 2: derive the personal OneDrive site URL.
-  // e.g. john.doe@contoso.com → https://contoso-my.sharepoint.com/personal/john_doe_contoso_com
-  const { root: rootHost, my: myHost } = await getSharePointHosts()
+  // Step 2: derive the personal OneDrive site URL and SharePoint admin endpoint.
+  const { my: myHost, admin: adminHost } = await getSharePointHosts()
   const personalSiteUrl = `https://${myHost}/personal/${formatUpnForPersonalSite(user.userPrincipalName)}`
 
-  // Step 3: request a SharePoint-scoped token (AllSites.FullControl).
-  // Scope MUST reference the root SharePoint host, not -my — this is how
-  // Azure AD identifies the SharePoint Online resource for token issuance.
-  const spToken = await getToken([`https://${rootHost}/AllSites.FullControl`])
+  // Step 3: request a SharePoint-scoped token.
+  // The admin site shares the same Azure AD service principal as the root
+  // SharePoint host, so scope against the admin host for admin API calls.
+  const spToken = await getToken([`https://${adminHost}/AllSites.FullControl`])
 
-  // Step 4: add the migration account to the site Owners group via SharePoint REST.
+  // Step 4: use the SPO Tenant admin API to set the migration account as a
+  // site collection admin on the personal OneDrive.
+  // This is the correct admin-level operation — modifying site groups directly
+  // (e.g. /_api/web/sitegroups) requires being an existing site collection
+  // admin and returns 403 otherwise, even with AllSites.FullControl.
   const response = await fetch(
-    `${personalSiteUrl}/_api/web/sitegroups/getbyname('Owners')/users`,
+    `https://${adminHost}/_api/SPO.Tenant/SetSiteAdmin`,
     {
       method: 'POST',
       headers: {
@@ -232,8 +239,9 @@ export async function grantUserDriveAccess(userId: string, migrationAccountEmail
         Accept: 'application/json;odata=verbose',
       },
       body: JSON.stringify({
-        __metadata: { type: 'SP.User' },
-        LoginName: `i:0#.f|membership|${migrationAccountEmail}`,
+        siteUrl: personalSiteUrl,
+        loginName: `i:0#.f|membership|${migrationAccountEmail}`,
+        isAdmin: true,
       }),
     }
   )
