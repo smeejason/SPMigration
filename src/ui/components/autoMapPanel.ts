@@ -139,7 +139,24 @@ export function renderAutoMapPanel(container: HTMLElement): void {
     'migration-account-search',
     'migration-account-dropdown',
     'migration-account-clear',
-    'migration-account'
+    'migration-account',
+    async (upn) => {
+      const project = getState().currentProject
+      if (!project) return
+      const existing = project.projectData.autoMapSettings
+      const updatedData = {
+        ...project.projectData,
+        autoMapSettings: {
+          selectedLevel: existing?.selectedLevel ?? selectedLevel,
+          migrationAccount: upn,
+          targetFolderPath: existing?.targetFolderPath ?? '',
+        },
+      }
+      try {
+        await updateProject(project.id, { projectData: updatedData })
+        setState({ currentProject: { ...project, projectData: updatedData } })
+      } catch { /* non-fatal */ }
+    }
   )
 
   // ── Confirm Level ──────────────────────────────────────────────────────────
@@ -527,7 +544,8 @@ function wirePeoplePicker(
   searchId: string,
   dropdownId: string,
   clearId: string,
-  hiddenId: string
+  hiddenId: string,
+  onChange?: (upn: string) => void
 ): void {
   const searchInput = container.querySelector(`#${searchId}`) as HTMLInputElement
   const dropdown = container.querySelector(`#${dropdownId}`) as HTMLElement
@@ -546,6 +564,7 @@ function wirePeoplePicker(
     hidden.value = upn
     clearBtn.style.display = ''
     closeDropdown()
+    onChange?.(upn)
   }
 
   searchInput.addEventListener('input', () => {
@@ -580,6 +599,7 @@ function wirePeoplePicker(
     clearBtn.style.display = 'none'
     searchInput.focus()
     closeDropdown()
+    onChange?.('')
   })
 }
 
