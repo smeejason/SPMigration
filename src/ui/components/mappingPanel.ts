@@ -11,6 +11,8 @@ const warnRegistry = new Map<string, HTMLSpanElement>()
 let _doubleMappedPaths = new Set<string>()
 // Callback set by renderMappingPanel to refresh the users-count section of the stats bar
 let _statsRefreshCallback: (() => void) | null = null
+// Whether the current project is OneDrive (controls which columns / stats are shown)
+let _isOneDriveProject = false
 
 // ─── Entry point ──────────────────────────────────────────────────────────────
 
@@ -26,6 +28,8 @@ export function renderMappingPanel(container: HTMLElement): void {
     `
     return
   }
+
+  _isOneDriveProject = state.currentProject?.type === 'OneDrive'
 
   // If the top of the tree is a synthetic root (empty path), skip it and render
   // its children directly so the user sees their actual top-level folder(s) first.
@@ -66,7 +70,7 @@ export function renderMappingPanel(container: HTMLElement): void {
     return [...targetToNodePaths.values()].filter(c => c > 1).length
   })()
 
-  const statsHtml = statNodes.length > 0 ? `
+  const statsHtml = (_isOneDriveProject && statNodes.length > 0) ? `
     <div class="mapping-stats-bar">
       <div class="mstat-card">
         <div class="mstat-label">USERS TO MIGRATE</div>
@@ -112,12 +116,12 @@ export function renderMappingPanel(container: HTMLElement): void {
           </div>
         </div>
         <div class="tree-col-header" id="tree-col-header">
-          <span class="tch-name">USER FOLDER</span>
+          <span class="tch-name">FOLDER</span>
           <span class="tch-col tch-col-mapped">MAPPED TO</span>
           <span class="tch-col">TOTAL SIZE</span>
-          <span class="tch-col">RECYCLE BIN</span>
+          ${_isOneDriveProject ? '<span class="tch-col">RECYCLE BIN</span>' : ''}
           <span class="tch-col">FILES</span>
-          <span class="tch-col">MIGRATE SIZE</span>
+          ${_isOneDriveProject ? '<span class="tch-col">MIGRATE SIZE</span>' : ''}
         </div>
         <div id="mapping-tree" class="mapping-tree"></div>
         <div id="mapping-search-results" class="mapping-tree" style="display:none"></div>
@@ -309,24 +313,16 @@ function createMappingNodeEl(node: TreeNode, targetEl: HTMLElement, isRoot = fal
   applyMappedState(isMappedInitially || isAncestorMapped, initialSiteName, isPlannedInitially)
 
   // Column data cells
-  const rbInfo = getRecycleBin(node)
+  const rbInfo = _isOneDriveProject ? getRecycleBin(node) : { sizeBytes: 0, fileCount: 0 }
   const migrateBytes = node.sizeBytes - rbInfo.sizeBytes
 
   const colTotal = document.createElement('span')
   colTotal.className = 'tree-col tree-col-total'
   colTotal.textContent = node.sizeBytes > 0 ? formatBytes(node.sizeBytes) : '—'
 
-  const colRb = document.createElement('span')
-  colRb.className = `tree-col tree-col-rb${rbInfo.sizeBytes > 0 ? ' tree-col-rb--has-rb' : ''}`
-  colRb.textContent = rbInfo.sizeBytes > 0 ? formatBytes(rbInfo.sizeBytes) : '—'
-
   const colFiles = document.createElement('span')
   colFiles.className = 'tree-col tree-col-files'
   colFiles.textContent = node.fileCount > 0 ? `${node.fileCount.toLocaleString()} files` : '—'
-
-  const colMigrate = document.createElement('span')
-  colMigrate.className = 'tree-col tree-col-migrate'
-  colMigrate.textContent = migrateBytes > 0 ? formatBytes(migrateBytes) : '—'
 
   row.appendChild(toggleBtn)
   row.appendChild(iconWrap)
@@ -334,9 +330,23 @@ function createMappingNodeEl(node: TreeNode, targetEl: HTMLElement, isRoot = fal
   row.appendChild(warnEl)
   row.appendChild(tagEl)
   row.appendChild(colTotal)
-  row.appendChild(colRb)
+
+  if (_isOneDriveProject) {
+    const colRb = document.createElement('span')
+    colRb.className = `tree-col tree-col-rb${rbInfo.sizeBytes > 0 ? ' tree-col-rb--has-rb' : ''}`
+    colRb.textContent = rbInfo.sizeBytes > 0 ? formatBytes(rbInfo.sizeBytes) : '—'
+    row.appendChild(colRb)
+  }
+
   row.appendChild(colFiles)
-  row.appendChild(colMigrate)
+
+  if (_isOneDriveProject) {
+    const colMigrate = document.createElement('span')
+    colMigrate.className = 'tree-col tree-col-migrate'
+    colMigrate.textContent = migrateBytes > 0 ? formatBytes(migrateBytes) : '—'
+    row.appendChild(colMigrate)
+  }
+
   li.appendChild(row)
 
   // ── Toggle: lazy-render children on first expand ──────────────────────────
