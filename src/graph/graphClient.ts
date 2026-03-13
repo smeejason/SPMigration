@@ -488,6 +488,18 @@ export async function downloadDriveItem(siteId: string, itemId: string): Promise
   return JSON.parse(text)
 }
 
+export async function deleteDriveItem(siteId: string, itemId: string): Promise<void> {
+  const token = await getToken()
+  const response = await fetch(
+    `https://graph.microsoft.com/v1.0/sites/${siteId}/drive/items/${itemId}`,
+    { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } }
+  )
+  // 204 = success, 404 = already gone — both are acceptable
+  if (!response.ok && response.status !== 404) {
+    throw new Error(`Delete failed (${response.status})`)
+  }
+}
+
 // ─── Mappings file helpers ────────────────────────────────────────────────────
 //
 // Mappings are stored as {projectId}.mappings.json in the project SP folder

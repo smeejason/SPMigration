@@ -56,6 +56,8 @@ export interface ProjectData {
   // OneDrive-specific
   autoMapSettings?: AutoMapSettings    // persisted level + account settings from Auto Map tab
   oneDriveMappingCount?: number        // denormalized count of auto-mapped OneDrive users
+  // Migration review
+  resultUploads?: ResultUpload[]       // SPMT result ZIPs, ordered oldest → newest
 }
 
 export interface ProjectSettings {
@@ -189,8 +191,9 @@ export interface AppState {
   oneDriveMappings: OneDriveUserMapping[]
   sites: SharePointSite[]
   pendingSiteCreations: SiteRequest[]
+  reviewData: ReviewData | null
   ui: {
-    activeView: 'login' | 'projects' | 'project-upload' | 'project-automap' | 'project-map' | 'project-sites' | 'project-summary'
+    activeView: 'login' | 'projects' | 'project-upload' | 'project-automap' | 'project-map' | 'project-sites' | 'project-summary' | 'project-review'
     loading: boolean
     error: string | null
   }
@@ -231,5 +234,71 @@ export interface GraphListItem {
     Owners?: GraphUser[]
     Modified?: string
     [key: string]: unknown
+  }
+}
+
+// ─── Migration Review ─────────────────────────────────────────────────────────
+
+export type MigrationResultStatus = 'Migrated' | 'Failed' | 'Skipped' | 'Partial'
+
+export interface MigrationResultItem {
+  source: string              // raw Source value from CSV (UNC path)
+  destination: string         // raw Destination URL
+  itemName: string            // Item name column
+  itemType: 'File' | 'Folder' // Type column
+  status: MigrationResultStatus
+  resultCategory: string      // Result category column
+  message: string             // Message column
+  errorCode: string           // Error code (from ItemFailureReport, else '')
+  fileSizeBytes: number       // Item size (bytes) column
+  isRecycleBin: boolean       // true when Source includes '$RECYCLE.BIN'
+  sourcePath: string          // normalized: forward slashes, UNC prefix stripped
+}
+
+export interface MigrationResultSummary {
+  items: MigrationResultItem[]
+  migratedCount: number
+  failedCount: number
+  skippedCount: number
+  partialCount: number
+  totalCount: number
+}
+
+export interface ResultUpload {
+  id: string              // timestamp string used as unique key
+  fileName: string        // original ZIP filename
+  uploadedAt: string      // ISO datetime string
+  zipItemId: string       // Graph driveItem ID of the stored raw ZIP
+  summaryItemId: string   // Graph driveItem ID of the stored .result.json
+  migratedCount: number
+  failedCount: number
+  skippedCount: number
+  partialCount: number
+  totalCount: number
+}
+
+export interface ReviewNode {
+  path: string
+  name: string
+  depth: number
+  children: ReviewNode[]
+  migratedCount: number   // aggregated from all descendants
+  failedCount: number
+  skippedCount: number
+  partialCount: number
+  totalCount: number
+}
+
+export interface ReviewData {
+  tree: ReviewNode
+  items: MigrationResultItem[]   // flat list, kept for search and detail panels
+  totals: {
+    migrated: number
+    failed: number
+    skipped: number
+    partial: number
+    total: number
+    failedRecycleBin: number
+    skippedRecycleBin: number
   }
 }

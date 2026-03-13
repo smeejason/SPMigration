@@ -8,6 +8,7 @@ import { renderMappingPanel } from './components/mappingPanel'
 import { renderSiteCreator } from './components/siteCreator'
 import { renderSummaryPanel } from './components/summaryPanel'
 import { renderAutoMapPanel } from './components/autoMapPanel'
+import { renderReviewPanel } from './components/reviewPanel'
 import type { AppState, MigrationProject } from '../types'
 
 // ─── Waffle SVG ───────────────────────────────────────────────────────────────
@@ -77,7 +78,8 @@ function projectWorkspaceHtml(projectTitle: string, projectType: string): string
       <button class="tab-btn" data-view="project-upload">Upload</button>
       <button class="tab-btn" data-view="project-map">Map</button>
       <button class="tab-btn" data-view="project-sites">Create Sites</button>
-      <button class="tab-btn" data-view="project-summary">Summary</button>`
+      <button class="tab-btn" data-view="project-summary">Summary</button>
+      <button class="tab-btn" data-view="project-review">Review</button>`
   return `
     <nav class="workspace-tabs">
       ${tabs}
@@ -134,6 +136,7 @@ export function mountApp(root: HTMLElement): void {
               oneDriveMappings: [],
               sites: [],
               pendingSiteCreations: [],
+              reviewData: null,
               ui: { activeView: 'project-upload', loading: false, error: null },
             })
           },
@@ -170,6 +173,7 @@ export function mountApp(root: HTMLElement): void {
       else if (view === 'project-map') renderMappingPanel(panel)
       else if (view === 'project-sites') renderSiteCreator(panel)
       else if (view === 'project-summary') renderSummaryPanel(panel)
+      else if (view === 'project-review') void renderReviewPanel(panel)
       setActiveTab(view)
     }
 
@@ -188,7 +192,7 @@ export function mountApp(root: HTMLElement): void {
     })
 
     main.querySelector('#btn-back-projects')?.addEventListener('click', () => {
-      setState({ currentProject: null, treeData: null, mappings: [], oneDriveMappings: [], sites: [], pendingSiteCreations: [], ui: { activeView: 'projects', loading: false, error: null } })
+      setState({ currentProject: null, treeData: null, mappings: [], oneDriveMappings: [], sites: [], pendingSiteCreations: [], reviewData: null, ui: { activeView: 'projects', loading: false, error: null } })
     })
   }
 
@@ -234,7 +238,7 @@ function attachWaffle(root: HTMLElement): void {
 
   root.querySelector('#waffle-projects')?.addEventListener('click', () => {
     menu.hidden = true
-    setState({ currentProject: null, treeData: null, mappings: [], oneDriveMappings: [], sites: [], pendingSiteCreations: [], ui: { activeView: 'projects', loading: false, error: null } })
+    setState({ currentProject: null, treeData: null, mappings: [], oneDriveMappings: [], sites: [], pendingSiteCreations: [], reviewData: null, ui: { activeView: 'projects', loading: false, error: null } })
   })
 }
 

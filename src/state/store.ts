@@ -11,6 +11,7 @@ const initialState: AppState = {
   oneDriveMappings: [],
   sites: [],
   pendingSiteCreations: [],
+  reviewData: null,
   ui: {
     activeView: 'login',
     loading: false,

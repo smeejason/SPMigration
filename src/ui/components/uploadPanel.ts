@@ -1,7 +1,8 @@
 import { setState, getState } from '../../state/store'
 import { updateProject, getSpConfig } from '../../graph/projectService'
-import { getOrCreateProjectFolder, uploadFileToDrive, downloadDriveItem, saveMappingsFile } from '../../graph/graphClient'
-import type { TreeNode, MigrationMapping, ExcelUpload } from '../../types'
+import { getOrCreateProjectFolder, uploadFileToDrive, downloadDriveItem, deleteDriveItem, saveMappingsFile } from '../../graph/graphClient'
+import { parseMigrationResultZip } from '../../parsers/migrationResultParser'
+import type { TreeNode, MigrationMapping, ExcelUpload, ResultUpload } from '../../types'
 
 // ─── Entry point ──────────────────────────────────────────────────────────────
 
@@ -12,6 +13,8 @@ export function renderUploadPanel(container: HTMLElement): void {
   const uploads = project?.projectData.uploads ?? []
   const activeId = project?.projectData.activeUploadId
     ?? (uploads.length > 0 ? uploads[uploads.length - 1].id : undefined)
+  const resultUploads = project?.projectData.resultUploads ?? []
+  const isSharePoint = project?.type === 'SharePoint'
 
   container.innerHTML = `
     <div class="upload-panel">
@@ -52,11 +55,40 @@ export function renderUploadPanel(container: HTMLElement): void {
         <div id="upload-status" class="upload-status" style="display:none"></div>
       </div>
 
+      ${isSharePoint ? `
+      <div class="panel-section">
+        <h3>Migration Results</h3>
+        <p class="panel-desc">Upload the ZIP files produced by the SharePoint Migration Tool (SPMT). Each ZIP is parsed and stored — upload multiple ZIPs and all results are combined in the <strong>Review</strong> tab.</p>
+
+        ${resultUploads.length > 0 ? `
+        <div class="upload-history-list" id="result-history-list">
+          ${renderResultHistoryItems(resultUploads)}
+        </div>
+        ` : ''}
+
+        <div id="result-drop-zone" class="drop-zone" style="margin-top:${resultUploads.length > 0 ? '12px' : '0'}">
+          <input type="file" id="result-file-input" accept=".zip" multiple style="display:none" />
+          <div class="drop-zone-content">
+            <div class="drop-icon">📦</div>
+            <p class="drop-label">Drag & drop SPMT result ZIP files here, or</p>
+            <button type="button" id="btn-result-browse" class="btn btn-primary btn-sm">Browse ZIPs</button>
+            <p class="drop-hint">Accepts .zip · Contains ItemReport_*.csv · Multiple files allowed</p>
+          </div>
+        </div>
+
+        <div id="result-upload-status" class="upload-status" style="display:none"></div>
+      </div>
+      ` : ''}
+
     </div>
   `
   injectUploadStyles()
   setupDropZone(container)
   setupHistoryButtons(container)
+  if (isSharePoint) {
+    setupResultDropZone(container)
+    setupResultHistoryButtons(container)
+  }
 }
 
 // ─── History ──────────────────────────────────────────────────────────────────
@@ -144,6 +176,163 @@ function setupHistoryButtons(container: HTMLElement): void {
       status.style.display = 'block'
     }
   })
+}
+
+// ─── Result history ───────────────────────────────────────────────────────────
+
+function renderResultHistoryItems(uploads: ResultUpload[]): string {
+  return [...uploads].reverse().map((u) => {
+    const date = formatDate(new Date(u.uploadedAt))
+    return `
+      <div class="history-item">
+        <div class="history-item-header">
+          <span class="history-item-icon">📦</span>
+          <div class="history-item-info">
+            <span class="history-item-name" title="${escHtml(u.fileName)}">${escHtml(u.fileName)}</span>
+            <span class="history-item-meta">${date} · ${u.totalCount.toLocaleString()} items</span>
+          </div>
+          <button type="button" class="btn btn-ghost btn-sm result-delete-btn" data-result-id="${escHtml(u.id)}">Remove</button>
+        </div>
+        <div class="history-item-detail">
+          <span class="result-pill result-pill--migrated">✓ ${u.migratedCount.toLocaleString()} Migrated</span>
+          <span class="history-detail-divider">·</span>
+          <span class="result-pill result-pill--failed">✗ ${u.failedCount.toLocaleString()} Failed</span>
+          <span class="history-detail-divider">·</span>
+          <span class="result-pill result-pill--skipped">⊘ ${u.skippedCount.toLocaleString()} Skipped</span>
+          ${u.partialCount > 0 ? `<span class="history-detail-divider">·</span><span class="result-pill result-pill--partial">◐ ${u.partialCount.toLocaleString()} Partial</span>` : ''}
+        </div>
+      </div>
+    `
+  }).join('')
+}
+
+function setupResultHistoryButtons(container: HTMLElement): void {
+  container.querySelector('#result-history-list')?.addEventListener('click', async (e) => {
+    const btn = (e.target as HTMLElement).closest<HTMLButtonElement>('.result-delete-btn')
+    if (!btn || btn.disabled) return
+
+    const resultId = btn.dataset.resultId!
+    const project = getState().currentProject
+    const upload = project?.projectData.resultUploads?.find((u) => u.id === resultId)
+    if (!project || !upload) return
+
+    btn.disabled = true
+    btn.textContent = 'Removing…'
+
+    try {
+      const { siteId } = getSpConfig()
+      await Promise.allSettled([
+        deleteDriveItem(siteId, upload.zipItemId),
+        deleteDriveItem(siteId, upload.summaryItemId),
+      ])
+
+      const newResultUploads = (project.projectData.resultUploads ?? []).filter((u) => u.id !== resultId)
+      const newProjectData = { ...project.projectData, resultUploads: newResultUploads }
+      await updateProject(project.id, { projectData: newProjectData })
+      setState({ currentProject: { ...project, projectData: newProjectData }, reviewData: null })
+      renderUploadPanel(container)
+    } catch (err) {
+      btn.disabled = false
+      btn.textContent = 'Remove'
+      const status = container.querySelector('#result-upload-status') as HTMLElement
+      if (status) {
+        status.className = 'upload-status upload-status--error'
+        status.textContent = `Remove failed: ${(err as Error).message}`
+        status.style.display = 'block'
+      }
+    }
+  })
+}
+
+// ─── Result drop zone / upload flow ──────────────────────────────────────────
+
+function setupResultDropZone(container: HTMLElement): void {
+  const dropZone = container.querySelector('#result-drop-zone') as HTMLElement
+  const fileInput = container.querySelector('#result-file-input') as HTMLInputElement
+  const browseBtn = container.querySelector('#btn-result-browse') as HTMLButtonElement
+  if (!dropZone || !fileInput || !browseBtn) return
+
+  browseBtn.addEventListener('click', () => fileInput.click())
+  fileInput.addEventListener('change', () => {
+    if (fileInput.files?.length) void handleResultFiles(container, Array.from(fileInput.files))
+  })
+  dropZone.addEventListener('dragover', (e) => {
+    e.preventDefault()
+    dropZone.classList.add('drop-zone--active')
+  })
+  dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drop-zone--active'))
+  dropZone.addEventListener('drop', (e) => {
+    e.preventDefault()
+    dropZone.classList.remove('drop-zone--active')
+    const files = Array.from(e.dataTransfer?.files ?? []).filter((f) => f.name.endsWith('.zip'))
+    if (files.length) void handleResultFiles(container, files)
+  })
+}
+
+async function handleResultFiles(container: HTMLElement, files: File[]): Promise<void> {
+  const status = container.querySelector('#result-upload-status') as HTMLElement
+
+  function setStatus(type: 'info' | 'success' | 'error', msg: string, spin = false): void {
+    status.className = `upload-status upload-status--${type}`
+    status.innerHTML = spin ? `<span class="spinner"></span>${msg}` : msg
+    status.style.display = 'block'
+  }
+
+  for (const file of files) {
+    setStatus('info', `Parsing <strong>${escHtml(file.name)}</strong>…`, true)
+
+    let summary
+    try {
+      summary = await parseMigrationResultZip(file)
+    } catch (err) {
+      setStatus('error', `Parse error in ${escHtml(file.name)}: ${(err as Error).message}`)
+      continue
+    }
+
+    const project = getState().currentProject
+    if (!project) { setStatus('error', 'No active project'); return }
+
+    setStatus('info', `Uploading <strong>${escHtml(file.name)}</strong> to SharePoint…`, true)
+
+    try {
+      const { siteId } = getSpConfig()
+      const folderId = await getOrCreateProjectFolder(siteId, project.title, project.id)
+      const ts = Date.now().toString()
+      const safeName = file.name.replace(/["*:<>?/\\|#%]/g, '_')
+
+      const zipItemId = await uploadFileToDrive(siteId, folderId, `${ts}_${safeName}`, await file.arrayBuffer())
+      const summaryItemId = await uploadFileToDrive(siteId, folderId, `${ts}_${safeName}.result.json`, JSON.stringify(summary))
+
+      const newUpload: ResultUpload = {
+        id: ts,
+        fileName: file.name,
+        uploadedAt: new Date().toISOString(),
+        zipItemId,
+        summaryItemId,
+        migratedCount: summary.migratedCount,
+        failedCount: summary.failedCount,
+        skippedCount: summary.skippedCount,
+        partialCount: summary.partialCount,
+        totalCount: summary.totalCount,
+      }
+
+      const currentProject = getState().currentProject!
+      const newProjectData = {
+        ...currentProject.projectData,
+        resultUploads: [...(currentProject.projectData.resultUploads ?? []), newUpload],
+      }
+      await updateProject(currentProject.id, { projectData: newProjectData })
+      setState({ currentProject: { ...currentProject, projectData: newProjectData }, reviewData: null })
+
+      renderUploadPanel(container)
+      const newStatus = container.querySelector('#result-upload-status') as HTMLElement
+      newStatus.className = 'upload-status upload-status--success'
+      newStatus.innerHTML = `✓ <strong>${escHtml(file.name)}</strong> saved — ${summary.migratedCount.toLocaleString()} migrated, ${summary.failedCount.toLocaleString()} failed, ${summary.skippedCount.toLocaleString()} skipped`
+      newStatus.style.display = 'block'
+    } catch (err) {
+      setStatus('error', `Upload failed for ${escHtml(file.name)}: ${(err as Error).message}`)
+    }
+  }
 }
 
 // ─── Drop zone / upload flow ──────────────────────────────────────────────────
@@ -431,6 +620,13 @@ function injectUploadStyles(): void {
     .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid currentColor;
       border-top-color: transparent; border-radius: 50%; animation: spin 0.7s linear infinite; flex-shrink: 0; }
     @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* Result status pills */
+    .result-pill { font-size: 0.78rem; font-weight: 600; white-space: nowrap; }
+    .result-pill--migrated { color: #107c10; }
+    .result-pill--failed { color: var(--color-danger, #a4262c); }
+    .result-pill--skipped { color: #605e5c; }
+    .result-pill--partial { color: #7d4200; }
 
   `
   document.head.appendChild(style)
