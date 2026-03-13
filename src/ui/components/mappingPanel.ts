@@ -1228,10 +1228,17 @@ function updateDescendantHighlights(parentLi: HTMLLIElement, parentIsMapped: boo
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function getRecycleBin(node: TreeNode): { sizeBytes: number; fileCount: number } {
-  const rb = node.children.find(c =>
-    /^\$recycle\.bin$/i.test(c.name) || /^recycler$/i.test(c.name)
-  )
-  return { sizeBytes: rb?.sizeBytes ?? 0, fileCount: rb?.fileCount ?? 0 }
+  let sizeBytes = 0, fileCount = 0
+  function walk(n: TreeNode): void {
+    if (/^\$recycle\.bin$/i.test(n.name) || /^recycler$/i.test(n.name)) {
+      sizeBytes += n.sizeBytes
+      fileCount += n.fileCount
+      return // don't recurse inside the recycle bin itself
+    }
+    for (const child of n.children) walk(child)
+  }
+  for (const child of node.children) walk(child)
+  return { sizeBytes, fileCount }
 }
 
 interface MappingStats {
