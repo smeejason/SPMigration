@@ -14,7 +14,7 @@ export function renderUploadPanel(container: HTMLElement): void {
   const activeId = project?.projectData.activeUploadId
     ?? (uploads.length > 0 ? uploads[uploads.length - 1].id : undefined)
   const resultUploads = project?.projectData.resultUploads ?? []
-  const isSharePoint = project?.type === 'SharePoint'
+  const isSharePoint = true // show Migration Results section for all project types
 
   container.innerHTML = `
     <div class="upload-panel">
@@ -58,7 +58,7 @@ export function renderUploadPanel(container: HTMLElement): void {
       ${isSharePoint ? `
       <div class="panel-section">
         <h3>Migration Results</h3>
-        <p class="panel-desc">Upload the ZIP files produced by the SharePoint Migration Tool (SPMT). Each ZIP is parsed and stored — upload multiple ZIPs and all results are combined in the <strong>Review</strong> tab.</p>
+        <p class="panel-desc">Upload the ZIP files produced by the migration tool. Each ZIP is parsed and stored — upload multiple ZIPs and all results are combined in the <strong>Review</strong> tab.</p>
 
         ${resultUploads.length > 0 ? `
         <div class="upload-history-list" id="result-history-list">

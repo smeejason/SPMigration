@@ -73,7 +73,8 @@ function projectWorkspaceHtml(projectTitle: string, projectType: string): string
       <button class="tab-btn" data-view="project-upload">Upload</button>
       <button class="tab-btn" data-view="project-automap">Auto Map</button>
       <button class="tab-btn" data-view="project-map">Map</button>
-      <button class="tab-btn" data-view="project-summary">Summary</button>`
+      <button class="tab-btn" data-view="project-summary">Summary</button>
+      <button class="tab-btn" data-view="project-review">Review</button>`
     : `
       <button class="tab-btn" data-view="project-upload">Upload</button>
       <button class="tab-btn" data-view="project-map">Map</button>
