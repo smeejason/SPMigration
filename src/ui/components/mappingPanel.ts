@@ -21,6 +21,41 @@ export function renderMappingPanel(container: HTMLElement): void {
     return
   }
 
+  // If the top of the tree is a synthetic root (empty path), skip it and render
+  // its children directly so the user sees their actual top-level folder(s) first.
+  const topNodes = !tree.path ? tree.children : [tree]
+  const stats = buildMappingStats(topNodes)
+
+  const statsHtml = topNodes.length > 0 ? `
+    <div class="mapping-stats-bar">
+      <div class="mstat-card">
+        <div class="mstat-label">USERS TO MIGRATE</div>
+        <div class="mstat-value mstat-blue">${stats.userCount}</div>
+        <div class="mstat-sub">user home drives found</div>
+      </div>
+      <div class="mstat-card">
+        <div class="mstat-label">DATA TO MIGRATE</div>
+        <div class="mstat-value mstat-green">${formatBytes(stats.migrateBytes) || '0 B'}</div>
+        <div class="mstat-sub">${formatBytes(stats.recycleBinBytes) || '0 B'} excluded (recycle bin)</div>
+      </div>
+      <div class="mstat-card">
+        <div class="mstat-label">TOTAL DATA SIZE</div>
+        <div class="mstat-value mstat-orange">${formatBytes(stats.totalBytes) || '0 B'}</div>
+        <div class="mstat-sub">across all user drives</div>
+      </div>
+      <div class="mstat-card">
+        <div class="mstat-label">FILES TO MIGRATE</div>
+        <div class="mstat-value mstat-blue">${stats.migrateFiles.toLocaleString()}</div>
+        <div class="mstat-sub">of ${stats.totalFiles.toLocaleString()} total files</div>
+      </div>
+      <div class="mstat-card mstat-card--danger">
+        <div class="mstat-label">RECYCLE BIN (EXCLUDED)</div>
+        <div class="mstat-value mstat-red">${formatBytes(stats.recycleBinBytes) || '0 B'}</div>
+        <div class="mstat-sub">${stats.recycleBinFiles.toLocaleString()} files in ${stats.userCount} user bins</div>
+        <div class="mstat-recycle-bar"><div class="mstat-recycle-fill" style="width:${stats.totalBytes > 0 ? Math.round(stats.recycleBinBytes / stats.totalBytes * 100) : 0}%"></div></div>
+      </div>
+    </div>` : ''
+
   container.innerHTML = `
     <div class="mapping-panel">
       <div class="mapping-left">
@@ -28,11 +63,19 @@ export function renderMappingPanel(container: HTMLElement): void {
           <h3>Source: File System</h3>
           <span class="mapping-hint">Click a folder to map it</span>
         </div>
+        ${statsHtml}
         <div class="mapping-search-bar">
           <div class="search-input-wrap">
             <input type="text" id="tree-search" class="form-input mapping-search-input" placeholder="Search by name or path… (press Enter)" autocomplete="off" />
             <button type="button" id="btn-clear-search" class="btn-clear-search" style="display:none" title="Clear search">✕</button>
           </div>
+        </div>
+        <div class="tree-col-header" id="tree-col-header">
+          <span class="tch-name">USER FOLDER</span>
+          <span class="tch-col">TOTAL SIZE</span>
+          <span class="tch-col">RECYCLE BIN</span>
+          <span class="tch-col">FILES</span>
+          <span class="tch-col">MIGRATE SIZE</span>
         </div>
         <div id="mapping-tree" class="mapping-tree"></div>
         <div id="mapping-search-results" class="mapping-tree" style="display:none"></div>
@@ -54,9 +97,6 @@ export function renderMappingPanel(container: HTMLElement): void {
   const ul = document.createElement('ul')
   ul.className = 'tree-list tree-root'
 
-  // If the top of the tree is a synthetic root (empty path), skip it and render
-  // its children directly so the user sees their actual top-level folder(s) first.
-  const topNodes = !tree.path ? tree.children : [tree]
   for (const node of topNodes) {
     ul.appendChild(createMappingNodeEl(node, targetEl, true))
   }
@@ -93,6 +133,7 @@ export function renderMappingPanel(container: HTMLElement): void {
   for (const n of topNodes) collectNodes(n)
 
   const clearSearchBtn = container.querySelector('#btn-clear-search') as HTMLButtonElement
+  const treeColHeader = container.querySelector('#tree-col-header') as HTMLElement | null
 
   function clearSearch(): void {
     searchInput.value = ''
@@ -100,6 +141,7 @@ export function renderMappingPanel(container: HTMLElement): void {
     treeDiv.style.display = ''
     resultsDiv.style.display = 'none'
     resultsDiv.innerHTML = ''
+    if (treeColHeader) treeColHeader.style.display = ''
   }
 
   function runSearch(): void {
@@ -113,6 +155,7 @@ export function renderMappingPanel(container: HTMLElement): void {
     treeDiv.style.display = 'none'
     resultsDiv.style.display = ''
     clearSearchBtn.style.display = ''
+    if (treeColHeader) treeColHeader.style.display = 'none'
 
     if (matches.length === 0) {
       resultsDiv.innerHTML = '<p class="mapping-search-empty">No folders match your search.</p>'
@@ -180,11 +223,6 @@ function createMappingNodeEl(node: TreeNode, targetEl: HTMLElement, isRoot = fal
   nameEl.textContent = isLooseFiles ? 'Loose files' : String(node.name || node.path || '(unnamed)')
   if (node.originalPath) nameEl.title = node.originalPath
 
-  // Size
-  const sizeEl = document.createElement('span')
-  sizeEl.className = 'tree-size-sm'
-  sizeEl.textContent = formatBytes(node.sizeBytes)
-
   // Mapping tag (shows which site this folder is mapped to)
   const tagEl = document.createElement('span')
   tagEl.className = 'mapping-tag'
@@ -220,11 +258,34 @@ function createMappingNodeEl(node: TreeNode, targetEl: HTMLElement, isRoot = fal
   const isPlannedInitially = !existingMapping?.targetSite && !!existingMapping?.plannedSite
   applyMappedState(isMappedInitially || isAncestorMapped, initialSiteName, isPlannedInitially)
 
+  // Column data cells
+  const rbInfo = getRecycleBin(node)
+  const migrateBytes = node.sizeBytes - rbInfo.sizeBytes
+
+  const colTotal = document.createElement('span')
+  colTotal.className = 'tree-col tree-col-total'
+  colTotal.textContent = node.sizeBytes > 0 ? formatBytes(node.sizeBytes) : '—'
+
+  const colRb = document.createElement('span')
+  colRb.className = `tree-col tree-col-rb${rbInfo.sizeBytes > 0 ? ' tree-col-rb--has-rb' : ''}`
+  colRb.textContent = rbInfo.sizeBytes > 0 ? formatBytes(rbInfo.sizeBytes) : '—'
+
+  const colFiles = document.createElement('span')
+  colFiles.className = 'tree-col tree-col-files'
+  colFiles.textContent = node.fileCount > 0 ? `${node.fileCount.toLocaleString()} files` : '—'
+
+  const colMigrate = document.createElement('span')
+  colMigrate.className = 'tree-col tree-col-migrate'
+  colMigrate.textContent = migrateBytes > 0 ? formatBytes(migrateBytes) : '—'
+
   row.appendChild(toggleBtn)
   row.appendChild(iconWrap)
   row.appendChild(nameEl)
-  row.appendChild(sizeEl)
   row.appendChild(tagEl)
+  row.appendChild(colTotal)
+  row.appendChild(colRb)
+  row.appendChild(colFiles)
+  row.appendChild(colMigrate)
   li.appendChild(row)
 
   // ── Toggle: lazy-render children on first expand ──────────────────────────
@@ -304,6 +365,10 @@ async function openTargetPanel(
   const lastModStr = fmtDate(node.lastModified)
   const lastAccStr = fmtDate(node.lastAccessed)
   const sizeStr = node.sizeBytes > 0 ? formatBytes(node.sizeBytes) : '—'
+  const rb = getRecycleBin(node)
+  const rbStr = rb.sizeBytes > 0 ? formatBytes(rb.sizeBytes) : '—'
+  const migrateSize = node.sizeBytes - rb.sizeBytes
+  const migrateStr = migrateSize > 0 ? formatBytes(migrateSize) : sizeStr
   const fileStr = node.fileCount > 0 ? node.fileCount.toLocaleString() : '—'
   const folderStr = node.folderCount > 0 ? node.folderCount.toLocaleString() : '—'
   const childStr = node.children.length > 0 ? node.children.length.toLocaleString() : '—'
@@ -327,6 +392,8 @@ async function openTargetPanel(
               <dt>Full Path</dt>
               <dd class="source-detail-path" title="${escHtml(node.originalPath)}">${escHtml(node.originalPath)}</dd>
               <dt>Size</dt><dd>${sizeStr}</dd>
+              <dt>Recycle Bin</dt><dd${rb.sizeBytes > 0 ? ' class="detail-recycle"' : ''}>${rbStr}</dd>
+              <dt>Migrate Size</dt><dd>${migrateStr}</dd>
               <dt>Files</dt><dd>${fileStr}</dd>
               <dt>Subfolders</dt><dd>${folderStr}</dd>
               <dt>Direct Children</dt><dd>${childStr}</dd>
@@ -1160,6 +1227,38 @@ function updateDescendantHighlights(parentLi: HTMLLIElement, parentIsMapped: boo
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
+function getRecycleBin(node: TreeNode): { sizeBytes: number; fileCount: number } {
+  const rb = node.children.find(c =>
+    /^\$recycle\.bin$/i.test(c.name) || /^recycler$/i.test(c.name)
+  )
+  return { sizeBytes: rb?.sizeBytes ?? 0, fileCount: rb?.fileCount ?? 0 }
+}
+
+interface MappingStats {
+  userCount: number; totalBytes: number; migrateBytes: number
+  totalFiles: number; migrateFiles: number; recycleBinBytes: number; recycleBinFiles: number
+}
+
+function buildMappingStats(nodes: TreeNode[]): MappingStats {
+  let totalBytes = 0, totalFiles = 0, recycleBinBytes = 0, recycleBinFiles = 0
+  for (const n of nodes) {
+    const rb = getRecycleBin(n)
+    totalBytes += n.sizeBytes
+    totalFiles += n.fileCount
+    recycleBinBytes += rb.sizeBytes
+    recycleBinFiles += rb.fileCount
+  }
+  return {
+    userCount: nodes.length,
+    totalBytes,
+    migrateBytes: totalBytes - recycleBinBytes,
+    totalFiles,
+    migrateFiles: totalFiles - recycleBinFiles,
+    recycleBinBytes,
+    recycleBinFiles,
+  }
+}
+
 function formatBytes(bytes: number): string {
   if (!bytes || bytes <= 0) return ''
   const units = ['B', 'KB', 'MB', 'GB', 'TB']
@@ -1192,7 +1291,7 @@ function injectMappingStyles(): void {
     .search-result-path { display: block; font-size: 0.72rem; color: var(--color-text-muted);
       font-family: 'Consolas', monospace; padding: 0 8px 4px 46px; white-space: nowrap;
       overflow: hidden; text-overflow: ellipsis; }
-    .mapping-panel { display: grid; grid-template-columns: 1fr 1fr; height: calc(100vh - 140px); overflow: hidden; }
+    .mapping-panel { display: grid; grid-template-columns: 2fr 1fr; height: calc(100vh - 140px); overflow: hidden; }
     .mapping-left, .mapping-right { overflow-y: auto; border-right: 1px solid var(--color-border); }
     .mapping-right { border-right: none; }
     .mapping-section-header { padding: 12px 16px; border-bottom: 1px solid var(--color-border);
@@ -1238,9 +1337,46 @@ function injectMappingStyles(): void {
     .tree-name { flex: 1; font-size: 0.875rem; font-family: 'Consolas', monospace;
       white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
     .tree-name--loose { font-style: italic; color: var(--color-text-muted); }
-    .tree-size-sm { font-size: 0.75rem; color: var(--color-text-muted); white-space: nowrap; flex-shrink: 0; }
     .mapping-tag { font-size: 0.72rem; background: #dff6dd; color: #107c10; padding: 2px 6px;
       border-radius: 10px; white-space: nowrap; flex-shrink: 0; }
+
+    /* Stats bar */
+    .mapping-stats-bar { display: flex; gap: 0; border-bottom: 1px solid var(--color-border);
+      background: var(--color-surface); overflow-x: auto; flex-shrink: 0; }
+    .mstat-card { flex: 1; min-width: 110px; padding: 8px 12px;
+      border-right: 1px solid var(--color-border); }
+    .mstat-card:last-child { border-right: none; }
+    .mstat-card--danger { border-left: 3px solid var(--color-danger, #a4262c); }
+    .mstat-label { font-size: 0.6rem; font-weight: 700; color: var(--color-text-muted);
+      text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 1px; }
+    .mstat-value { font-size: 1.1rem; font-weight: 700; line-height: 1.15; }
+    .mstat-sub { font-size: 0.65rem; color: var(--color-text-muted); margin-top: 1px; }
+    .mstat-blue { color: var(--color-primary); }
+    .mstat-green { color: #107c10; }
+    .mstat-orange { color: #d83b01; }
+    .mstat-red { color: var(--color-danger, #a4262c); }
+    .mstat-recycle-bar { height: 3px; background: var(--color-border); border-radius: 2px;
+      margin-top: 5px; overflow: hidden; }
+    .mstat-recycle-fill { height: 100%; background: var(--color-danger, #a4262c); border-radius: 2px; }
+
+    /* Column header */
+    .tree-col-header { display: flex; align-items: center; padding: 4px 8px 4px 0;
+      background: var(--color-surface-alt); border-bottom: 1px solid var(--color-border);
+      font-size: 0.62rem; font-weight: 700; color: var(--color-text-muted);
+      text-transform: uppercase; letter-spacing: 0.05em;
+      position: sticky; top: 0; z-index: 1; flex-shrink: 0; }
+    .tch-name { flex: 1; padding-left: 46px; white-space: nowrap; }
+    .tch-col { width: 90px; text-align: right; flex-shrink: 0; padding-right: 8px; white-space: nowrap; }
+
+    /* Tree column cells */
+    .tree-col { font-size: 0.75rem; color: var(--color-text-muted); white-space: nowrap;
+      flex-shrink: 0; width: 90px; text-align: right; }
+    .tree-col-rb--has-rb { background: rgba(255, 140, 0, 0.15); color: #b35c00; font-weight: 600;
+      padding: 1px 5px; border-radius: 3px; }
+    .tree-col-migrate { color: var(--color-text); font-weight: 500; }
+
+    /* Detail grid recycle bin */
+    .detail-recycle { color: #b35c00; font-weight: 600; }
 
     /* Target panel */
     .mapping-placeholder { padding: 32px; text-align: center; color: var(--color-text-muted); font-size: 0.88rem; }
