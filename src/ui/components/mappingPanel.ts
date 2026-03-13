@@ -6,6 +6,9 @@ import type { TreeNode, MigrationMapping, SharePointSite, SharePointDrive, Plann
 // Live references to mapping tag elements so we can update them without re-rendering
 const tagRegistry = new Map<string, HTMLSpanElement>()
 
+// Callback set by renderMappingPanel to refresh the users-count section of the stats bar
+let _statsRefreshCallback: (() => void) | null = null
+
 // ─── Entry point ──────────────────────────────────────────────────────────────
 
 export function renderMappingPanel(container: HTMLElement): void {
@@ -26,12 +29,16 @@ export function renderMappingPanel(container: HTMLElement): void {
   const topNodes = !tree.path ? tree.children : [tree]
   const stats = buildMappingStats(topNodes)
 
+  const mappedAtTop = new Set(state.mappings.filter(m => m.targetSite || m.plannedSite).map(m => m.sourceNode.path))
+  const usersReady = topNodes.filter(n => mappedAtTop.has(n.path)).length
+  const usersNotMapped = topNodes.length - usersReady
+
   const statsHtml = topNodes.length > 0 ? `
     <div class="mapping-stats-bar">
       <div class="mstat-card">
         <div class="mstat-label">USERS TO MIGRATE</div>
-        <div class="mstat-value mstat-blue">${stats.userCount}</div>
-        <div class="mstat-sub">user home drives found</div>
+        <div class="mstat-value mstat-blue" id="mstat-users-ready-val">${usersReady} ready to Migrate</div>
+        <div class="mstat-sub mstat-not-mapped" id="mstat-users-unmapped-val">${usersNotMapped} not Mapped</div>
       </div>
       <div class="mstat-card">
         <div class="mstat-label">DATA TO MIGRATE</div>
@@ -46,7 +53,7 @@ export function renderMappingPanel(container: HTMLElement): void {
       <div class="mstat-card">
         <div class="mstat-label">FILES TO MIGRATE</div>
         <div class="mstat-value mstat-blue">${stats.migrateFiles.toLocaleString()}</div>
-        <div class="mstat-sub">of ${stats.totalFiles.toLocaleString()} total files</div>
+        <div class="mstat-sub">Where ${stats.recycleBinFiles.toLocaleString()} files are in the recycle bin</div>
       </div>
       <div class="mstat-card mstat-card--danger">
         <div class="mstat-label">RECYCLE BIN (EXCLUDED)</div>
@@ -90,6 +97,7 @@ export function renderMappingPanel(container: HTMLElement): void {
   injectMappingStyles()
 
   tagRegistry.clear()
+  _statsRefreshCallback = () => refreshUsersStats(container, topNodes)
 
   const treeEl = container.querySelector('#mapping-tree') as HTMLElement
   const targetEl = container.querySelector('#mapping-target') as HTMLElement
@@ -338,6 +346,7 @@ function createMappingNodeEl(node: TreeNode, targetEl: HTMLElement, isRoot = fal
         const isSelfMapped = !!siteName
         applyMappedState(isSelfMapped || isAncestorMapped, siteName ?? undefined, isPlanned)
         updateDescendantHighlights(li, isSelfMapped || isAncestorMapped)
+        _statsRefreshCallback?.()
       })
     })
   }
@@ -1227,6 +1236,18 @@ function updateDescendantHighlights(parentLi: HTMLLIElement, parentIsMapped: boo
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
+function refreshUsersStats(container: HTMLElement, topNodes: TreeNode[]): void {
+  const mappedPaths = new Set(
+    getState().mappings.filter(m => m.targetSite || m.plannedSite).map(m => m.sourceNode.path)
+  )
+  const ready = topNodes.filter(n => mappedPaths.has(n.path)).length
+  const notMapped = topNodes.length - ready
+  const readyEl = container.querySelector('#mstat-users-ready-val')
+  const unmappedEl = container.querySelector('#mstat-users-unmapped-val')
+  if (readyEl) readyEl.textContent = `${ready} ready to Migrate`
+  if (unmappedEl) unmappedEl.textContent = `${notMapped} not Mapped`
+}
+
 function getRecycleBin(node: TreeNode): { sizeBytes: number; fileCount: number } {
   let sizeBytes = 0, fileCount = 0
   function walk(n: TreeNode): void {
@@ -1358,6 +1379,7 @@ function injectMappingStyles(): void {
       text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 1px; }
     .mstat-value { font-size: 1.1rem; font-weight: 700; line-height: 1.15; }
     .mstat-sub { font-size: 0.65rem; color: var(--color-text-muted); margin-top: 1px; }
+    .mstat-not-mapped { color: #b35c00; font-weight: 600; }
     .mstat-blue { color: var(--color-primary); }
     .mstat-green { color: #107c10; }
     .mstat-orange { color: #d83b01; }
