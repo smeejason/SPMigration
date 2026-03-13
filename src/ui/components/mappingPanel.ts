@@ -5,7 +5,10 @@ import type { TreeNode, MigrationMapping, SharePointSite, SharePointDrive, Plann
 
 // Live references to mapping tag elements so we can update them without re-rendering
 const tagRegistry = new Map<string, HTMLSpanElement>()
-
+// Live references to double-mapped warning icons on each row
+const warnRegistry = new Map<string, HTMLSpanElement>()
+// Paths (at stat level) that share a target with another path
+let _doubleMappedPaths = new Set<string>()
 // Callback set by renderMappingPanel to refresh the users-count section of the stats bar
 let _statsRefreshCallback: (() => void) | null = null
 
@@ -38,12 +41,38 @@ export function renderMappingPanel(container: HTMLElement): void {
   const usersReady = statNodes.filter(n => statMappedPaths.has(n.path)).length
   const usersNotMapped = statNodes.length - usersReady
 
+  // Detect double-mapped: same target used by 2+ stat-level nodes
+  {
+    const targetToNodePaths = new Map<string, string[]>()
+    for (const m of state.mappings) {
+      if (statNodes.some(n => n.path === m.sourceNode.path) && (m.targetSite || m.resolvedDisplayName)) {
+        const key = m.targetSite?.id ?? m.resolvedDisplayName ?? ''
+        if (key) {
+          if (!targetToNodePaths.has(key)) targetToNodePaths.set(key, [])
+          targetToNodePaths.get(key)!.push(m.sourceNode.path)
+        }
+      }
+    }
+    _doubleMappedPaths = new Set([...targetToNodePaths.values()].filter(p => p.length > 1).flat())
+  }
+  const doubleMappedUserCount = (() => {
+    const targetToNodePaths = new Map<string, number>()
+    for (const m of state.mappings) {
+      if (statNodes.some(n => n.path === m.sourceNode.path) && (m.targetSite || m.resolvedDisplayName)) {
+        const key = m.targetSite?.id ?? m.resolvedDisplayName ?? ''
+        if (key) targetToNodePaths.set(key, (targetToNodePaths.get(key) ?? 0) + 1)
+      }
+    }
+    return [...targetToNodePaths.values()].filter(c => c > 1).length
+  })()
+
   const statsHtml = statNodes.length > 0 ? `
     <div class="mapping-stats-bar">
       <div class="mstat-card">
         <div class="mstat-label">USERS TO MIGRATE</div>
         <div class="mstat-value mstat-blue" id="mstat-users-ready-val">${usersReady} ready to Migrate</div>
         <div class="mstat-sub mstat-not-mapped" id="mstat-users-unmapped-val">${usersNotMapped} not Mapped</div>
+        <div class="mstat-sub mstat-double-mapped-warn" id="mstat-double-mapped-warn" ${doubleMappedUserCount === 0 ? 'style="display:none"' : ''}>⚠ ${doubleMappedUserCount} user${doubleMappedUserCount !== 1 ? 's' : ''} double mapped</div>
       </div>
       <div class="mstat-card">
         <div class="mstat-label">DATA TO MIGRATE</div>
@@ -84,6 +113,7 @@ export function renderMappingPanel(container: HTMLElement): void {
         </div>
         <div class="tree-col-header" id="tree-col-header">
           <span class="tch-name">USER FOLDER</span>
+          <span class="tch-col tch-col-mapped">MAPPED TO</span>
           <span class="tch-col">TOTAL SIZE</span>
           <span class="tch-col">RECYCLE BIN</span>
           <span class="tch-col">FILES</span>
@@ -102,6 +132,7 @@ export function renderMappingPanel(container: HTMLElement): void {
   injectMappingStyles()
 
   tagRegistry.clear()
+  warnRegistry.clear()
   _statsRefreshCallback = () => refreshUsersStats(container, statNodes)
 
   const treeEl = container.querySelector('#mapping-tree') as HTMLElement
@@ -236,11 +267,18 @@ function createMappingNodeEl(node: TreeNode, targetEl: HTMLElement, isRoot = fal
   nameEl.textContent = isLooseFiles ? 'Loose files' : String(node.name || node.path || '(unnamed)')
   if (node.originalPath) nameEl.title = node.originalPath
 
-  // Mapping tag (shows which site this folder is mapped to)
+  // Mapped-to column cell (replaces the old floating tag)
   const tagEl = document.createElement('span')
-  tagEl.className = 'mapping-tag'
+  tagEl.className = 'tree-col tree-col-mapped'
   const existingMapping = getState().mappings.find((m) => m.sourceNode.path === node.path)
   tagRegistry.set(node.path, tagEl)
+
+  // Double-mapped warning icon
+  const warnEl = document.createElement('span')
+  warnEl.className = 'row-warn-icon'
+  warnEl.title = 'This user is mapped to multiple source folders'
+  warnEl.textContent = _doubleMappedPaths.has(node.path) ? '⚠' : ''
+  warnRegistry.set(node.path, warnEl)
 
   // Helper: apply/remove the mapped visual state on this row
   function applyMappedState(isMapped: boolean, siteName?: string, isPlanned = false): void {
@@ -255,14 +293,13 @@ function createMappingNodeEl(node: TreeNode, targetEl: HTMLElement, isRoot = fal
     if (isMapped) {
       row.classList.add('mapping-row--mapped')
       if (isPlanned) row.classList.add('mapping-row--planned'); else row.classList.remove('mapping-row--planned')
-      tagEl.textContent = siteName ? `→ ${siteName}${isPlanned ? ' (planned)' : ''}` : ''
-      tagEl.style.display = siteName ? '' : 'none'
-      tagEl.className = `mapping-tag${isPlanned ? ' mapping-tag--planned' : ''}`
+      tagEl.textContent = siteName ? `${siteName}${isPlanned ? ' (planned)' : ''}` : '—'
+      tagEl.className = `tree-col tree-col-mapped${isPlanned ? ' tree-col-mapped--planned' : ''}`
     } else {
       row.classList.remove('mapping-row--mapped')
       row.classList.remove('mapping-row--planned')
-      tagEl.style.display = 'none'
-      tagEl.className = 'mapping-tag'
+      tagEl.textContent = '—'
+      tagEl.className = 'tree-col tree-col-mapped tree-col-mapped--empty'
     }
   }
 
@@ -294,6 +331,7 @@ function createMappingNodeEl(node: TreeNode, targetEl: HTMLElement, isRoot = fal
   row.appendChild(toggleBtn)
   row.appendChild(iconWrap)
   row.appendChild(nameEl)
+  row.appendChild(warnEl)
   row.appendChild(tagEl)
   row.appendChild(colTotal)
   row.appendChild(colRb)
@@ -1251,16 +1289,44 @@ function collectAtDepth(root: TreeNode, depth: number): TreeNode[] {
   return result
 }
 
-function refreshUsersStats(container: HTMLElement, topNodes: TreeNode[]): void {
-  const mappedPaths = new Set(
-    getState().mappings.filter(m => m.targetSite || m.plannedSite).map(m => m.sourceNode.path)
-  )
-  const ready = topNodes.filter(n => mappedPaths.has(n.path)).length
-  const notMapped = topNodes.length - ready
+function refreshUsersStats(container: HTMLElement, statNodes: TreeNode[]): void {
+  const currentMappings = getState().mappings
+
+  // User counts
+  const mappedPaths = new Set(currentMappings.filter(m => m.targetSite || m.plannedSite).map(m => m.sourceNode.path))
+  const ready = statNodes.filter(n => mappedPaths.has(n.path)).length
+  const notMapped = statNodes.length - ready
   const readyEl = container.querySelector('#mstat-users-ready-val')
   const unmappedEl = container.querySelector('#mstat-users-unmapped-val')
   if (readyEl) readyEl.textContent = `${ready} ready to Migrate`
   if (unmappedEl) unmappedEl.textContent = `${notMapped} not Mapped`
+
+  // Double-mapped detection
+  const targetToNodePaths = new Map<string, string[]>()
+  for (const m of currentMappings) {
+    if (statNodes.some(n => n.path === m.sourceNode.path) && (m.targetSite || m.resolvedDisplayName)) {
+      const key = m.targetSite?.id ?? m.resolvedDisplayName ?? ''
+      if (key) {
+        if (!targetToNodePaths.has(key)) targetToNodePaths.set(key, [])
+        targetToNodePaths.get(key)!.push(m.sourceNode.path)
+      }
+    }
+  }
+  _doubleMappedPaths = new Set([...targetToNodePaths.values()].filter(p => p.length > 1).flat())
+  const dmCount = [...targetToNodePaths.values()].filter(p => p.length > 1).length
+
+  // Update warn icons on rendered rows
+  warnRegistry.forEach((el, path) => {
+    const isDM = _doubleMappedPaths.has(path)
+    el.textContent = isDM ? '⚠' : ''
+  })
+
+  // Update stats card warning
+  const dmWarnEl = container.querySelector<HTMLElement>('#mstat-double-mapped-warn')
+  if (dmWarnEl) {
+    dmWarnEl.textContent = dmCount > 0 ? `⚠ ${dmCount} user${dmCount !== 1 ? 's' : ''} double mapped` : ''
+    dmWarnEl.style.display = dmCount > 0 ? '' : 'none'
+  }
 }
 
 function getRecycleBin(node: TreeNode): { sizeBytes: number; fileCount: number } {
@@ -1380,8 +1446,17 @@ function injectMappingStyles(): void {
     .tree-name { flex: 1; font-size: 0.875rem; font-family: 'Consolas', monospace;
       white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
     .tree-name--loose { font-style: italic; color: var(--color-text-muted); }
-    .mapping-tag { font-size: 0.72rem; background: #dff6dd; color: #107c10; padding: 2px 6px;
-      border-radius: 10px; white-space: nowrap; flex-shrink: 0; }
+    /* Mapped-to column (replaces floating tag) */
+    .tree-col-mapped { width: 140px; text-align: right; font-size: 0.78rem; font-weight: 500;
+      color: #107c10; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex-shrink: 0; }
+    .tree-col-mapped--planned { color: #7a5900; }
+    .tree-col-mapped--empty { color: var(--color-text-muted); font-weight: 400; }
+    .tch-col-mapped { width: 140px; }
+    /* Double-mapped warning icon on row */
+    .row-warn-icon { font-size: 0.7rem; color: #d83b01; flex-shrink: 0; min-width: 12px;
+      cursor: help; line-height: 1; }
+    /* Double-mapped warning in stats card */
+    .mstat-double-mapped-warn { color: #d83b01 !important; font-weight: 700; }
 
     /* Stats bar */
     .mapping-stats-bar { display: flex; gap: 0; border-bottom: 1px solid var(--color-border);
