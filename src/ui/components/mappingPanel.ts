@@ -27,13 +27,18 @@ export function renderMappingPanel(container: HTMLElement): void {
   // If the top of the tree is a synthetic root (empty path), skip it and render
   // its children directly so the user sees their actual top-level folder(s) first.
   const topNodes = !tree.path ? tree.children : [tree]
-  const stats = buildMappingStats(topNodes)
 
-  const mappedAtTop = new Set(state.mappings.filter(m => m.targetSite || m.plannedSite).map(m => m.sourceNode.path))
-  const usersReady = topNodes.filter(n => mappedAtTop.has(n.path)).length
-  const usersNotMapped = topNodes.length - usersReady
+  // For stats, prefer nodes at the automap-selected level (e.g. user home-drive folders).
+  // Fall back to topNodes when no level has been selected yet.
+  const autoMapLevel = state.currentProject?.projectData.autoMapSettings?.selectedLevel ?? -1
+  const statNodes = autoMapLevel >= 0 ? collectAtDepth(tree, autoMapLevel) : topNodes
+  const stats = buildMappingStats(statNodes)
 
-  const statsHtml = topNodes.length > 0 ? `
+  const statMappedPaths = new Set(state.mappings.filter(m => m.targetSite || m.plannedSite).map(m => m.sourceNode.path))
+  const usersReady = statNodes.filter(n => statMappedPaths.has(n.path)).length
+  const usersNotMapped = statNodes.length - usersReady
+
+  const statsHtml = statNodes.length > 0 ? `
     <div class="mapping-stats-bar">
       <div class="mstat-card">
         <div class="mstat-label">USERS TO MIGRATE</div>
@@ -97,7 +102,7 @@ export function renderMappingPanel(container: HTMLElement): void {
   injectMappingStyles()
 
   tagRegistry.clear()
-  _statsRefreshCallback = () => refreshUsersStats(container, topNodes)
+  _statsRefreshCallback = () => refreshUsersStats(container, statNodes)
 
   const treeEl = container.querySelector('#mapping-tree') as HTMLElement
   const targetEl = container.querySelector('#mapping-target') as HTMLElement
@@ -1236,6 +1241,16 @@ function updateDescendantHighlights(parentLi: HTMLLIElement, parentIsMapped: boo
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
+function collectAtDepth(root: TreeNode, depth: number): TreeNode[] {
+  const result: TreeNode[] = []
+  function walk(node: TreeNode): void {
+    if (node.depth === depth) { result.push(node); return }
+    if (node.depth < depth) node.children.forEach(walk)
+  }
+  walk(root)
+  return result
+}
+
 function refreshUsersStats(container: HTMLElement, topNodes: TreeNode[]): void {
   const mappedPaths = new Set(
     getState().mappings.filter(m => m.targetSite || m.plannedSite).map(m => m.sourceNode.path)
@@ -1279,9 +1294,9 @@ function buildMappingStats(nodes: TreeNode[]): MappingStats {
   return {
     userCount: nodes.length,
     totalBytes,
-    migrateBytes: totalBytes - recycleBinBytes,
+    migrateBytes: Math.max(0, totalBytes - recycleBinBytes),
     totalFiles,
-    migrateFiles: totalFiles - recycleBinFiles,
+    migrateFiles: Math.max(0, totalFiles - recycleBinFiles),
     recycleBinBytes,
     recycleBinFiles,
   }
