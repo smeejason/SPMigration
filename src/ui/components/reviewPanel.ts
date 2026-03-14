@@ -280,7 +280,7 @@ function toggleItemDetail(li: HTMLLIElement, path: string): void {
       ${item.errorCode ? `<dt>Error Code</dt><dd class="review-detail-error">${escHtml(item.errorCode)}</dd>` : ''}
       <dt>File Size</dt><dd>${item.fileSizeBytes > 0 ? formatBytes(item.fileSizeBytes) : '—'}</dd>
       <dt>Source</dt><dd class="review-detail-path">${escHtml(item.source)}</dd>
-      <dt>Destination</dt><dd class="review-detail-path">${escHtml(item.destination)}</dd>
+      <dt>Destination</dt><dd class="review-detail-path${item.status !== 'Migrated' ? ' review-detail-path--muted' : ''}">${escHtml(item.destination)}</dd>
     </dl>`
   li.appendChild(panel)
 }
@@ -473,6 +473,7 @@ function injectReviewStyles(): void {
     .review-detail-grid dt { color: var(--color-text-muted); font-weight: 600; align-self: start; padding-top: 1px; }
     .review-detail-grid dd { margin: 0; word-break: break-all; }
     .review-detail-path { font-family: 'Consolas', monospace; font-size: 0.75rem; color: var(--color-text); }
+    .review-detail-path--muted { color: var(--color-text-muted); }
     .review-detail-message { color: var(--color-text); }
     .review-detail-error { color: var(--color-danger); font-family: 'Consolas', monospace; font-size: 0.75rem; }
 

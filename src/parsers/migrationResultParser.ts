@@ -144,12 +144,18 @@ export function buildReviewTree(items: MigrationResultItem[]): ReviewNode {
     }
   }
 
-  // Sort children alphabetically at each level
+  // Sort children: folders first, then files, both alphabetically
+  const folderFirst = (a: ReviewNode, b: ReviewNode): number => {
+    const aIsFolder = a.children.length > 0 ? 0 : 1
+    const bIsFolder = b.children.length > 0 ? 0 : 1
+    if (aIsFolder !== bIsFolder) return aIsFolder - bIsFolder
+    return a.name.localeCompare(b.name)
+  }
   for (const node of nodeMap.values()) {
-    node.children.sort((a, b) => a.name.localeCompare(b.name))
+    node.children.sort(folderFirst)
   }
 
-  roots.sort((a, b) => a.name.localeCompare(b.name))
+  roots.sort(folderFirst)
 
   // Return synthetic root if multiple roots, or single root
   if (roots.length === 1) return roots[0]
