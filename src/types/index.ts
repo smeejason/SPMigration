@@ -58,6 +58,7 @@ export interface ProjectData {
   oneDriveMappingCount?: number        // denormalized count of auto-mapped OneDrive users
   // Migration review
   resultUploads?: ResultUpload[]       // SPMT result ZIPs, ordered oldest → newest
+  sharePointFeedEnabled?: boolean      // whether the SP live feed is shown on the Review tab
 }
 
 export interface ProjectSettings {

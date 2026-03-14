@@ -488,6 +488,33 @@ export async function downloadDriveItem(siteId: string, itemId: string): Promise
   return JSON.parse(text)
 }
 
+// ─── SharePoint item lookup ───────────────────────────────────────────────────
+
+export interface SpDriveItemDetails {
+  name: string
+  createdBy: { user: { displayName: string } }
+  createdDateTime: string
+  lastModifiedBy: { user: { displayName: string } }
+  lastModifiedDateTime: string
+  listItem?: { fields?: { Title?: string } }
+}
+
+let _driveWebUrlCache: Record<string, string> = {}
+
+export async function getDefaultDriveWebUrl(siteId: string): Promise<string> {
+  if (_driveWebUrlCache[siteId]) return _driveWebUrlCache[siteId]
+  const drive = await client().api(`/sites/${siteId}/drive`).select('webUrl').get() as { webUrl: string }
+  _driveWebUrlCache[siteId] = drive.webUrl
+  return drive.webUrl
+}
+
+export async function getSharePointItemByPath(siteId: string, driveRelativePath: string): Promise<SpDriveItemDetails> {
+  const encoded = driveRelativePath.split('/').map(encodeURIComponent).join('/')
+  return client()
+    .api(`/sites/${siteId}/drive/root:/${encoded}?$select=name,createdBy,createdDateTime,lastModifiedBy,lastModifiedDateTime&$expand=listItem($expand=fields($select=Title))`)
+    .get() as Promise<SpDriveItemDetails>
+}
+
 export async function deleteDriveItem(siteId: string, itemId: string): Promise<void> {
   const token = await getToken()
   const response = await fetch(
