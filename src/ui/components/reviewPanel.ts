@@ -389,7 +389,11 @@ async function loadSpFeed(item: MigrationResultItem | null): Promise<void> {
     return
   }
 
-  spContent.innerHTML = `<div class="review-sp-loading"><span class="spinner"></span> Loading from SharePoint…</div>`
+  spContent.innerHTML = `
+    <div class="review-sp-loading">
+      <span class="spinner"></span>
+      <span>Fetching from SharePoint…</span>
+    </div>`
 
   try {
     const { siteId } = getSpConfig()
@@ -397,15 +401,27 @@ async function loadSpFeed(item: MigrationResultItem | null): Promise<void> {
 
     const relativePath = extractDriveRelativePath(item.destination, _driveWebUrl)
     if (!relativePath) {
-      spContent.innerHTML = `<div class="review-sp-error">Could not resolve path from destination URL</div>`
+      spContent.innerHTML = spErrorHtml('Path could not be resolved', `Destination URL does not match the configured SharePoint drive.\n${item.destination}`)
       return
     }
 
     const details = await getSharePointItemByPath(siteId, relativePath)
     spContent.innerHTML = renderSpDetailsHtml(details)
   } catch (err) {
-    spContent.innerHTML = `<div class="review-sp-error">Failed to load: ${escHtml((err as Error).message)}</div>`
+    const msg = (err as Error).message ?? 'Unknown error'
+    const reason = msg.includes('404') ? 'Item not found in SharePoint — it may not have been migrated yet.'
+      : msg.includes('403') || msg.includes('401') ? 'Access denied — check permissions for this SharePoint site.'
+      : msg
+    spContent.innerHTML = spErrorHtml('Could not load SharePoint details', reason)
   }
+}
+
+function spErrorHtml(heading: string, detail: string): string {
+  return `
+    <div class="review-sp-error">
+      <div class="review-sp-error-heading">⚠ ${escHtml(heading)}</div>
+      <div class="review-sp-error-detail">${escHtml(detail)}</div>
+    </div>`
 }
 
 function extractDriveRelativePath(destination: string, driveWebUrl: string): string | null {
@@ -695,9 +711,13 @@ function injectReviewStyles(): void {
     .review-sp-content { flex: 1; overflow-y: auto; min-height: 0; }
     .review-sp-placeholder { padding: 24px 16px; text-align: center;
       color: var(--color-text-muted); font-size: 0.85rem; }
-    .review-sp-loading { display: flex; align-items: center; gap: 8px; padding: 16px;
+    .review-sp-loading { display: flex; align-items: center; gap: 10px; padding: 20px 16px;
       color: var(--color-text-muted); font-size: 0.85rem; }
-    .review-sp-error { padding: 12px 16px; color: var(--color-danger); font-size: 0.82rem; }
+    .review-sp-error { padding: 14px 16px; }
+    .review-sp-error-heading { font-size: 0.82rem; font-weight: 600; color: var(--color-danger);
+      margin-bottom: 6px; }
+    .review-sp-error-detail { font-size: 0.78rem; color: var(--color-text-muted);
+      white-space: pre-wrap; word-break: break-all; line-height: 1.5; }
     .review-sp-detail-grid { padding: 16px; }
 
     /* Spinner */
