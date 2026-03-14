@@ -14,20 +14,9 @@ export function renderUploadPanel(container: HTMLElement): void {
   const activeId = project?.projectData.activeUploadId
     ?? (uploads.length > 0 ? uploads[uploads.length - 1].id : undefined)
   const resultUploads = project?.projectData.resultUploads ?? []
-  const isSharePoint = true // show Migration Results section for all project types
 
   container.innerHTML = `
     <div class="upload-panel">
-
-      ${uploads.length > 0 ? `
-      <div class="panel-section">
-        <h3>Upload History</h3>
-        <p class="panel-desc">All TreeSize reports uploaded for this project, stored in SharePoint. The <strong>Active</strong> report drives the mapping view.</p>
-        <div class="upload-history-list" id="history-list">
-          ${renderHistoryItems(uploads, activeId, existingTree)}
-        </div>
-      </div>
-      ` : ''}
 
       <div class="conflict-warning" id="conflict-warning" style="display:none">
         <div class="conflict-warning-header">
@@ -38,57 +27,58 @@ export function renderUploadPanel(container: HTMLElement): void {
         <ul id="conflict-list" class="conflict-list"></ul>
       </div>
 
-      <div class="panel-section">
-        <h3>${uploads.length > 0 ? 'Upload New Report' : 'Upload TreeSize Report'}</h3>
-        <p class="panel-desc">Export your file server structure from TreeSize Pro or Free as <strong>.csv</strong> or <strong>.xlsx</strong>, then upload it here. Each report is saved to SharePoint automatically.</p>
+      <div class="upload-columns">
 
-        <div id="drop-zone" class="drop-zone ${existingTree ? 'drop-zone--has-file' : ''}">
-          <input type="file" id="file-input" accept=".csv,.xlsx,.xls" style="display:none" />
-          <div class="drop-zone-content">
-            <div class="drop-icon">📂</div>
-            <p class="drop-label">Drag & drop your TreeSize export here, or</p>
-            <button type="button" id="btn-browse" class="btn btn-primary btn-sm">Browse files</button>
-            <p class="drop-hint">Accepts .csv and .xlsx · Saved to SharePoint automatically</p>
+        <div class="upload-col">
+          <div class="upload-col-header">
+            <h3>TreeSize Reports</h3>
+            <div>
+              <input type="file" id="file-input" accept=".csv,.xlsx,.xls" style="display:none" />
+              <button type="button" id="btn-browse" class="btn-add-upload" title="Upload new report">+</button>
+            </div>
           </div>
-        </div>
-
-        <div id="upload-status" class="upload-status" style="display:none"></div>
-      </div>
-
-      ${isSharePoint ? `
-      <div class="panel-section">
-        <h3>Migration Results</h3>
-        <p class="panel-desc">Upload the ZIP files produced by the migration tool. Each ZIP is parsed and stored — upload multiple ZIPs and all results are combined in the <strong>Review</strong> tab.</p>
-
-        ${resultUploads.length > 0 ? `
-        <div class="upload-history-list" id="result-history-list">
-          ${renderResultHistoryItems(resultUploads)}
-        </div>
-        ` : ''}
-
-        <div id="result-drop-zone" class="drop-zone" style="margin-top:${resultUploads.length > 0 ? '12px' : '0'}">
-          <input type="file" id="result-file-input" accept=".zip" multiple style="display:none" />
-          <div class="drop-zone-content">
-            <div class="drop-icon">📦</div>
-            <p class="drop-label">Drag & drop SPMT result ZIP files here, or</p>
-            <button type="button" id="btn-result-browse" class="btn btn-primary btn-sm">Browse ZIPs</button>
-            <p class="drop-hint">Accepts .zip · Contains ItemReport_*.csv · Multiple files allowed</p>
+          <div class="upload-col-body${existingTree ? ' upload-col-body--has-file' : ''}" id="drop-zone">
+            ${uploads.length > 0
+              ? `<div class="upload-history-list" id="history-list">${renderHistoryItems(uploads, activeId, existingTree)}</div>`
+              : `<div class="upload-empty-state">
+                  <div class="upload-empty-icon">📂</div>
+                  <p>No reports yet</p>
+                  <p class="upload-empty-hint">Click <strong>+</strong> or drag a .csv / .xlsx file here</p>
+                </div>`
+            }
           </div>
+          <div id="upload-status" class="upload-status" style="display:none"></div>
         </div>
 
-        <div id="result-upload-status" class="upload-status" style="display:none"></div>
-      </div>
-      ` : ''}
+        <div class="upload-col">
+          <div class="upload-col-header">
+            <h3>Migration Results</h3>
+            <div>
+              <input type="file" id="result-file-input" accept=".zip" multiple style="display:none" />
+              <button type="button" id="btn-result-browse" class="btn-add-upload" title="Upload result ZIP">+</button>
+            </div>
+          </div>
+          <div class="upload-col-body" id="result-drop-zone">
+            ${resultUploads.length > 0
+              ? `<div class="upload-history-list" id="result-history-list">${renderResultHistoryItems(resultUploads)}</div>`
+              : `<div class="upload-empty-state">
+                  <div class="upload-empty-icon">📦</div>
+                  <p>No results yet</p>
+                  <p class="upload-empty-hint">Click <strong>+</strong> or drag .zip files here</p>
+                </div>`
+            }
+          </div>
+          <div id="result-upload-status" class="upload-status" style="display:none"></div>
+        </div>
 
+      </div>
     </div>
   `
   injectUploadStyles()
   setupDropZone(container)
   setupHistoryButtons(container)
-  if (isSharePoint) {
-    setupResultDropZone(container)
-    setupResultHistoryButtons(container)
-  }
+  setupResultDropZone(container)
+  setupResultHistoryButtons(container)
 }
 
 // ─── History ──────────────────────────────────────────────────────────────────
@@ -560,13 +550,42 @@ function injectUploadStyles(): void {
   const style = document.createElement('style')
   style.id = 'upload-styles'
   style.textContent = `
-    .upload-panel { padding: 24px; max-width: 900px; }
-    .panel-section { margin-bottom: 32px; }
-    .panel-section h3 { font-size: 1.05rem; font-weight: 600; margin-bottom: 8px; }
-    .panel-desc { font-size: 0.88rem; color: var(--color-text-muted); margin-bottom: 16px; }
+    .upload-panel { padding: 24px; }
+
+    /* Two-column layout */
+    .upload-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+    .upload-col { border: 1px solid var(--color-border); border-radius: 8px; overflow: hidden;
+      display: flex; flex-direction: column; }
+
+    /* Column header */
+    .upload-col-header { display: flex; align-items: center; justify-content: space-between;
+      padding: 12px 16px; background: var(--color-bg-subtle, #f8f8f8);
+      border-bottom: 1px solid var(--color-border); }
+    .upload-col-header h3 { margin: 0; font-size: 0.95rem; font-weight: 600; }
+
+    /* + button */
+    .btn-add-upload { width: 28px; height: 28px; border-radius: 50%;
+      border: 1.5px solid var(--color-primary, #0078d4); color: var(--color-primary, #0078d4);
+      background: transparent; font-size: 1.2rem; line-height: 1; cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      transition: background 0.15s, color 0.15s; flex-shrink: 0; }
+    .btn-add-upload:hover { background: var(--color-primary, #0078d4); color: #fff; }
+
+    /* Column body — acts as drop target */
+    .upload-col-body { flex: 1; position: relative; min-height: 140px; transition: background 0.15s; }
+    .upload-col-body.drop-zone--active { background: var(--color-primary-light, #deecf9);
+      outline: 2px dashed var(--color-primary, #0078d4); outline-offset: -4px; }
+    .upload-col-body--has-file { /* no special style needed */ }
+
+    /* Empty state */
+    .upload-empty-state { display: flex; flex-direction: column; align-items: center;
+      justify-content: center; padding: 40px 24px; text-align: center; pointer-events: none; }
+    .upload-empty-icon { font-size: 2rem; margin-bottom: 10px; }
+    .upload-empty-state p { margin: 0 0 4px; font-size: 0.875rem; color: var(--color-text-muted); }
+    .upload-empty-hint { font-size: 0.8rem !important; }
 
     /* Upload history list */
-    .upload-history-list { border: 1px solid var(--color-border); border-radius: 6px; overflow: hidden; }
+    .upload-history-list { }
     .history-item { border-bottom: 1px solid var(--color-border); }
     .history-item:last-child { border-bottom: none; }
     .history-item--active { background: rgba(16, 124, 16, 0.06); }
@@ -578,17 +597,15 @@ function injectUploadStyles(): void {
     .history-item-meta { font-size: 0.78rem; color: var(--color-text-muted); }
     .history-active-badge { font-size: 0.78rem; color: #107c10; font-weight: 600;
       white-space: nowrap; flex-shrink: 0; }
-    .history-item-detail {
-      display: flex; align-items: center; flex-wrap: wrap; gap: 4px;
-      padding: 0 14px 10px 42px; font-size: 0.8rem; color: var(--color-text-muted);
-    }
+    .history-item-detail { display: flex; align-items: center; flex-wrap: wrap; gap: 4px;
+      padding: 0 14px 10px 42px; font-size: 0.8rem; color: var(--color-text-muted); }
     .history-detail-folder { font-family: 'Consolas', monospace; color: var(--color-text);
-      font-weight: 500; max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      font-weight: 500; max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .history-detail-divider { color: var(--color-border); }
     .history-detail-stat { white-space: nowrap; }
 
     /* Conflict warning */
-    .conflict-warning { margin-bottom: 24px; background: #fff4ce; border: 1px solid #f3e06b;
+    .conflict-warning { margin-bottom: 20px; background: #fff4ce; border: 1px solid #f3e06b;
       border-left: 4px solid #f3c00a; border-radius: 6px; padding: 12px 16px; }
     .conflict-warning-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
     .btn-dismiss-conflicts { background: none; border: none; cursor: pointer; color: #7d5900;
@@ -600,18 +617,9 @@ function injectUploadStyles(): void {
     .conflict-list li { margin: 2px 0; }
     .conflict-list code { font-family: 'Consolas', monospace; font-size: 0.78rem; }
 
-    /* Drop zone */
-    .drop-zone { border: 2px dashed var(--color-border); border-radius: 8px; padding: 40px 24px;
-      text-align: center; transition: border-color 0.15s, background 0.15s; cursor: default; }
-    .drop-zone--active, .drop-zone:hover { border-color: var(--color-primary); background: var(--color-primary-light); }
-    .drop-zone--has-file { border-color: var(--color-success); }
-    .drop-icon { font-size: 2.5rem; margin-bottom: 12px; }
-    .drop-label { font-size: 0.9rem; color: var(--color-text-muted); margin-bottom: 12px; }
-    .drop-hint { font-size: 0.8rem; color: var(--color-text-muted); margin-top: 8px; }
-
     /* Status */
-    .upload-status { padding: 10px 14px; border-radius: 4px; font-size: 0.875rem; margin-top: 12px;
-      display: flex; align-items: center; gap: 8px; }
+    .upload-status { padding: 10px 14px; font-size: 0.875rem; margin: 0;
+      display: flex; align-items: center; gap: 8px; border-top: 1px solid var(--color-border); }
     .upload-status--info { background: #deecf9; color: #005a9e; }
     .upload-status--success { background: #dff6dd; color: #107c10; }
     .upload-status--error { background: #fde7e9; color: #a4262c; }
@@ -627,7 +635,6 @@ function injectUploadStyles(): void {
     .result-pill--failed { color: var(--color-danger, #a4262c); }
     .result-pill--skipped { color: #605e5c; }
     .result-pill--partial { color: #7d4200; }
-
   `
   document.head.appendChild(style)
 }
