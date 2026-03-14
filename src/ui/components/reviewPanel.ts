@@ -551,7 +551,8 @@ function injectReviewStyles(): void {
   const style = document.createElement('style')
   style.id = 'review-styles'
   style.textContent = `
-    .review-panel { padding: 0; display: flex; flex-direction: column; height: 100%; overflow: hidden; }
+    .review-panel { padding: 0; display: flex; flex-direction: column;
+      height: calc(100vh - 140px); overflow: hidden; }
 
     /* Empty / loading */
     .review-empty { display: flex; flex-direction: column; align-items: center; justify-content: center;
@@ -563,10 +564,10 @@ function injectReviewStyles(): void {
       font-size: 0.9rem; color: var(--color-text-muted); }
 
     /* Two-panel layout */
-    .review-layout { flex: 1; display: flex; overflow: hidden; }
-    .review-left { flex: 2; display: flex; flex-direction: column; overflow: hidden;
-      border-right: 1px solid var(--color-border); }
-    .review-right { flex: 1; display: flex; flex-direction: column; overflow: hidden; min-width: 260px; }
+    .review-layout { flex: 1; display: grid; grid-template-columns: 2fr 1fr; overflow: hidden; min-height: 0; }
+    .review-left { display: flex; flex-direction: column; overflow: hidden;
+      border-right: 1px solid var(--color-border); min-height: 0; }
+    .review-right { display: flex; flex-direction: column; overflow: hidden; min-width: 260px; min-height: 0; }
 
     /* Stats bar */
     .review-stats-bar { display: flex; border-bottom: 1px solid var(--color-border);
@@ -613,7 +614,7 @@ function injectReviewStyles(): void {
     .rch-skipped { color: #605e5c; }
 
     /* Tree */
-    .review-tree { flex: 1; overflow-y: auto; list-style: none; padding: 0; margin: 0; }
+    .review-tree { flex: 1; overflow-y: auto; list-style: none; padding: 0; margin: 0; min-height: 0; }
     .review-node { list-style: none; }
     .review-children { list-style: none; padding: 0; margin: 0 0 0 20px;
       border-left: 1px solid var(--color-border); }
@@ -642,7 +643,7 @@ function injectReviewStyles(): void {
       font-size: 0.85rem; cursor: pointer; user-select: none; }
 
     /* Item panel */
-    .review-item-panel { flex: 1; overflow-y: auto; border-bottom: 1px solid var(--color-border); }
+    .review-item-panel { flex: 1; overflow-y: auto; border-bottom: 1px solid var(--color-border); min-height: 0; }
     .review-item-placeholder { display: flex; flex-direction: column; align-items: center;
       justify-content: center; height: 100%; padding: 32px 16px; text-align: center;
       color: var(--color-text-muted); font-size: 0.875rem; gap: 6px; }
@@ -687,11 +688,11 @@ function injectReviewStyles(): void {
     .rbadge--rb { background: rgba(243,192,10,0.15); color: #7d5900; }
 
     /* SharePoint feed */
-    .review-sp-section { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+    .review-sp-section { flex: 1; display: flex; flex-direction: column; overflow: hidden; min-height: 0; }
     .review-sp-header { padding: 8px 16px; font-size: 0.72rem; font-weight: 700;
       text-transform: uppercase; letter-spacing: 0.05em; color: var(--color-text-muted);
       background: var(--color-surface-alt); border-bottom: 1px solid var(--color-border); flex-shrink: 0; }
-    .review-sp-content { flex: 1; overflow-y: auto; }
+    .review-sp-content { flex: 1; overflow-y: auto; min-height: 0; }
     .review-sp-placeholder { padding: 24px 16px; text-align: center;
       color: var(--color-text-muted); font-size: 0.85rem; }
     .review-sp-loading { display: flex; align-items: center; gap: 8px; padding: 16px;
