@@ -13,7 +13,8 @@ export function renderSummaryPanel(container: HTMLElement): void {
 // ─── OneDrive Summary ─────────────────────────────────────────────────────────
 
 function renderOneDriveSummary(container: HTMLElement, mappings: MigrationMapping[]): void {
-  const odMappings = mappings.filter((m) => m.matchStatus !== undefined)
+  // Show all mappings for OneDrive projects — includes both auto-mapped and manually mapped entries
+  const odMappings = mappings
 
   if (odMappings.length === 0) {
     container.innerHTML = `
@@ -91,13 +92,13 @@ function renderOneDriveSummary(container: HTMLElement, mappings: MigrationMappin
 }
 
 function odRowHtml(m: MigrationMapping): string {
-  const siteUrl = m.targetSite?.webUrl ?? ''
+  const siteUrl = siteUrlFromDriveUrl(m.targetSite?.webUrl ?? '')
   const folderPath = m.targetFolderPath || '/'
   return `
     <tr>
-      <td class="path-cell" title="${escHtml(m.sourceNode.originalPath)}">${escHtml(m.sourceNode.originalPath)}</td>
-      <td class="path-cell">${siteUrl
-        ? `<a href="${escHtml(siteUrl)}" target="_blank" rel="noopener" title="${escHtml(siteUrl)}">${escHtml(siteUrl)}</a>`
+      <td class="path-cell path-cell--wrap">${escHtml(m.sourceNode.originalPath)}</td>
+      <td class="path-cell path-cell--wrap">${siteUrl
+        ? `<a href="${escHtml(siteUrl)}" target="_blank" rel="noopener">${escHtml(siteUrl)}</a>`
         : '—'}</td>
       <td>Documents</td>
       <td class="path-cell">${escHtml(folderPath)}</td>
@@ -106,6 +107,12 @@ function odRowHtml(m: MigrationMapping): string {
 }
 
 function odStatusBadge(m: MigrationMapping): string {
+  // Manually mapped items have no matchStatus — use their status field instead
+  if (m.matchStatus === undefined) {
+    return m.status === 'ready'
+      ? `<span class="badge status-ready">✅ Ready</span>`
+      : `<span class="badge status-pending">⏳ Pending</span>`
+  }
   if (m.matchStatus === 'matched') {
     if (m.accessStatus === 'accessible' || m.accessStatus === 'granted') {
       return `<span class="badge status-ready">✅ Ready</span>`
@@ -125,7 +132,7 @@ function exportOneDriveCsv(mappings: MigrationMapping[]): void {
   const headers = ['Source Path', 'Destination Site URL', 'Destination List', 'Folder Path', 'Match Status', 'Access Status']
   const rows = mappings.map((m) => [
     m.sourceNode.originalPath,
-    m.targetSite?.webUrl ?? '',
+    siteUrlFromDriveUrl(m.targetSite?.webUrl ?? ''),
     'Documents',
     m.targetFolderPath || '/',
     m.matchStatus ?? '',
@@ -136,18 +143,13 @@ function exportOneDriveCsv(mappings: MigrationMapping[]): void {
 }
 
 function exportOneDriveJson(mappings: MigrationMapping[]): void {
-  const data = mappings.map((m) => ({
-    sourcePath: m.sourceNode.originalPath,
-    sourceName: m.sourceNode.name,
-    sizeBytes: m.sourceNode.sizeBytes,
-    fileCount: m.sourceNode.fileCount,
-    destinationSiteUrl: m.targetSite?.webUrl ?? null,
-    destinationList: 'Documents',
-    folderPath: m.targetFolderPath || '/',
-    matchStatus: m.matchStatus,
-    accessStatus: m.accessStatus,
+  const tasks = mappings.map((m) => ({
+    SourcePath: m.sourceNode.originalPath,
+    TargetPath: siteUrlFromDriveUrl(m.targetSite?.webUrl ?? ''),
+    TargetList: 'Documents',
+    TargetListRelativePath: m.targetFolderPath || '',
   }))
-  downloadFile(JSON.stringify(data, null, 2), 'onedrive-migration-plan.json', 'application/json')
+  downloadFile(JSON.stringify({ Tasks: tasks }, null, 2), 'onedrive-migration-plan.json', 'application/json')
 }
 
 // ─── SharePoint Summary ───────────────────────────────────────────────────────
@@ -287,6 +289,11 @@ function formatBytes(bytes: number): string {
   return `${(bytes / Math.pow(1024, i)).toFixed(1)} ${units[i]}`
 }
 
+/** Strip the /Documents suffix that Graph API appends to a personal OneDrive webUrl */
+function siteUrlFromDriveUrl(url: string): string {
+  return url.replace(/\/Documents\/?$/i, '')
+}
+
 function escHtml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
 }
@@ -318,6 +325,8 @@ function injectSummaryStyles(): void {
     .summary-table a:hover { text-decoration: underline; }
     .path-cell { max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
       font-family: monospace; font-size: 0.8rem; }
+    .path-cell--wrap { white-space: normal; overflow: visible; text-overflow: unset;
+      word-break: break-all; }
     .badge { padding: 2px 8px; border-radius: 10px; font-size: 0.75rem; font-weight: 600; }
     .status-ready { background: #dff6dd; color: #107c10; }
     .status-pending { background: #fff4ce; color: #7d5900; }
