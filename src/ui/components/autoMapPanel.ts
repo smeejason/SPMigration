@@ -263,26 +263,18 @@ function createAutoMapNodeEl(
   levelBadge.className = 'automap-level-badge'
   levelBadge.textContent = `L${node.depth + 1}`
 
-  // Map-type icon: ⚡ = auto-mapped, ✏ = manually mapped
-  const mapTypeIcon = document.createElement('span')
-  mapTypeIcon.dataset.mapTypeFor = node.path
+  // Single map-status badge: Auto | Manual | (empty)
+  const mapBadge = document.createElement('span')
+  mapBadge.dataset.mapBadgeFor = node.path
   if (autoMapping) {
-    mapTypeIcon.className = 'automap-map-type-icon map-type-auto'
-    mapTypeIcon.textContent = '⚡'
-    mapTypeIcon.title = 'Auto-mapped'
+    mapBadge.className = 'automap-map-badge map-badge--auto'
+    mapBadge.textContent = 'Auto'
   } else if (manualMapping) {
-    mapTypeIcon.className = 'automap-map-type-icon map-type-manual'
-    mapTypeIcon.textContent = '✏'
-    mapTypeIcon.title = 'Manually mapped'
+    mapBadge.className = 'automap-map-badge map-badge--manual'
+    mapBadge.textContent = 'Manual'
   } else {
-    mapTypeIcon.className = 'automap-map-type-icon'
+    mapBadge.className = 'automap-map-badge'
   }
-
-  // Status icon (auto-map match result: ✓ ✗ ? ⚠ ⏳)
-  const statusIcon = document.createElement('span')
-  statusIcon.className = 'automap-status-icon'
-  statusIcon.dataset.statusFor = node.path
-  if (autoMapping?.matchStatus) applyStatusIcon(statusIcon, autoMapping.matchStatus)
 
   // Size
   const sizeEl = document.createElement('span')
@@ -293,8 +285,7 @@ function createAutoMapNodeEl(
   row.appendChild(iconWrap)
   row.appendChild(nameEl)
   row.appendChild(levelBadge)
-  row.appendChild(mapTypeIcon)
-  row.appendChild(statusIcon)
+  row.appendChild(mapBadge)
   row.appendChild(sizeEl)
   li.appendChild(row)
 
@@ -408,15 +399,11 @@ async function runPhase1(
       }
       accumulated.push(mapping)
 
-      // Update DOM status icon directly
-      const statusEl = container.querySelector(`[data-status-for="${CSS.escape(node.path)}"]`) as HTMLElement | null
-      if (statusEl) applyStatusIcon(statusEl, matchStatus)
-      // Update map-type icon and row background
-      const mapTypeEl = container.querySelector(`[data-map-type-for="${CSS.escape(node.path)}"]`) as HTMLElement | null
-      if (mapTypeEl) {
-        mapTypeEl.className = 'automap-map-type-icon map-type-auto'
-        mapTypeEl.textContent = '⚡'
-        mapTypeEl.title = 'Auto-mapped'
+      // Update map-status badge to Auto
+      const mapBadgeEl = container.querySelector(`[data-map-badge-for="${CSS.escape(node.path)}"]`) as HTMLElement | null
+      if (mapBadgeEl) {
+        mapBadgeEl.className = 'automap-map-badge map-badge--auto'
+        mapBadgeEl.textContent = 'Auto'
       }
       const rowEl = container.querySelector(`.automap-row[data-path="${CSS.escape(node.path)}"]`) as HTMLElement | null
       if (rowEl) rowEl.classList.add('automap-row--mapped')
@@ -573,18 +560,6 @@ function levelBannerText(tree: TreeNode, depth: number): string {
   return `Level ${depth + 1} selected — ${count} folder${count !== 1 ? 's' : ''} will be mapped`
 }
 
-function applyStatusIcon(el: HTMLElement, status: string): void {
-  const map: Record<string, [string, string]> = {
-    matched:   ['✓', 'status-matched'],
-    'not-found': ['✗', 'status-notfound'],
-    ambiguous: ['?', 'status-ambiguous'],
-    error:     ['⚠', 'status-error'],
-    pending:   ['⏳', 'status-pending'],
-  }
-  const [icon, cls] = map[status] ?? ['', '']
-  el.textContent = icon
-  el.className = `automap-status-icon ${cls}`
-}
 
 function wirePeoplePicker(
   container: HTMLElement,
@@ -698,15 +673,10 @@ function injectAutoMapStyles(): void {
       color: var(--color-text-muted); border: 1px solid var(--color-border);
       padding: 1px 5px; border-radius: 10px; flex-shrink: 0; white-space: nowrap; }
     .automap-size { font-size: 0.75rem; color: var(--color-text-muted); white-space: nowrap; flex-shrink: 0; }
-    .automap-map-type-icon { font-size: 0.75rem; flex-shrink: 0; min-width: 14px; text-align: center; }
-    .map-type-auto { color: #107c10; }
-    .map-type-manual { color: #0078d4; }
-    .automap-status-icon { font-size: 0.8rem; flex-shrink: 0; min-width: 14px; text-align: center; }
-    .status-matched { color: #107c10; }
-    .status-notfound { color: #a4262c; }
-    .status-ambiguous { color: #7a5900; }
-    .status-error { color: #a4262c; }
-    .status-pending { color: var(--color-text-muted); }
+    .automap-map-badge { font-size: 0.7rem; font-weight: 700; flex-shrink: 0;
+      padding: 1px 8px; border-radius: 10px; min-width: 52px; text-align: center; }
+    .map-badge--auto   { background: #dff6dd; color: #107c10; }
+    .map-badge--manual { background: #e8f4fd; color: #0078d4; }
 
     /* Level highlighting via data attribute on tree container */
     ${Array.from({ length: 16 }, (_, i) =>
