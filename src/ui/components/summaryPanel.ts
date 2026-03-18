@@ -15,7 +15,8 @@ export function renderSummaryPanel(container: HTMLElement): void {
 // ─── OneDrive Summary ─────────────────────────────────────────────────────────
 
 function renderOneDriveSummary(container: HTMLElement, mappings: MigrationMapping[]): void {
-  const odMappings = mappings
+  // Only show users that have actually been mapped (auto-matched or manually assigned)
+  const odMappings = mappings.filter(m => m.targetSite !== null)
 
   if (odMappings.length === 0) {
     container.innerHTML = `

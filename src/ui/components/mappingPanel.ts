@@ -1052,6 +1052,12 @@ async function checkAndShowAccess(targetEl: HTMLElement, userId: string, migrati
   statusEl.style.color = ''
   try {
     const access = await checkUserDriveAccess(userId)
+
+    // Always sync the resolved status back into state so the summary page is up-to-date
+    setState({ mappings: getState().mappings.map(m =>
+      m.targetSite?.id === userId ? { ...m, accessStatus: access } : m
+    )})
+
     if (access === 'accessible') {
       statusEl.textContent = '✓ Accessible'
       statusEl.style.color = 'var(--color-success, #107c10)'
@@ -1065,6 +1071,10 @@ async function checkAndShowAccess(targetEl: HTMLElement, userId: string, migrati
           btn.textContent = 'Granting…'
           try {
             await grantUserDriveAccess(userId, migrationAccount)
+            // Optimistically mark as granted so the summary page sees it immediately
+            setState({ mappings: getState().mappings.map(m =>
+              m.targetSite?.id === userId ? { ...m, accessStatus: 'granted' } : m
+            )})
             // Re-fetch drive URL now that we have access
             getUserDrive(userId).then(drive => {
               if (drive?.webUrl) {
@@ -1073,6 +1083,8 @@ async function checkAndShowAccess(targetEl: HTMLElement, userId: string, migrati
               }
             })
             await checkAndShowAccess(targetEl, userId, migrationAccount)
+            // Persist the updated access status
+            await persistMappings(getState().mappings)
           } catch (err) {
             btn.disabled = false
             const msg = (err as Error)?.message ?? String(err)
