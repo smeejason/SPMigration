@@ -1,6 +1,6 @@
 import { getProjects, deleteProject, loadProjectTree, loadProjectMappings } from '../../graph/projectService'
 import { setState, getState } from '../../state/store'
-import type { AppUser, MigrationProject } from '../../types'
+import type { MigrationProject } from '../../types'
 
 export async function renderProjectList(container: HTMLElement): Promise<void> {
   injectProjectStyles()
@@ -11,10 +11,8 @@ export async function renderProjectList(container: HTMLElement): Promise<void> {
 async function loadProjects(container: HTMLElement): Promise<void> {
   try {
     const allProjects = await getProjects()
-    const currentUser = getState().auth.user
-    const projects = filterByOwnership(allProjects, currentUser)
-    setState({ projects })
-    renderProjectCards(container, projects)
+    setState({ projects: allProjects })
+    renderProjectCards(container, allProjects)
   } catch (err) {
     const isConfigMissing = !import.meta.env.VITE_SP_SITE_ID
     container.innerHTML = `
@@ -89,13 +87,6 @@ function renderProjectCards(container: HTMLElement, projects: MigrationProject[]
   })
 }
 
-function filterByOwnership(projects: MigrationProject[], user: AppUser | null): MigrationProject[] {
-  if (!user) return []
-  return projects.filter((p) => {
-    if (p.owners.length === 0) return true
-    return p.owners.some((o) => o.email === user.mail || o.id === user.id)
-  })
-}
 
 function projectCardHtml(p: MigrationProject): string {
   const stats = p.projectData
