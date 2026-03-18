@@ -553,6 +553,23 @@ export async function getSharePointItemByPath(siteId: string, driveRelativePath:
     .get() as Promise<SpDriveItemDetails>
 }
 
+/**
+ * Resolve any SharePoint or OneDrive URL directly to a drive item.
+ * Uses the Graph /shares endpoint so it works regardless of which site/drive
+ * the file lives in — no need to know siteId or driveId ahead of time.
+ */
+export async function resolveSharePointItemByUrl(rawOrEncodedUrl: string): Promise<SpDriveItemDetails> {
+  let url: string
+  try { url = decodeURIComponent(rawOrEncodedUrl) } catch { url = rawOrEncodedUrl }
+  // Graph /shares requires base64url encoding with a 'u!' prefix
+  const encoded = 'u!' + btoa(url).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_')
+  return client()
+    .api(`/shares/${encoded}/driveItem`)
+    .select('name,createdBy,createdDateTime,lastModifiedBy,lastModifiedDateTime')
+    .expand('listItem($expand=fields($select=Title))')
+    .get() as Promise<SpDriveItemDetails>
+}
+
 export async function deleteDriveItem(siteId: string, itemId: string): Promise<void> {
   const token = await getToken()
   const response = await fetch(

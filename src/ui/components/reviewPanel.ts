@@ -1,6 +1,6 @@
 import { getState, setState } from '../../state/store'
 import { getSpConfig, updateProject } from '../../graph/projectService'
-import { downloadDriveItem, getDefaultDriveWebUrl, getSharePointItemByPath } from '../../graph/graphClient'
+import { downloadDriveItem, resolveSharePointItemByUrl } from '../../graph/graphClient'
 import { buildReviewTree } from '../../parsers/migrationResultParser'
 import type { MigrationResultItem, MigrationResultSummary, ReviewData, ReviewNode } from '../../types'
 import type { SpDriveItemDetails } from '../../graph/graphClient'
@@ -14,7 +14,6 @@ let _treeRoot: ReviewNode | null = null
 let _selectedNode: ReviewNode | null = null
 let _expandedPaths = new Set<string>()
 let _spFeedEnabled = false
-let _driveWebUrl: string | null = null
 let _treeEl: HTMLElement | null = null
 let _rightPanel: HTMLElement | null = null
 
@@ -92,7 +91,6 @@ function renderWithData(container: HTMLElement, data: ReviewData): void {
   _selectedNode = null
   _expandedPaths = new Set()
   _spFeedEnabled = state.currentProject?.projectData.sharePointFeedEnabled ?? false
-  _driveWebUrl = null
 
   const { totals } = data
   const pct = (n: number) => totals.total > 0 ? ` (${Math.round(n / totals.total * 100)}%)` : ''
@@ -396,16 +394,7 @@ async function loadSpFeed(item: MigrationResultItem | null): Promise<void> {
     </div>`
 
   try {
-    const { siteId } = getSpConfig()
-    if (!_driveWebUrl) _driveWebUrl = await getDefaultDriveWebUrl(siteId)
-
-    const relativePath = extractDriveRelativePath(item.destination, _driveWebUrl)
-    if (!relativePath) {
-      spContent.innerHTML = spErrorHtml('Path could not be resolved', `Destination URL does not match the configured SharePoint drive.\n${item.destination}`)
-      return
-    }
-
-    const details = await getSharePointItemByPath(siteId, relativePath)
+    const details = await resolveSharePointItemByUrl(item.destination)
     spContent.innerHTML = renderSpDetailsHtml(details)
   } catch (err) {
     const msg = (err as Error).message ?? 'Unknown error'
@@ -424,18 +413,6 @@ function spErrorHtml(heading: string, detail: string): string {
     </div>`
 }
 
-function extractDriveRelativePath(destination: string, driveWebUrl: string): string | null {
-  try {
-    const dest = decodeURIComponent(destination).replace(/\\/g, '/')
-    const base = decodeURIComponent(driveWebUrl).replace(/\\/g, '/').replace(/\/$/, '')
-    if (dest.toLowerCase().startsWith(base.toLowerCase())) {
-      return dest.slice(base.length).replace(/^\//, '')
-    }
-    return null
-  } catch {
-    return null
-  }
-}
 
 function renderSpDetailsHtml(details: SpDriveItemDetails): string {
   const title = details.listItem?.fields?.Title
