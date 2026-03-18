@@ -15,9 +15,14 @@ async function loadProjects(container: HTMLElement): Promise<void> {
     setState({ projects: allProjects })
     const currentUser = getCurrentUser()
     const userEmail = currentUser?.mail?.toLowerCase() ?? ''
-    const myProjects = userEmail
+    const userName = currentUser?.displayName?.toLowerCase() ?? ''
+    const myProjects = (userEmail || userName)
       ? allProjects.filter((p) =>
-          p.owners.some((o) => o.email.toLowerCase() === userEmail)
+          p.owners.length === 0 ||
+          p.owners.some((o) =>
+            (o.email && o.email.toLowerCase() === userEmail) ||
+            (o.displayName && o.displayName.toLowerCase() === userName)
+          )
         )
       : allProjects
     renderProjectCards(container, myProjects)
