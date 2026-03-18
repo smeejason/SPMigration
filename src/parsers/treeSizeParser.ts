@@ -129,7 +129,7 @@ function cellText(value: unknown): string {
 // TreeSize exports can use different column name conventions across versions.
 // We try several common variants.
 const PATH_COLS = ['Full Path', 'Path', 'Folder', 'Directory', 'Name', 'Share', 'Drive', 'Shared Drive']
-const SIZE_COLS = ['Size', 'Size (Bytes)', 'Allocated', 'Size in Bytes', 'Total Size', 'Used Space']
+const SIZE_COLS = ['Size', 'Size (Bytes)', 'Allocated', 'Size in Bytes', 'Total Size', 'Used Space', 'Size on Disk', 'Logical Size', 'Physical Size', 'Disk Usage', 'Space Used']
 const FILES_COLS = ['Files', '# Files', 'File Count', 'Number of Files', 'Total Files']
 const FOLDERS_COLS = ['Folders', '# Folders', 'Subfolder Count', 'Subfolders', 'Total Folders']
 const DATE_COLS = ['Last Change', 'Last Modified', 'Modified', 'Date Modified', 'Last Accessed']
@@ -278,6 +278,23 @@ function buildTree(rows: ParsedTreeSizeRow[]): TreeNode {
 
   // ── Identify root(s) — nodes with no parent ───────────────────────────────
   const rootNodes = [...nodeMap.values()].filter((n) => !hasParent.has(n.path))
+
+  // ── Pass 4: roll up sizes from children into ancestor nodes that have no
+  // own row in the export (sizeBytes === 0).  TreeSize doesn't always include
+  // an explicit row for every intermediate directory, so inferred nodes would
+  // otherwise show "—" on the map page even though their subtree has data.
+  function rollUpSizes(node: TreeNode): void {
+    for (const child of node.children) rollUpSizes(child)
+    if (node.sizeBytes === 0 && node.children.length > 0) {
+      const childSum = node.children.reduce((s, c) => s + c.sizeBytes, 0)
+      if (childSum > 0) {
+        node.sizeBytes = childSum
+        if (node.fileCount === 0)
+          node.fileCount = node.children.reduce((s, c) => s + c.fileCount, 0)
+      }
+    }
+  }
+  for (const root of rootNodes) rollUpSizes(root)
 
   if (rootNodes.length === 1) return rootNodes[0]
 

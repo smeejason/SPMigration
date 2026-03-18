@@ -121,7 +121,7 @@ export function renderMappingPanel(container: HTMLElement): void {
           <span class="tch-col">TOTAL SIZE</span>
           ${_isOneDriveProject ? '<span class="tch-col">RECYCLE BIN</span>' : ''}
           <span class="tch-col">FILES</span>
-          ${_isOneDriveProject ? '<span class="tch-col">MIGRATE SIZE</span>' : ''}
+          <span class="tch-col">MIGRATE SIZE</span>
         </div>
         <div id="mapping-tree" class="mapping-tree"></div>
         <div id="mapping-search-results" class="mapping-tree" style="display:none"></div>
@@ -346,12 +346,10 @@ function createMappingNodeEl(node: TreeNode, targetEl: HTMLElement, isRoot = fal
 
   row.appendChild(colFiles)
 
-  if (_isOneDriveProject) {
-    const colMigrate = document.createElement('span')
-    colMigrate.className = 'tree-col tree-col-migrate'
-    colMigrate.textContent = migrateBytes > 0 ? formatBytes(migrateBytes) : '—'
-    row.appendChild(colMigrate)
-  }
+  const colMigrate = document.createElement('span')
+  colMigrate.className = 'tree-col tree-col-migrate'
+  colMigrate.textContent = migrateBytes > 0 ? formatBytes(migrateBytes) : '—'
+  row.appendChild(colMigrate)
 
   li.appendChild(row)
 

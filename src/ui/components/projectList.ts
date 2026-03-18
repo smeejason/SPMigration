@@ -1,5 +1,6 @@
 import { getProjects, deleteProject, loadProjectTree, loadProjectMappings } from '../../graph/projectService'
 import { setState, getState } from '../../state/store'
+import { getCurrentUser } from '../../auth/authService'
 import type { MigrationProject } from '../../types'
 
 export async function renderProjectList(container: HTMLElement): Promise<void> {
@@ -12,7 +13,14 @@ async function loadProjects(container: HTMLElement): Promise<void> {
   try {
     const allProjects = await getProjects()
     setState({ projects: allProjects })
-    renderProjectCards(container, allProjects)
+    const currentUser = getCurrentUser()
+    const userEmail = currentUser?.mail?.toLowerCase() ?? ''
+    const myProjects = userEmail
+      ? allProjects.filter((p) =>
+          p.owners.some((o) => o.email.toLowerCase() === userEmail)
+        )
+      : allProjects
+    renderProjectCards(container, myProjects)
   } catch (err) {
     const isConfigMissing = !import.meta.env.VITE_SP_SITE_ID
     container.innerHTML = `
@@ -107,7 +115,6 @@ function projectCardHtml(p: MigrationProject): string {
     : stats.treeData ? formatBytes(stats.treeData.sizeBytes) : '—'
   const mappingCount = stats.mappingCount ?? (stats.mappings ?? []).length
   const modified = p.lastModified ? formatDate(p.lastModified) : '—'
-  const statusClass = p.status.toLowerCase().replace(' ', '-')
   const isOneDrive = (p.type ?? 'SharePoint') === 'OneDrive'
   const ownerNames = p.owners.map((o) => escHtml(o.displayName || o.email)).join(', ')
 
@@ -118,9 +125,6 @@ function projectCardHtml(p: MigrationProject): string {
         <div class="project-card-title-wrap">
           <h3 class="project-name">${escHtml(p.title)}</h3>
           ${p.description ? `<p class="project-desc">${escHtml(p.description)}</p>` : ''}
-        </div>
-        <div class="project-card-badges">
-          <span class="status-badge status-${statusClass}">${escHtml(p.status)}</span>
         </div>
       </div>
       <div class="project-stats">
