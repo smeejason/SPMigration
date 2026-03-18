@@ -187,7 +187,7 @@ function odAccessBadge(m: MigrationMapping): string {
 // ─── Check Permissions ────────────────────────────────────────────────────────
 
 async function runCheckPermissions(container: HTMLElement): Promise<void> {
-  const matchedMappings = getState().mappings.filter(m => m.matchStatus === 'matched' && m.targetSite?.id)
+  const matchedMappings = getState().mappings.filter(m => m.targetSite?.id)
   if (matchedMappings.length === 0) return
 
   const btnCheck = container.querySelector<HTMLButtonElement>('#btn-check-perms')!
@@ -262,7 +262,7 @@ async function runGrantAccess(container: HTMLElement): Promise<void> {
     return
   }
 
-  const matchedMappings = state.mappings.filter(m => m.matchStatus === 'matched' && m.targetSite?.id)
+  const matchedMappings = state.mappings.filter(m => m.targetSite?.id)
   if (matchedMappings.length === 0) return
 
   const btnCheck = container.querySelector<HTMLButtonElement>('#btn-check-perms')!
