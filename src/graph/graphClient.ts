@@ -279,60 +279,61 @@ export async function findUserForOneDrive(displayName: string): Promise<{
   status: 'matched' | 'not-found' | 'ambiguous' | 'error'
   candidates: AppUser[]
 }> {
+  const escaped = displayName.replace(/'/g, "''")
+  const nameLower = displayName.toLowerCase()
+
+  // ── Strategy 1: exact $filter (requires User.ReadBasic.All) ──────────────
   try {
-    // Exact match
-    const exact = await client()
+    const res = await client()
       .api('/users')
-      .filter(`displayName eq '${displayName.replace(/'/g, "''")}'`)
+      .filter(`displayName eq '${escaped}'`)
       .select('id,displayName,mail,userPrincipalName')
       .top(5)
       .get() as { value: GraphUser[] }
 
-    const exactUsers = (exact.value ?? []).map(mapGraphUser)
-    if (exactUsers.length === 1) return { user: exactUsers[0], status: 'matched', candidates: [] }
-    if (exactUsers.length > 1) return { user: null, status: 'ambiguous', candidates: exactUsers }
+    const users = (res.value ?? []).map(mapGraphUser)
+    if (users.length === 1) return { user: users[0], status: 'matched', candidates: [] }
+    if (users.length > 1)  return { user: null, status: 'ambiguous', candidates: users }
+    // 0 results — fall through to $search
+  } catch { /* permission denied or unsupported — try next */ }
 
-    // Broad search using ConsistencyLevel + $search
-    try {
-      const broad = await client()
-        .api('/users')
-        .header('ConsistencyLevel', 'eventual')
-        .query({ $search: `"displayName:${displayName}"`, $count: 'true' })
-        .select('id,displayName,mail,userPrincipalName')
-        .top(5)
-        .get() as { value: GraphUser[] }
+  // ── Strategy 2: $search with ConsistencyLevel ─────────────────────────────
+  try {
+    const res = await client()
+      .api('/users')
+      .header('ConsistencyLevel', 'eventual')
+      .query({ $search: `"displayName:${displayName}"`, $count: 'true' })
+      .select('id,displayName,mail,userPrincipalName')
+      .top(5)
+      .get() as { value: GraphUser[] }
 
-      const broadUsers = (broad.value ?? []).map(mapGraphUser)
-      if (broadUsers.length === 0) return { user: null, status: 'not-found', candidates: [] }
+    const users = (res.value ?? []).map(mapGraphUser)
+    if (users.length === 0) return { user: null, status: 'not-found', candidates: [] }
 
-      // Prefer case-insensitive exact display name match from broad results
-      const nameMatch = broadUsers.find(
-        (u) => u.displayName.toLowerCase() === displayName.toLowerCase()
-      )
-      if (nameMatch) return { user: nameMatch, status: 'matched', candidates: [] }
-      if (broadUsers.length === 1) return { user: broadUsers[0], status: 'matched', candidates: [] }
-      return { user: null, status: 'ambiguous', candidates: broadUsers }
-    } catch {
-      // Some tenants don't support $search — fall back to startsWith
-      const prefix = displayName.split(' ')[0]
-      const fallback = await client()
-        .api('/users')
-        .filter(`startsWith(displayName,'${prefix.replace(/'/g, "''")}')`)
-        .select('id,displayName,mail,userPrincipalName')
-        .top(10)
-        .get() as { value: GraphUser[] }
+    const exact = users.find(u => u.displayName.toLowerCase() === nameLower)
+    if (exact) return { user: exact, status: 'matched', candidates: [] }
+    if (users.length === 1) return { user: users[0], status: 'matched', candidates: [] }
+    return { user: null, status: 'ambiguous', candidates: users }
+  } catch { /* unsupported or permission denied — try next */ }
 
-      const fallbackUsers = (fallback.value ?? []).map(mapGraphUser)
-      const match = fallbackUsers.find(
-        (u) => u.displayName.toLowerCase() === displayName.toLowerCase()
-      )
-      if (match) return { user: match, status: 'matched', candidates: [] }
-      if (fallbackUsers.length === 0) return { user: null, status: 'not-found', candidates: [] }
-      return { user: null, status: 'ambiguous', candidates: fallbackUsers.slice(0, 5) }
-    }
-  } catch (err) {
-    return { user: null, status: 'error', candidates: [] }
-  }
+  // ── Strategy 3: startsWith $filter ───────────────────────────────────────
+  try {
+    const prefix = displayName.split(' ')[0]
+    const res = await client()
+      .api('/users')
+      .filter(`startsWith(displayName,'${prefix.replace(/'/g, "''")}')`)
+      .select('id,displayName,mail,userPrincipalName')
+      .top(10)
+      .get() as { value: GraphUser[] }
+
+    const users = (res.value ?? []).map(mapGraphUser)
+    const exact = users.find(u => u.displayName.toLowerCase() === nameLower)
+    if (exact) return { user: exact, status: 'matched', candidates: [] }
+    if (users.length === 0) return { user: null, status: 'not-found', candidates: [] }
+    return { user: null, status: 'ambiguous', candidates: users.slice(0, 5) }
+  } catch { /* all strategies exhausted */ }
+
+  return { user: null, status: 'error', candidates: [] }
 }
 
 function mapGraphUser(u: GraphUser): AppUser {
