@@ -8,6 +8,7 @@ import type {
   GraphSite,
   GraphDrive,
   GraphUser,
+  GraphPerson,
   MigrationMapping,
   OneDriveUserMapping,
 } from '../types'
@@ -78,18 +79,30 @@ export async function getSiteDrives(siteId: string): Promise<SharePointDrive[]> 
 
 export async function searchUsers(query: string): Promise<AppUser[]> {
   if (!query.trim()) return []
-  const response = await client()
-    .api('/users')
-    .filter(`startsWith(displayName,'${query}') or startsWith(userPrincipalName,'${query}')`)
-    .select('id,displayName,mail,userPrincipalName')
-    .top(10)
-    .get() as { value: GraphUser[] }
-  return (response.value ?? []).map((u) => ({
-    id: u.id,
-    displayName: u.displayName,
-    mail: u.mail ?? u.userPrincipalName,
-    userPrincipalName: u.userPrincipalName,
-  }))
+
+  // Strategy 1: /users with startsWith (requires User.ReadBasic.All)
+  try {
+    const response = await client()
+      .api('/users')
+      .filter(`startsWith(displayName,'${query}') or startsWith(userPrincipalName,'${query}')`)
+      .select('id,displayName,mail,userPrincipalName')
+      .top(10)
+      .get() as { value: GraphUser[] }
+    return (response.value ?? []).map(mapGraphUser)
+  } catch { /* fall through to People API */ }
+
+  // Strategy 2: /me/people search (requires only People.Read)
+  try {
+    const response = await client()
+      .api('/me/people')
+      .query({ $search: `"${query}"` })
+      .select('id,displayName,scoredEmailAddresses,userPrincipalName,personType')
+      .top(10)
+      .get() as { value: GraphPerson[] }
+    return (response.value ?? [])
+      .filter(p => p.personType?.subclass === 'OrganizationUser')
+      .map(mapPersonToUser)
+  } catch { return [] }
 }
 
 // ─── SharePoint personal site helpers ─────────────────────────────────────────
@@ -331,6 +344,25 @@ export async function findUserForOneDrive(displayName: string): Promise<{
     if (exact) return { user: exact, status: 'matched', candidates: [] }
     if (users.length === 0) return { user: null, status: 'not-found', candidates: [] }
     return { user: null, status: 'ambiguous', candidates: users.slice(0, 5) }
+  } catch { /* fall through to People API */ }
+
+  // ── Strategy 4: /me/people search (requires only People.Read) ────────────
+  try {
+    const res = await client()
+      .api('/me/people')
+      .query({ $search: `"${displayName}"` })
+      .select('id,displayName,scoredEmailAddresses,userPrincipalName,personType')
+      .top(10)
+      .get() as { value: GraphPerson[] }
+
+    const users = (res.value ?? [])
+      .filter(p => p.personType?.subclass === 'OrganizationUser')
+      .map(mapPersonToUser)
+    const exact = users.find(u => u.displayName.toLowerCase() === nameLower)
+    if (exact) return { user: exact, status: 'matched', candidates: [] }
+    if (users.length === 0) return { user: null, status: 'not-found', candidates: [] }
+    if (users.length === 1) return { user: users[0], status: 'matched', candidates: [] }
+    return { user: null, status: 'ambiguous', candidates: users.slice(0, 5) }
   } catch { /* all strategies exhausted */ }
 
   return { user: null, status: 'error', candidates: [] }
@@ -338,6 +370,11 @@ export async function findUserForOneDrive(displayName: string): Promise<{
 
 function mapGraphUser(u: GraphUser): AppUser {
   return { id: u.id, displayName: u.displayName, mail: u.mail ?? u.userPrincipalName, userPrincipalName: u.userPrincipalName }
+}
+
+function mapPersonToUser(p: GraphPerson): AppUser {
+  const mail = p.scoredEmailAddresses?.[0]?.address ?? p.userPrincipalName ?? ''
+  return { id: p.id, displayName: p.displayName, mail, userPrincipalName: p.userPrincipalName ?? mail }
 }
 
 // ─── Site creation ────────────────────────────────────────────────────────────

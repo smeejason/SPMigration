@@ -224,6 +224,14 @@ export interface GraphUser {
   userPrincipalName: string
 }
 
+export interface GraphPerson {
+  id: string
+  displayName: string
+  scoredEmailAddresses?: Array<{ address: string }>
+  userPrincipalName?: string
+  personType?: { class: string; subclass: string }
+}
+
 export interface GraphListItem {
   id: string
   fields: {
