@@ -230,7 +230,7 @@ function createAutoMapNodeEl(
   const hasChildren = node.children.length > 0
   const isFolder = !node.name.includes('*')
 
-  const autoMapping = existingMappings.find(m => m.id === node.path && m.matchStatus !== undefined)
+  const autoMapping = existingMappings.find(m => m.id === node.path && m.matchStatus === 'matched')
   const manualMapping = existingMappings.find(m => m.id === node.path && m.matchStatus === undefined && !!(m.targetSite || m.targetDrive || m.plannedSite))
 
   const row = document.createElement('div')
@@ -276,17 +276,11 @@ function createAutoMapNodeEl(
     mapBadge.className = 'automap-map-badge'
   }
 
-  // Size
-  const sizeEl = document.createElement('span')
-  sizeEl.className = 'automap-size'
-  if (node.sizeBytes > 0) sizeEl.textContent = formatBytes(node.sizeBytes)
-
   row.appendChild(toggleBtn)
   row.appendChild(iconWrap)
   row.appendChild(nameEl)
   row.appendChild(levelBadge)
   row.appendChild(mapBadge)
-  row.appendChild(sizeEl)
   li.appendChild(row)
 
   // Level selection on row click
@@ -625,12 +619,6 @@ function wirePeoplePicker(
   })
 }
 
-function formatBytes(bytes: number): string {
-  if (!bytes || bytes <= 0) return ''
-  const units = ['B', 'KB', 'MB', 'GB', 'TB']
-  const i = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1)
-  return `${(bytes / Math.pow(1024, i)).toFixed(1)} ${units[i]}`
-}
 
 function escHtml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
@@ -672,7 +660,6 @@ function injectAutoMapStyles(): void {
     .automap-level-badge { font-size: 0.68rem; font-weight: 700; background: var(--color-surface-alt);
       color: var(--color-text-muted); border: 1px solid var(--color-border);
       padding: 1px 5px; border-radius: 10px; flex-shrink: 0; white-space: nowrap; }
-    .automap-size { font-size: 0.75rem; color: var(--color-text-muted); white-space: nowrap; flex-shrink: 0; }
     .automap-map-badge { font-size: 0.7rem; font-weight: 700; flex-shrink: 0;
       padding: 1px 8px; border-radius: 10px; min-width: 52px; text-align: center; }
     .map-badge--auto   { background: #dff6dd; color: #107c10; }

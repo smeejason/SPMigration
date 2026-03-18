@@ -285,11 +285,15 @@ function createMappingNodeEl(node: TreeNode, targetEl: HTMLElement, isRoot = fal
   warnRegistry.set(node.path, warnEl)
 
   // Helper: apply/remove the mapped visual state on this row
-  function applyMappedState(isMapped: boolean, siteName?: string, isPlanned = false): void {
+  function applyMappedState(isMapped: boolean, siteName?: string, isPlanned = false, mappingType?: 'auto' | 'manual'): void {
     if (isFolder) {
-      iconWrap.innerHTML = isMapped
-        ? '📁<span class="mapped-folder-badge" aria-hidden="true">✓</span>'
-        : '📁'
+      let badgeHtml = ''
+      if (isMapped && mappingType === 'auto') {
+        badgeHtml = '<span class="mapped-folder-badge mapped-folder-badge--auto" title="Auto-mapped">A</span>'
+      } else if (isMapped && mappingType === 'manual') {
+        badgeHtml = '<span class="mapped-folder-badge mapped-folder-badge--manual" title="Manually mapped">M</span>'
+      }
+      iconWrap.innerHTML = `📁${badgeHtml}`
       iconWrap.className = `tree-icon-wrap${isMapped ? ' tree-icon-wrap--mapped' : ''}`
     } else {
       iconWrap.textContent = '📄'
@@ -310,7 +314,9 @@ function createMappingNodeEl(node: TreeNode, targetEl: HTMLElement, isRoot = fal
   const isMappedInitially = !!(existingMapping?.targetSite || existingMapping?.plannedSite)
   const initialSiteName = existingMapping?.targetSite?.displayName ?? existingMapping?.plannedSite?.displayName
   const isPlannedInitially = !existingMapping?.targetSite && !!existingMapping?.plannedSite
-  applyMappedState(isMappedInitially || isAncestorMapped, initialSiteName, isPlannedInitially)
+  const initialMappingType: 'auto' | 'manual' | undefined =
+    existingMapping?.matchStatus === 'matched' ? 'auto' : (isMappedInitially ? 'manual' : undefined)
+  applyMappedState(isMappedInitially || isAncestorMapped, initialSiteName, isPlannedInitially, initialMappingType)
 
   // Column data cells
   const rbInfo = _isOneDriveProject ? getRecycleBin(node) : { sizeBytes: 0, fileCount: 0 }
@@ -397,7 +403,7 @@ function createMappingNodeEl(node: TreeNode, targetEl: HTMLElement, isRoot = fal
 
       openTargetPanel(targetEl, node, (siteName, isPlanned) => {
         const isSelfMapped = !!siteName
-        applyMappedState(isSelfMapped || isAncestorMapped, siteName ?? undefined, isPlanned)
+        applyMappedState(isSelfMapped || isAncestorMapped, siteName ?? undefined, isPlanned, isSelfMapped ? 'manual' : undefined)
         updateDescendantHighlights(li, isSelfMapped || isAncestorMapped)
         _statsRefreshCallback?.()
       })
@@ -1454,11 +1460,13 @@ function injectMappingStyles(): void {
     .tree-icon-wrap { position: relative; display: inline-flex; flex-shrink: 0; line-height: 1; }
     .mapped-folder-badge {
       position: absolute; bottom: -2px; right: -5px;
-      font-size: 0.48rem; font-style: normal; font-weight: 700;
-      background: #107c10; color: white; border-radius: 50%;
-      width: 9px; height: 9px; display: flex; align-items: center; justify-content: center;
+      font-size: 0.45rem; font-style: normal; font-weight: 800;
+      border-radius: 50%; width: 9px; height: 9px;
+      display: flex; align-items: center; justify-content: center;
       border: 1px solid white;
     }
+    .mapped-folder-badge--auto   { background: #107c10; color: white; }
+    .mapped-folder-badge--manual { background: #0078d4; color: white; }
 
     /* Mapped row highlighting */
     .mapping-row--mapped { background: rgba(16, 124, 16, 0.07); }
