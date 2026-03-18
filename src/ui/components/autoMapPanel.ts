@@ -31,6 +31,7 @@ export function renderAutoMapPanel(container: HTMLElement): void {
   const topNodes = !tree.path ? tree.children : [tree]
   // Phase 1 results are stored in state.mappings with matchStatus set
   const existingMappings = state.mappings.filter(m => m.matchStatus !== undefined)
+  const allMappings = state.mappings
   const phase1Done = existingMappings.length > 0
   const hasMatchedUsers = existingMappings.some(m => m.matchStatus === 'matched')
   const totalAtLevel = selectedLevel >= 0 ? countNodesAtDepth(tree, selectedLevel) : 0
@@ -125,7 +126,7 @@ export function renderAutoMapPanel(container: HTMLElement): void {
   }
 
   for (const node of topNodes) {
-    ul.appendChild(createAutoMapNodeEl(node, onLevelSelect, existingMappings, true))
+    ul.appendChild(createAutoMapNodeEl(node, onLevelSelect, allMappings, true))
   }
   treeWrap.appendChild(ul)
 
@@ -229,8 +230,11 @@ function createAutoMapNodeEl(
   const hasChildren = node.children.length > 0
   const isFolder = !node.name.includes('*')
 
+  const autoMapping = existingMappings.find(m => m.id === node.path && m.matchStatus !== undefined)
+  const manualMapping = existingMappings.find(m => m.id === node.path && m.matchStatus === undefined && !!(m.targetSite || m.targetDrive || m.plannedSite))
+
   const row = document.createElement('div')
-  row.className = 'automap-row'
+  row.className = `automap-row${autoMapping || manualMapping ? ' automap-row--mapped' : ''}`
   row.dataset.path = node.path
   row.dataset.depth = String(node.depth)
 
@@ -259,12 +263,26 @@ function createAutoMapNodeEl(
   levelBadge.className = 'automap-level-badge'
   levelBadge.textContent = `L${node.depth + 1}`
 
-  // Status icon (from existing mappings or updated by Phase 1)
+  // Map-type icon: ⚡ = auto-mapped, ✏ = manually mapped
+  const mapTypeIcon = document.createElement('span')
+  mapTypeIcon.dataset.mapTypeFor = node.path
+  if (autoMapping) {
+    mapTypeIcon.className = 'automap-map-type-icon map-type-auto'
+    mapTypeIcon.textContent = '⚡'
+    mapTypeIcon.title = 'Auto-mapped'
+  } else if (manualMapping) {
+    mapTypeIcon.className = 'automap-map-type-icon map-type-manual'
+    mapTypeIcon.textContent = '✏'
+    mapTypeIcon.title = 'Manually mapped'
+  } else {
+    mapTypeIcon.className = 'automap-map-type-icon'
+  }
+
+  // Status icon (auto-map match result: ✓ ✗ ? ⚠ ⏳)
   const statusIcon = document.createElement('span')
   statusIcon.className = 'automap-status-icon'
   statusIcon.dataset.statusFor = node.path
-  const existingMapping = existingMappings.find(m => m.id === node.path)
-  if (existingMapping?.matchStatus) applyStatusIcon(statusIcon, existingMapping.matchStatus)
+  if (autoMapping?.matchStatus) applyStatusIcon(statusIcon, autoMapping.matchStatus)
 
   // Size
   const sizeEl = document.createElement('span')
@@ -275,6 +293,7 @@ function createAutoMapNodeEl(
   row.appendChild(iconWrap)
   row.appendChild(nameEl)
   row.appendChild(levelBadge)
+  row.appendChild(mapTypeIcon)
   row.appendChild(statusIcon)
   row.appendChild(sizeEl)
   li.appendChild(row)
@@ -299,7 +318,7 @@ function createAutoMapNodeEl(
           const childUl = document.createElement('ul')
           childUl.className = 'tree-list tree-children'
           for (const child of node.children) {
-            childUl.appendChild(createAutoMapNodeEl(child, onLevelSelect, getState().mappings.filter(m => m.matchStatus !== undefined)))
+            childUl.appendChild(createAutoMapNodeEl(child, onLevelSelect, getState().mappings))
           }
           li.appendChild(childUl)
           childrenLoaded = true
@@ -392,6 +411,15 @@ async function runPhase1(
       // Update DOM status icon directly
       const statusEl = container.querySelector(`[data-status-for="${CSS.escape(node.path)}"]`) as HTMLElement | null
       if (statusEl) applyStatusIcon(statusEl, matchStatus)
+      // Update map-type icon and row background
+      const mapTypeEl = container.querySelector(`[data-map-type-for="${CSS.escape(node.path)}"]`) as HTMLElement | null
+      if (mapTypeEl) {
+        mapTypeEl.className = 'automap-map-type-icon map-type-auto'
+        mapTypeEl.textContent = '⚡'
+        mapTypeEl.title = 'Auto-mapped'
+      }
+      const rowEl = container.querySelector(`.automap-row[data-path="${CSS.escape(node.path)}"]`) as HTMLElement | null
+      if (rowEl) rowEl.classList.add('automap-row--mapped')
     }))
 
     // Merge accumulated into state.mappings: keep manual entries (no matchStatus), replace Phase 1 entries
@@ -658,6 +686,7 @@ function injectAutoMapStyles(): void {
     .automap-node--root > .automap-row { font-weight: 600; }
     .automap-row { display: flex; align-items: center; gap: 6px; padding: 5px 8px; border-radius: 4px;
       cursor: pointer; user-select: none; transition: background 0.1s; }
+    .automap-row--mapped { background: rgba(16, 124, 16, 0.06); }
     .automap-row:hover { background: var(--color-primary-light); }
     .automap-toggle-btn { background: none; border: none; cursor: pointer; width: 16px;
       font-size: 0.65rem; color: var(--color-text-muted); padding: 0; flex-shrink: 0; }
@@ -669,6 +698,9 @@ function injectAutoMapStyles(): void {
       color: var(--color-text-muted); border: 1px solid var(--color-border);
       padding: 1px 5px; border-radius: 10px; flex-shrink: 0; white-space: nowrap; }
     .automap-size { font-size: 0.75rem; color: var(--color-text-muted); white-space: nowrap; flex-shrink: 0; }
+    .automap-map-type-icon { font-size: 0.75rem; flex-shrink: 0; min-width: 14px; text-align: center; }
+    .map-type-auto { color: #107c10; }
+    .map-type-manual { color: #0078d4; }
     .automap-status-icon { font-size: 0.8rem; flex-shrink: 0; min-width: 14px; text-align: center; }
     .status-matched { color: #107c10; }
     .status-notfound { color: #a4262c; }
