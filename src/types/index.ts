@@ -78,6 +78,7 @@ export interface TreeNode {
   folderCount: number
   lastModified?: Date
   lastAccessed?: Date
+  owner?: string        // folder owner from TreeSize export; may be "Access is denied."
   children: TreeNode[]
 }
 
@@ -90,6 +91,7 @@ export interface ParsedTreeSizeRow {
   percentOfParent?: number
   lastModified?: Date
   lastAccessed?: Date
+  owner?: string        // folder owner; may be "Access is denied." when unreadable
 }
 
 // ─── OneDrive Auto Map ────────────────────────────────────────────────────────

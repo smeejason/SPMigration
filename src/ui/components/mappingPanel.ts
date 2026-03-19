@@ -277,6 +277,17 @@ function createMappingNodeEl(node: TreeNode, targetEl: HTMLElement, isRoot = fal
   const existingMapping = getState().mappings.find((m) => m.sourceNode.path === node.path)
   tagRegistry.set(node.path, tagEl)
 
+  // Access-denied icon
+  const isAccessDenied = node.owner?.trim().toLowerCase() === 'access is denied.'
+  if (isAccessDenied) {
+    row.classList.add('mapping-row--access-denied')
+    nameEl.title = `${node.originalPath}\nOwner: Access is denied.`
+  }
+  const accessDeniedEl = document.createElement('span')
+  accessDeniedEl.className = 'row-access-denied-icon'
+  accessDeniedEl.textContent = isAccessDenied ? '🔒' : ''
+  accessDeniedEl.title = isAccessDenied ? 'Access is denied — owner could not be read' : ''
+
   // Double-mapped warning icon
   const warnEl = document.createElement('span')
   warnEl.className = 'row-warn-icon'
@@ -333,6 +344,7 @@ function createMappingNodeEl(node: TreeNode, targetEl: HTMLElement, isRoot = fal
   row.appendChild(toggleBtn)
   row.appendChild(iconWrap)
   row.appendChild(nameEl)
+  row.appendChild(accessDeniedEl)
   row.appendChild(warnEl)
   row.appendChild(tagEl)
   row.appendChild(colTotal)
@@ -1480,6 +1492,13 @@ function injectMappingStyles(): void {
     .tree-col-mapped--planned { color: #7a5900; }
     .tree-col-mapped--empty { color: var(--color-text-muted); font-weight: 400; }
     .tch-col-mapped { width: 140px; }
+    /* Access-denied row highlight and icon */
+    .mapping-row--access-denied { background: rgba(168, 0, 0, 0.06); }
+    .mapping-row--access-denied:hover { background: rgba(168, 0, 0, 0.12); }
+    .mapping-row--access-denied .tree-name { color: #a80000; }
+    .row-access-denied-icon { font-size: 0.8rem; flex-shrink: 0; min-width: 14px;
+      cursor: help; line-height: 1; }
+
     /* Double-mapped warning icon on row */
     .row-warn-icon { font-size: 0.7rem; color: #d83b01; flex-shrink: 0; min-width: 12px;
       cursor: help; line-height: 1; }

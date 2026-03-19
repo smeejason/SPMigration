@@ -134,6 +134,7 @@ const FILES_COLS = ['Files', '# Files', 'File Count', 'Number of Files', 'Total 
 const FOLDERS_COLS = ['Folders', '# Folders', 'Subfolder Count', 'Subfolders', 'Total Folders']
 const DATE_COLS = ['Last Change', 'Last Modified', 'Modified', 'Date Modified', 'Last Accessed']
 const ACCESSED_COLS = ['Last Accessed', 'Accessed', 'Date Accessed', 'Last Access']
+const OWNER_COLS = ['Owner', 'Folder Owner', 'File Owner', 'User']
 
 function findCol(record: Record<string, string>, candidates: string[]): string {
   for (const c of candidates) {
@@ -184,6 +185,7 @@ function normalizeRow(record: Record<string, string>): ParsedTreeSizeRow {
     folderCount: parseInt(findCol(record, FOLDERS_COLS).replace(/[^0-9]/g, '') || '0', 10),
     lastModified: parseDate(findCol(record, DATE_COLS)),
     lastAccessed: parseDate(findCol(record, ACCESSED_COLS)),
+    owner: findCol(record, OWNER_COLS) || undefined,
   }
 }
 
@@ -254,6 +256,7 @@ function buildTree(rows: ParsedTreeSizeRow[]): TreeNode {
       folderCount: row?.folderCount ?? 0,
       lastModified: row?.lastModified,
       lastAccessed: row?.lastAccessed,
+      owner: row?.owner,
       children: [],
     })
   }
