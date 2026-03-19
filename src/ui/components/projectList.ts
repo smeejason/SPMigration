@@ -125,11 +125,14 @@ function projectCardHtml(p: MigrationProject): string {
 
   return `
     <div class="project-card" data-project-id="${p.id}">
-      <div class="project-type-logo" title="${isOneDrive ? 'OneDrive' : 'SharePoint'}">${isOneDrive ? ONEDRIVE_LOGO : SHAREPOINT_LOGO}</div>
       <div class="project-card-header">
         <div class="project-card-title-wrap">
           <h3 class="project-name">${escHtml(p.title)}</h3>
           ${p.description ? `<p class="project-desc">${escHtml(p.description)}</p>` : ''}
+        </div>
+        <div class="project-type-logo">
+          ${isOneDrive ? ONEDRIVE_LOGO : SHAREPOINT_LOGO}
+          <span class="project-type-label">${isOneDrive ? 'OneDrive' : 'SharePoint'}</span>
         </div>
       </div>
       <div class="project-stats">
@@ -174,20 +177,19 @@ function injectProjectStyles(): void {
       align-items: start;
     }
     .project-card {
-      position: relative;
       background: white; border: 1px solid var(--color-border); border-radius: 8px;
       padding: 20px; transition: box-shadow 0.15s; display: flex; flex-direction: column; gap: 10px;
     }
     .project-card:hover { box-shadow: var(--shadow); }
-    .project-type-logo {
-      position: absolute; top: 14px; right: 16px;
-      width: 52px; height: 52px; opacity: 0.92; pointer-events: none;
-    }
-    .project-type-logo svg { width: 100%; height: 100%; }
     .project-card-header {
       display: flex; justify-content: space-between; align-items: flex-start; gap: 12px;
-      padding-right: 64px;
     }
+    .project-type-logo {
+      display: flex; flex-direction: column; align-items: center; gap: 3px;
+      flex-shrink: 0; opacity: 0.9;
+    }
+    .project-type-logo svg { width: 44px; height: 44px; display: block; }
+    .project-type-label { font-size: 0.68rem; color: var(--color-text-muted); font-weight: 500; white-space: nowrap; }
     .project-card-title-wrap { flex: 1; min-width: 0; }
     .project-card-badges { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; flex-shrink: 0; }
     .project-name { font-size: 1.05rem; font-weight: 600; margin-bottom: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
