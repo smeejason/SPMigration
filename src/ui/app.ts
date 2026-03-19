@@ -5,7 +5,7 @@ import { renderProjectList } from './components/projectList'
 import { renderProjectForm } from './components/projectForm'
 import { renderUploadPanel } from './components/uploadPanel'
 import { renderMappingPanel } from './components/mappingPanel'
-import { renderSiteCreator } from './components/siteCreator'
+import { renderSiteTypesPanel } from './components/siteTypesPanel'
 import { renderSummaryPanel } from './components/summaryPanel'
 import { renderAutoMapPanel } from './components/autoMapPanel'
 import { renderReviewPanel } from './components/reviewPanel'
@@ -77,8 +77,8 @@ function projectWorkspaceHtml(projectTitle: string, projectType: string): string
       <button class="tab-btn" data-view="project-review">Review</button>`
     : `
       <button class="tab-btn" data-view="project-upload">Upload</button>
+      <button class="tab-btn" data-view="project-sites">Site Types</button>
       <button class="tab-btn" data-view="project-map">Map</button>
-      <button class="tab-btn" data-view="project-sites">Create Sites</button>
       <button class="tab-btn" data-view="project-summary">Summary</button>
       <button class="tab-btn" data-view="project-review">Review</button>`
   return `
@@ -172,7 +172,7 @@ export function mountApp(root: HTMLElement): void {
       if (view === 'project-upload') renderUploadPanel(panel)
       else if (view === 'project-automap') renderAutoMapPanel(panel)
       else if (view === 'project-map') renderMappingPanel(panel)
-      else if (view === 'project-sites') renderSiteCreator(panel)
+      else if (view === 'project-sites') renderSiteTypesPanel(panel)
       else if (view === 'project-summary') renderSummaryPanel(panel)
       else if (view === 'project-review') void renderReviewPanel(panel)
       setActiveTab(view)

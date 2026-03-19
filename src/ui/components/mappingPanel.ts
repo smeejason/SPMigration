@@ -1,7 +1,7 @@
 import { searchSites, getSiteDrives, saveMappingsFile, searchUsers, getUserDrive, checkUserDriveAccess, grantUserDriveAccess, getUserById } from '../../graph/graphClient'
 import { updateProject, getSpConfig } from '../../graph/projectService'
 import { setState, getState } from '../../state/store'
-import type { TreeNode, MigrationMapping, SharePointSite, SharePointDrive, PlannedSiteTarget, AppUser } from '../../types'
+import type { TreeNode, MigrationMapping, SharePointSite, SharePointDrive, NewSiteConfig, UserRef, SiteType, AppUser } from '../../types'
 
 // Live references to mapping tag elements so we can update them without re-rendering
 const tagRegistry = new Map<string, HTMLSpanElement>()
@@ -486,7 +486,7 @@ async function openTargetPanel(
       <div class="target-section">
         <div class="sp-tabs-bar">
           <button type="button" class="sp-tab${initialTab === 'existing' ? ' sp-tab--active' : ''}" data-tab="existing">Existing SharePoint Location</button>
-          <button type="button" class="sp-tab${initialTab === 'planned' ? ' sp-tab--active' : ''}" data-tab="planned">Planned SharePoint Location</button>
+          <button type="button" class="sp-tab${initialTab === 'planned' ? ' sp-tab--active' : ''}" data-tab="planned">New Site</button>
         </div>
 
         <!-- Tab: Existing -->
@@ -521,20 +521,37 @@ async function openTargetPanel(
           </div>
         </div>
 
-        <!-- Tab: Planned -->
+        <!-- Tab: New Site -->
         <div id="tab-planned" class="sp-tab-panel target-section-body--sp"${initialTab !== 'planned' ? ' style="display:none"' : ''}>
-          <p class="form-hint" style="margin:0">Define the SharePoint site that will be created for this content.</p>
+          ${(() => {
+            const siteTypes: SiteType[] = getState().currentProject?.projectData.siteTypes ?? []
+            const ps = existing?.plannedSite
+            const siteTypeOptions = siteTypes.length > 0
+              ? `<div class="form-group">
+                  <label>Start from a site type <span class="hint">(optional)</span></label>
+                  <div class="ns-type-row">
+                    <select id="ns-type-select" class="form-input">
+                      <option value="">— Start blank —</option>
+                      ${siteTypes.map(st => `<option value="${escHtml(st.id)}"${ps?.siteTypeId === st.id ? ' selected' : ''}>${escHtml(st.name)}</option>`).join('')}
+                    </select>
+                    <button type="button" id="btn-ns-apply-type" class="btn btn-secondary btn-sm">Apply</button>
+                  </div>
+                  <small class="form-hint">Applying a type pre-fills the fields below — you can override any of them.</small>
+                </div>`
+              : ''
+            return siteTypeOptions
+          })()}
           <div class="form-group">
             <label>Site Display Name <span class="required">*</span></label>
             <input id="planned-name" type="text" class="form-input" placeholder="e.g. Engineering"
-              value="${escHtml(existing?.plannedSite?.displayName ?? '')}" />
+              value="${escHtml(existing?.plannedSite?.displayName ?? node.name)}" />
           </div>
           <div class="form-group">
             <label>URL Alias <span class="required">*</span></label>
             <div class="alias-row">
               <span class="alias-prefix">.../sites/</span>
               <input id="planned-alias" type="text" class="form-input" placeholder="engineering"
-                value="${escHtml(existing?.plannedSite?.alias ?? '')}" />
+                value="${escHtml(existing?.plannedSite?.alias ?? node.name.toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-').slice(0, 60))}" />
             </div>
             <small class="form-hint">Letters, numbers, and hyphens only.</small>
           </div>
@@ -544,12 +561,24 @@ async function openTargetPanel(
           </div>
           <div class="form-group">
             <label>Template</label>
-            <div class="template-row">
+            <div class="ns-radio-group">
               <label class="radio-label">
-                <input type="radio" name="planned-template" value="team" checked /> Team site (M365 Group)
+                <input type="radio" name="planned-template" value="team"
+                  ${(existing?.plannedSite?.template ?? 'team') === 'team' ? 'checked' : ''} />
+                Team site (M365 Group)
+              </label>
+              <label class="radio-label">
+                <input type="radio" name="planned-template" value="communication"
+                  ${existing?.plannedSite?.template === 'communication' ? 'checked' : ''} />
+                Communication site
               </label>
             </div>
-            <small class="form-hint">Team site support only in Phase 1.</small>
+          </div>
+          <div class="form-group" id="ns-create-team-row" style="${existing?.plannedSite?.template === 'communication' ? 'display:none' : ''}">
+            <label class="checkbox-label">
+              <input type="checkbox" id="ns-create-team" ${existing?.plannedSite?.createTeam ? 'checked' : ''} />
+              Also create a Microsoft Teams team
+            </label>
           </div>
           <div class="form-group">
             <label>Document Library <span class="hint">(optional)</span></label>
@@ -560,6 +589,22 @@ async function openTargetPanel(
             <label>Subfolder Path <span class="hint">(optional)</span></label>
             <input id="planned-folder" type="text" class="form-input" placeholder="e.g. /Migrations/Phase1"
               value="${escHtml(existing?.plannedSite?.folderPath ?? '')}" />
+          </div>
+          <div class="form-group">
+            <label>Owners</label>
+            <div class="ns-people-chips" id="ns-owners-chips"></div>
+            <div class="ns-people-search-wrap">
+              <input id="ns-owners-search" type="text" class="form-input" placeholder="Search people…" autocomplete="off" />
+              <ul id="ns-owners-dropdown" class="ns-people-dropdown" style="display:none"></ul>
+            </div>
+          </div>
+          <div class="form-group">
+            <label>Members</label>
+            <div class="ns-people-chips" id="ns-members-chips"></div>
+            <div class="ns-people-search-wrap">
+              <input id="ns-members-search" type="text" class="form-input" placeholder="Search people…" autocomplete="off" />
+              <ul id="ns-members-dropdown" class="ns-people-dropdown" style="display:none"></ul>
+            </div>
           </div>
           <div class="target-action-row">
             <button type="button" id="btn-save-planned" class="btn btn-primary">Save Mapping</button>
@@ -699,9 +744,29 @@ async function openTargetPanel(
     removeBtn.remove()
   })
 
-  // ── Planned tab logic ─────────────────────────────────────────────────────
+  // ── New Site tab logic ────────────────────────────────────────────────────
   const plannedNameInput = targetEl.querySelector('#planned-name') as HTMLInputElement
   const plannedAliasInput = targetEl.querySelector('#planned-alias') as HTMLInputElement
+
+  // People state — initialised from existing mapping if present
+  const nsOwners: UserRef[] = existing?.plannedSite?.owners ? [...existing.plannedSite.owners] : []
+  const nsMembers: UserRef[] = existing?.plannedSite?.members ? [...existing.plannedSite.members] : []
+  renderNsChips(targetEl, '#ns-owners-chips', nsOwners)
+  renderNsChips(targetEl, '#ns-members-chips', nsMembers)
+  attachNsPeopleSearch(targetEl, '#ns-owners-search', '#ns-owners-dropdown', nsOwners, () => renderNsChips(targetEl, '#ns-owners-chips', nsOwners))
+  attachNsPeopleSearch(targetEl, '#ns-members-search', '#ns-members-dropdown', nsMembers, () => renderNsChips(targetEl, '#ns-members-chips', nsMembers))
+
+  // Template radio → show/hide Teams checkbox
+  targetEl.querySelectorAll<HTMLInputElement>('input[name="planned-template"]').forEach(radio => {
+    radio.addEventListener('change', () => {
+      const teamRow = targetEl.querySelector<HTMLElement>('#ns-create-team-row')
+      if (teamRow) teamRow.style.display = radio.value === 'communication' ? 'none' : ''
+      if (radio.value === 'communication') {
+        const cb = targetEl.querySelector<HTMLInputElement>('#ns-create-team')
+        if (cb) cb.checked = false
+      }
+    })
+  })
 
   plannedNameInput?.addEventListener('input', () => {
     if (plannedAliasInput.dataset.userEdited) return
@@ -710,22 +775,55 @@ async function openTargetPanel(
   })
   plannedAliasInput?.addEventListener('input', () => { plannedAliasInput.dataset.userEdited = '1' })
 
+  // Apply site type button
+  targetEl.querySelector('#btn-ns-apply-type')?.addEventListener('click', () => {
+    const select = targetEl.querySelector<HTMLSelectElement>('#ns-type-select')
+    if (!select?.value) return
+    const siteTypes: SiteType[] = getState().currentProject?.projectData.siteTypes ?? []
+    const st = siteTypes.find(s => s.id === select.value)
+    if (!st) return
+
+    // Pre-fill fields from the site type
+    if (st.defaultLibrary) (targetEl.querySelector('#planned-library') as HTMLInputElement).value = st.defaultLibrary
+    if (st.defaultSubfolder) (targetEl.querySelector('#planned-folder') as HTMLInputElement).value = st.defaultSubfolder
+    const templateRadio = targetEl.querySelector<HTMLInputElement>(`input[name="planned-template"][value="${st.template}"]`)
+    if (templateRadio) { templateRadio.checked = true; templateRadio.dispatchEvent(new Event('change')) }
+    const createTeamCb = targetEl.querySelector<HTMLInputElement>('#ns-create-team')
+    if (createTeamCb) createTeamCb.checked = !!st.createTeam
+
+    // Replace owners / members from type (full replace)
+    nsOwners.splice(0, nsOwners.length, ...st.owners)
+    nsMembers.splice(0, nsMembers.length, ...st.members)
+    renderNsChips(targetEl, '#ns-owners-chips', nsOwners)
+    renderNsChips(targetEl, '#ns-members-chips', nsMembers)
+  })
+
   targetEl.querySelector('#btn-save-planned')?.addEventListener('click', async () => {
     const plannedName = plannedNameInput.value.trim()
     const plannedAlias = plannedAliasInput.value.trim()
     const plannedDesc = (targetEl.querySelector('#planned-desc') as HTMLTextAreaElement).value.trim()
     const plannedLibrary = (targetEl.querySelector('#planned-library') as HTMLInputElement).value.trim()
     const plannedFolder = (targetEl.querySelector('#planned-folder') as HTMLInputElement).value.trim()
+    const template = (targetEl.querySelector<HTMLInputElement>('input[name="planned-template"]:checked'))?.value as 'team' | 'communication' ?? 'team'
+    const createTeam = template === 'team' && !!(targetEl.querySelector<HTMLInputElement>('#ns-create-team')?.checked)
+    const typeSelect = targetEl.querySelector<HTMLSelectElement>('#ns-type-select')
+    const siteTypeId = typeSelect?.value || undefined
+    const siteTypeName = siteTypeId ? typeSelect?.options[typeSelect.selectedIndex]?.text : undefined
 
     if (!plannedName) { plannedNameInput.focus(); return }
 
-    const plannedSite: PlannedSiteTarget = {
+    const plannedSite: NewSiteConfig = {
+      siteTypeId,
+      siteTypeName,
       displayName: plannedName,
       alias: plannedAlias,
-      description: plannedDesc,
-      template: 'team',
-      libraryName: plannedLibrary,
-      folderPath: plannedFolder,
+      description: plannedDesc || undefined,
+      template,
+      libraryName: plannedLibrary || undefined,
+      folderPath: plannedFolder || undefined,
+      createTeam: createTeam || undefined,
+      owners: [...nsOwners],
+      members: [...nsMembers],
     }
 
     const mapping: MigrationMapping = {
@@ -1315,6 +1413,70 @@ function updateDescendantHighlights(parentLi: HTMLLIElement, parentIsMapped: boo
   })
 }
 
+// ─── New Site people picker helpers ───────────────────────────────────────────
+
+function renderNsChips(targetEl: HTMLElement, selector: string, people: UserRef[]): void {
+  const el = targetEl.querySelector<HTMLElement>(selector)
+  if (!el) return
+  el.innerHTML = people.map(p => `
+    <span class="ns-chip">
+      ${escHtml(p.displayName)}
+      <button type="button" class="ns-chip-remove" data-id="${escHtml(p.id)}" title="Remove">✕</button>
+    </span>`).join('')
+  el.querySelectorAll<HTMLButtonElement>('.ns-chip-remove').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const idx = people.findIndex(p => p.id === btn.dataset.id)
+      if (idx !== -1) people.splice(idx, 1)
+      renderNsChips(targetEl, selector, people)
+    })
+  })
+}
+
+function attachNsPeopleSearch(
+  targetEl: HTMLElement,
+  inputSel: string,
+  dropdownSel: string,
+  people: UserRef[],
+  onChange: () => void
+): void {
+  const input = targetEl.querySelector<HTMLInputElement>(inputSel)
+  const dropdown = targetEl.querySelector<HTMLUListElement>(dropdownSel)
+  if (!input || !dropdown) return
+  let timer: ReturnType<typeof setTimeout>
+  input.addEventListener('input', () => {
+    clearTimeout(timer)
+    const q = input.value.trim()
+    if (!q) { dropdown.style.display = 'none'; return }
+    timer = setTimeout(async () => {
+      try {
+        const users = await searchUsers(q)
+        const available = users.filter(u => !people.some(p => p.id === u.id))
+        if (!available.length) { dropdown.style.display = 'none'; return }
+        dropdown.innerHTML = available.map(u => `
+          <li class="ns-person-opt" data-id="${escHtml(u.id)}"
+              data-name="${escHtml(u.displayName)}"
+              data-email="${escHtml(u.mail ?? u.userPrincipalName ?? '')}">
+            <span class="ns-person-name">${escHtml(u.displayName)}</span>
+            <span class="ns-person-email">${escHtml(u.mail ?? u.userPrincipalName ?? '')}</span>
+          </li>`).join('')
+        dropdown.style.display = ''
+        dropdown.querySelectorAll<HTMLLIElement>('.ns-person-opt').forEach(li => {
+          li.addEventListener('click', () => {
+            people.push({ id: li.dataset.id!, displayName: li.dataset.name!, email: li.dataset.email! })
+            input.value = ''
+            dropdown.style.display = 'none'
+            onChange()
+          })
+        })
+      } catch { dropdown.style.display = 'none' }
+    }, 250)
+  })
+  document.addEventListener('click', (e) => {
+    if (!input.contains(e.target as Node) && !dropdown.contains(e.target as Node))
+      dropdown.style.display = 'none'
+  }, { capture: true })
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function collectAtDepth(root: TreeNode, depth: number): TreeNode[] {
@@ -1571,18 +1733,36 @@ function injectMappingStyles(): void {
     .sp-tab:hover { color: var(--color-text); background: var(--color-primary-light); }
     .sp-tab--active { color: var(--color-primary); border-bottom-color: var(--color-primary); font-weight: 600; }
 
-    /* Planned mapping tag */
+    /* Planned / New Site mapping tag */
     .mapping-tag--planned { background: #fff4ce; color: #7a5900; }
 
-    /* Planned form helpers (mirrors siteCreator styles) */
+    /* New Site form helpers */
     .alias-row { display: flex; align-items: center; gap: 0; }
     .alias-prefix { background: var(--color-surface-alt); border: 1px solid var(--color-border);
       border-right: none; padding: 8px 10px; border-radius: 4px 0 0 4px; font-size: 0.85rem;
       color: var(--color-text-muted); white-space: nowrap; }
     .alias-row .form-input { border-radius: 0 4px 4px 0; }
-    .template-row { margin-bottom: 4px; }
-    .radio-label { display: flex; align-items: center; gap: 6px; font-size: 0.88rem; cursor: pointer; }
+    .ns-radio-group { display: flex; flex-direction: column; gap: 6px; margin-bottom: 4px; }
+    .radio-label, .checkbox-label { display: flex; align-items: center; gap: 6px; font-size: 0.88rem; cursor: pointer; }
     .required { color: var(--color-danger); }
+    .ns-type-row { display: flex; gap: 8px; align-items: center; }
+    .ns-type-row .form-input { flex: 1; }
+
+    /* People chips */
+    .ns-people-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; min-height: 0; }
+    .ns-chip { display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px 3px 10px;
+      background: #deecf9; color: #005a9e; border-radius: 12px; font-size: 0.8rem; font-weight: 500; }
+    .ns-chip-remove { background: none; border: none; cursor: pointer; color: inherit;
+      font-size: 0.75rem; padding: 0 1px; line-height: 1; opacity: 0.7; }
+    .ns-chip-remove:hover { opacity: 1; }
+    .ns-people-search-wrap { position: relative; }
+    .ns-people-dropdown { position: absolute; top: 100%; left: 0; right: 0; background: white;
+      border: 1px solid var(--color-border); border-radius: 4px; box-shadow: var(--shadow);
+      z-index: 20; list-style: none; padding: 0; margin: 2px 0 0; max-height: 160px; overflow-y: auto; }
+    .ns-person-opt { padding: 7px 12px; cursor: pointer; display: flex; flex-direction: column; gap: 1px; }
+    .ns-person-opt:hover { background: var(--color-surface-alt); }
+    .ns-person-name { font-size: 0.875rem; font-weight: 500; }
+    .ns-person-email { font-size: 0.75rem; color: var(--color-text-muted); }
 
     .target-section-title { font-size: 0.9rem; font-weight: 600; color: var(--color-text); }
     .target-section-chevron { font-size: 0.7rem; color: var(--color-text-muted); flex-shrink: 0; }

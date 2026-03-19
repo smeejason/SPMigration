@@ -51,6 +51,7 @@ export interface ProjectData {
   treeData?: TreeNode | null    // LEGACY: pre-upload-history projects store tree here
   mappings?: MigrationMapping[]
   mappingCount?: number         // denormalized count kept in sync with the mappings file
+  siteTypes?: SiteType[]        // reusable site type presets defined on the Site Types tab
   settings?: ProjectSettings
   lastSaved?: string            // ISO date string
   // OneDrive-specific
@@ -140,14 +141,8 @@ export interface SharePointDrive {
 
 export type MappingStatus = 'pending' | 'ready' | 'error'
 
-export interface PlannedSiteTarget {
-  displayName: string
-  alias: string
-  description: string
-  template: SiteTemplate
-  libraryName: string
-  folderPath: string
-}
+/** @deprecated Use NewSiteConfig. Kept as alias so legacy persisted data still deserialises. */
+export type PlannedSiteTarget = NewSiteConfig
 
 export interface MigrationMapping {
   id: string
@@ -157,16 +152,71 @@ export interface MigrationMapping {
   targetFolderPath: string
   status: MappingStatus
   notes?: string
-  plannedSite?: PlannedSiteTarget
+  plannedSite?: NewSiteConfig
   // OneDrive auto-map fields (optional — only set for Phase 1 results)
   matchStatus?: OneDriveMatchStatus
   accessStatus?: OneDriveAccessStatus
   resolvedDisplayName?: string
 }
 
-// ─── Site Creation ───────────────────────────────────────────────────────────
+// ─── Site Types ──────────────────────────────────────────────────────────────
 
 export type SiteTemplate = 'team' | 'communication'
+
+/** A lightweight user reference stored inside SiteType presets */
+export interface UserRef {
+  id: string
+  displayName: string
+  email: string
+}
+
+/** An org-published SharePoint site design (fetched from SP REST API) */
+export interface OrgSiteDesign {
+  id: string
+  title: string
+  description?: string
+  webTemplate: '64' | '68' | string  // 64 = Team, 68 = Communication
+}
+
+/**
+ * A reusable site configuration preset defined on the Site Types tab.
+ * Used as a starting point when mapping a folder to a new SharePoint site.
+ */
+export interface SiteType {
+  id: string
+  name: string                        // e.g. "Department Site"
+  template: SiteTemplate
+  description?: string
+  defaultLibrary?: string
+  defaultSubfolder?: string
+  siteDesignId?: string               // org site design to apply post-creation
+  siteDesignName?: string
+  createTeam?: boolean                // team sites only — provision a Teams team too
+  owners: UserRef[]
+  members: UserRef[]
+}
+
+/**
+ * Configuration for a new SharePoint site to be created during migration.
+ * Replaces PlannedSiteTarget — forward-compatible (same core fields).
+ */
+export interface NewSiteConfig {
+  siteTypeId?: string                 // which SiteType template was used
+  siteTypeName?: string
+  displayName: string
+  alias: string
+  description?: string
+  template: SiteTemplate
+  libraryName?: string
+  folderPath?: string
+  siteDesignId?: string
+  createTeam?: boolean
+  owners: UserRef[]
+  members: UserRef[]
+}
+
+// ─── Site Creation (legacy — kept for Review tab provisioning) ────────────────
+
 export type SiteCreationStatus = 'pending' | 'creating' | 'created' | 'failed'
 
 export interface SiteRequest {

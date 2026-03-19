@@ -5,6 +5,7 @@ import type {
   SharePointSite,
   SharePointDrive,
   SiteRequest,
+  OrgSiteDesign,
   GraphSite,
   GraphDrive,
   GraphUser,
@@ -64,6 +65,31 @@ export async function searchSites(query: string = '*'): Promise<SharePointSite[]
 export async function getSiteById(siteId: string): Promise<SharePointSite> {
   const site = await client().api(`/sites/${siteId}`).get() as GraphSite
   return mapSite(site)
+}
+
+/**
+ * Returns the organisation's published SharePoint site designs via the SP REST API.
+ * Out-of-box Microsoft templates are excluded so only custom org designs are shown.
+ */
+export async function getSiteDesigns(): Promise<OrgSiteDesign[]> {
+  const { root: rootHost } = await getSharePointHosts()
+  const spToken = await getToken([`https://${rootHost}/AllSites.FullControl`])
+  const resp = await fetch(
+    `https://${rootHost}/_api/Microsoft.SharePoint.Utilities.WebTemplateExtensions.SiteScriptUtility.GetSiteDesigns`,
+    {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${spToken}`,
+        Accept: 'application/json;odata=nometadata',
+        'Content-Type': 'application/json',
+      },
+    }
+  )
+  if (!resp.ok) throw new Error(`getSiteDesigns: ${resp.status} ${resp.statusText}`)
+  const json = await resp.json() as { value: Array<{ Id: string; Title: string; Description?: string; WebTemplate: string; IsOutOfBoxTemplate: boolean }> }
+  return (json.value ?? [])
+    .filter(d => !d.IsOutOfBoxTemplate)
+    .map(d => ({ id: d.Id, title: d.Title, description: d.Description, webTemplate: d.WebTemplate }))
 }
 
 // ─── Drives (document libraries) ─────────────────────────────────────────────
