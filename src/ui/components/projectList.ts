@@ -108,7 +108,7 @@ const SHAREPOINT_LOGO = `<svg viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/
   <rect x="8" y="30" width="32" height="10" rx="3" fill="#1a9ba1"/>
 </svg>`
 
-const ONEDRIVE_LOGO = `<svg viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg">
+const ONEDRIVE_LOGO = `<svg viewBox="-2 -2 52 52" xmlns="http://www.w3.org/2000/svg">
   <path d="M29.5 18C27.6 12.2 22.2 8 15.7 8 8.7 8 3 13.7 3 20.7c0 .4 0 .8.1 1.2A11.5 11.5 0 0 0 4 44h32.5C41.7 44 46 39.7 46 34.5a9.5 9.5 0 0 0-7.2-9.2A12 12 0 0 0 29.5 18z" fill="#0078d4"/>
 </svg>`
 
