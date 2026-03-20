@@ -101,14 +101,15 @@ function renderProjectCards(container: HTMLElement, projects: MigrationProject[]
 }
 
 
-const SHAREPOINT_LOGO = `<svg viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg">
+const SHAREPOINT_LOGO = `<svg viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg" overflow="visible">
   <circle cx="16" cy="21" r="13" fill="#036c70"/>
   <circle cx="27" cy="26" r="10" fill="#1a9ba1"/>
   <circle cx="35" cy="21" r="8" fill="#37c6d0"/>
   <rect x="8" y="30" width="32" height="10" rx="3" fill="#1a9ba1"/>
 </svg>`
 
-const ONEDRIVE_LOGO = `<svg viewBox="-2 -2 52 52" xmlns="http://www.w3.org/2000/svg">
+// Extra left/top padding in the viewBox so the cloud path (leftmost point x=3) never clips.
+const ONEDRIVE_LOGO = `<svg viewBox="-6 -4 58 56" xmlns="http://www.w3.org/2000/svg" overflow="visible">
   <path d="M29.5 18C27.6 12.2 22.2 8 15.7 8 8.7 8 3 13.7 3 20.7c0 .4 0 .8.1 1.2A11.5 11.5 0 0 0 4 44h32.5C41.7 44 46 39.7 46 34.5a9.5 9.5 0 0 0-7.2-9.2A12 12 0 0 0 29.5 18z" fill="#0078d4"/>
 </svg>`
 
@@ -130,7 +131,7 @@ function projectCardHtml(p: MigrationProject): string {
           <h3 class="project-name">${escHtml(p.title)}</h3>
           ${p.description ? `<p class="project-desc">${escHtml(p.description)}</p>` : ''}
         </div>
-        <div class="project-type-logo">
+        <div class="project-type-badge project-type-badge--${isOneDrive ? 'onedrive' : 'sharepoint'}">
           ${isOneDrive ? ONEDRIVE_LOGO : SHAREPOINT_LOGO}
           <span class="project-type-label">${isOneDrive ? 'OneDrive' : 'SharePoint'}</span>
         </div>
@@ -184,12 +185,14 @@ function injectProjectStyles(): void {
     .project-card-header {
       display: flex; justify-content: space-between; align-items: flex-start; gap: 12px;
     }
-    .project-type-logo {
-      display: flex; flex-direction: column; align-items: center; gap: 3px;
-      flex-shrink: 0; opacity: 0.9;
+    .project-type-badge {
+      display: inline-flex; align-items: center; gap: 7px;
+      padding: 5px 11px 5px 8px; border-radius: 20px; flex-shrink: 0;
     }
-    .project-type-logo svg { width: 44px; height: 44px; display: block; }
-    .project-type-label { font-size: 0.68rem; color: var(--color-text-muted); font-weight: 500; white-space: nowrap; }
+    .project-type-badge--onedrive  { background: #e3eefb; }
+    .project-type-badge--sharepoint { background: #dff4f4; }
+    .project-type-badge svg { width: 26px; height: 26px; display: block; flex-shrink: 0; }
+    .project-type-label { font-size: 0.78rem; font-weight: 600; color: #323130; white-space: nowrap; }
     .project-card-title-wrap { flex: 1; min-width: 0; }
     .project-card-badges { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; flex-shrink: 0; }
     .project-name { font-size: 1.05rem; font-weight: 600; margin-bottom: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
