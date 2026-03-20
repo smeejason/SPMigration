@@ -1167,10 +1167,30 @@ async function checkAndShowAccess(targetEl: HTMLElement, userId: string, migrati
   try {
     const access = await checkUserDriveAccess(userId)
 
-    // Always sync the resolved status back into state so the summary page is up-to-date
-    setState({ mappings: getState().mappings.map(m =>
-      m.targetSite?.id === userId ? { ...m, accessStatus: access } : m
-    )})
+    // Fetch the OneDrive URL and sync status back so summary page is up-to-date
+    let freshWebUrl: string | undefined
+    if (access === 'accessible') {
+      try {
+        const drive = await getUserDrive(userId)
+        if (drive?.webUrl) freshWebUrl = drive.webUrl
+      } catch { /* non-fatal */ }
+    }
+
+    setState({ mappings: getState().mappings.map(m => {
+      if (m.targetSite?.id !== userId) return m
+      const updates: Partial<typeof m> = { accessStatus: access }
+      if (freshWebUrl) {
+        updates.targetSite = m.targetSite ? { ...m.targetSite, webUrl: freshWebUrl } : m.targetSite
+        updates.targetDrive = m.targetDrive ? { ...m.targetDrive, webUrl: freshWebUrl } : m.targetDrive
+      }
+      return { ...m, ...updates }
+    })})
+
+    // Also update the URL display in the panel immediately
+    if (freshWebUrl) {
+      const urlEl = targetEl.querySelector('#od-drive-url') as HTMLElement | null
+      if (urlEl) urlEl.textContent = freshWebUrl
+    }
 
     if (access === 'accessible') {
       statusEl.textContent = '✓ Accessible'
@@ -1185,17 +1205,6 @@ async function checkAndShowAccess(targetEl: HTMLElement, userId: string, migrati
           btn.textContent = 'Granting…'
           try {
             await grantUserDriveAccess(userId, migrationAccount)
-            // Optimistically mark as granted so the summary page sees it immediately
-            setState({ mappings: getState().mappings.map(m =>
-              m.targetSite?.id === userId ? { ...m, accessStatus: 'granted' } : m
-            )})
-            // Re-fetch drive URL now that we have access
-            getUserDrive(userId).then(drive => {
-              if (drive?.webUrl) {
-                const urlEl = targetEl.querySelector('#od-drive-url') as HTMLElement | null
-                if (urlEl) urlEl.textContent = drive.webUrl
-              }
-            })
             await checkAndShowAccess(targetEl, userId, migrationAccount)
             // Persist the updated access status
             await persistMappings(getState().mappings)

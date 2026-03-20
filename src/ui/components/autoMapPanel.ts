@@ -1,14 +1,12 @@
 import {
   findUserForOneDrive,
   getUserDrive,
-  checkUserDriveAccess,
-  grantUserDriveAccess,
   saveMappingsFile,
   searchUsers,
 } from '../../graph/graphClient'
 import { updateProject, getSpConfig } from '../../graph/projectService'
 import { setState, getState } from '../../state/store'
-import type { TreeNode, MigrationMapping, OneDriveMatchStatus, OneDriveAccessStatus, AppUser } from '../../types'
+import type { TreeNode, MigrationMapping, OneDriveMatchStatus, AppUser } from '../../types'
 
 // ─── Entry point ──────────────────────────────────────────────────────────────
 
@@ -33,7 +31,7 @@ export function renderAutoMapPanel(container: HTMLElement): void {
   const existingMappings = state.mappings.filter(m => m.matchStatus !== undefined)
   const allMappings = state.mappings
   const phase1Done = existingMappings.length > 0
-  const hasMatchedUsers = existingMappings.some(m => m.matchStatus === 'matched')
+  // hasMatchedUsers was used by the removed Phase 2 section
   const totalAtLevel = selectedLevel >= 0 ? countNodesAtDepth(tree, selectedLevel) : 0
 
   container.innerHTML = `
@@ -89,21 +87,7 @@ export function renderAutoMapPanel(container: HTMLElement): void {
             </div>
           </div>
 
-          <div class="automap-phase-section" id="phase2-section" ${hasMatchedUsers ? '' : 'style="display:none"'}>
-            <div class="phase-header"><span class="phase-num">Phase 2</span> Grant Drive Access</div>
-            <button id="btn-phase2" class="btn btn-primary">Grant Drive Access</button>
-            <div id="phase2-progress" style="display:none">
-              <div class="progress-bar-wrap">
-                <div id="phase2-bar" class="progress-bar" style="width:0%"></div>
-              </div>
-              <div class="progress-stats">
-                <span id="phase2-count">0 / 0</span>
-                <span class="stat-matched" id="phase2-accessible">✓ Accessible: 0</span>
-                <span class="stat-notfound" id="phase2-granted">⚡ Granted: 0</span>
-                <span class="stat-error" id="phase2-error">⚠ Failed: 0</span>
-              </div>
-            </div>
-          </div>
+
 
         </div>
       </div>
@@ -194,25 +178,6 @@ export function renderAutoMapPanel(container: HTMLElement): void {
 
     phase1Btn.textContent = 'Re-run Phase 1'
     phase1Btn.disabled = false
-    ;(container.querySelector('#phase2-section') as HTMLElement).style.display = ''
-  })
-
-  // ── Phase 2 ───────────────────────────────────────────────────────────────
-  const phase2Btn = container.querySelector('#btn-phase2') as HTMLButtonElement
-  phase2Btn.addEventListener('click', async () => {
-    const migrationAccount = (container.querySelector('#migration-account') as HTMLInputElement).value.trim()
-    if (!migrationAccount) { alert('Enter a Migration Account UPN above first.'); return }
-    const matched = getState().mappings.filter(m => m.matchStatus === 'matched' && m.targetSite)
-    if (matched.length === 0) return
-
-    phase2Btn.disabled = true
-    phase2Btn.textContent = 'Running…'
-    ;(container.querySelector('#phase2-progress') as HTMLElement).style.display = ''
-
-    await runPhase2(container, matched, migrationAccount)
-
-    phase2Btn.textContent = 'Re-run Phase 2'
-    phase2Btn.disabled = false
   })
 }
 
@@ -433,75 +398,6 @@ async function runPhase1(
     setState({ mappings: merged, currentProject: { ...project, projectData: updatedData } })
   } catch (err) {
     console.warn('[AutoMap] Failed to persist mappings:', err)
-  }
-}
-
-// ─── Phase 2: grant drive access ─────────────────────────────────────────────
-
-async function runPhase2(
-  container: HTMLElement,
-  mappings: MigrationMapping[],
-  migrationAccount: string
-): Promise<void> {
-  const BATCH_SIZE = 5
-  let accessibleCount = 0
-  let grantedCount = 0
-  let failedCount = 0
-  let processed = 0
-
-  const barEl = container.querySelector('#phase2-bar') as HTMLElement
-  const countEl = container.querySelector('#phase2-count') as HTMLElement
-  const accessibleEl = container.querySelector('#phase2-accessible') as HTMLElement
-  const grantedEl = container.querySelector('#phase2-granted') as HTMLElement
-  const errorEl = container.querySelector('#phase2-error') as HTMLElement
-
-  const updateUI = (): void => {
-    const pct = mappings.length > 0 ? Math.round(processed / mappings.length * 100) : 100
-    barEl.style.width = `${pct}%`
-    countEl.textContent = `${processed} / ${mappings.length}`
-    accessibleEl.textContent = `✓ Accessible: ${accessibleCount}`
-    grantedEl.textContent = `⚡ Granted: ${grantedCount}`
-    errorEl.textContent = `⚠ Failed: ${failedCount}`
-  }
-
-  for (let i = 0; i < mappings.length; i += BATCH_SIZE) {
-    const batch = mappings.slice(i, i + BATCH_SIZE)
-
-    await Promise.all(batch.map(async (mapping) => {
-      if (!mapping.targetSite) return
-      const userId = mapping.targetSite.id
-      let newStatus: OneDriveAccessStatus = 'error'
-      try {
-        const access = await checkUserDriveAccess(userId)
-        if (access === 'accessible') {
-          newStatus = 'accessible'
-          accessibleCount++
-        } else if (access === 'no-access') {
-          try {
-            await grantUserDriveAccess(userId, migrationAccount)
-            newStatus = 'granted'
-            grantedCount++
-          } catch {
-            newStatus = 'error'
-            failedCount++
-          }
-        } else {
-          newStatus = access === 'no-drive' ? 'no-drive' : 'error'
-          failedCount++
-        }
-      } catch {
-        newStatus = 'error'
-        failedCount++
-      }
-
-      processed++
-      setState({ mappings: getState().mappings.map(m =>
-        m.id === mapping.id ? { ...m, accessStatus: newStatus } : m
-      )})
-    }))
-
-    updateUI()
-    await new Promise(r => setTimeout(r, 0))
   }
 }
 

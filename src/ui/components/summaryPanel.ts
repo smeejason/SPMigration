@@ -1,5 +1,5 @@
 import { getState, setState } from '../../state/store'
-import { checkUserDriveAccess, grantUserDriveAccess, saveMappingsFile } from '../../graph/graphClient'
+import { checkUserDriveAccess, grantUserDriveAccess, getUserDrive, saveMappingsFile } from '../../graph/graphClient'
 import { getSpConfig } from '../../graph/projectService'
 import type { MigrationMapping, OneDriveAccessStatus } from '../../types'
 
@@ -216,20 +216,33 @@ async function runCheckPermissions(container: HTMLElement): Promise<void> {
   for (const mapping of matchedMappings) {
     const userId = mapping.targetSite!.id
     let newStatus: OneDriveAccessStatus = 'error'
+    let driveWebUrl: string | undefined
     try {
       const result = await checkUserDriveAccess(userId)
       newStatus = result
-      if (result === 'accessible')                             accessibleCount++
-      else if (result === 'no-access' || result === 'no-drive') noaccessCount++
-      else                                                      errorCount++
+      if (result === 'accessible') {
+        accessibleCount++
+        // Fetch the OneDrive URL and persist it so the CSV export and SPMT config are up-to-date
+        try {
+          const drive = await getUserDrive(userId)
+          if (drive?.webUrl) driveWebUrl = drive.webUrl
+        } catch { /* non-fatal — URL already stored from Phase 1 */ }
+      } else if (result === 'no-access' || result === 'no-drive') noaccessCount++
+      else                                                          errorCount++
     } catch {
       newStatus = 'error'
       errorCount++
     }
 
-    setState({ mappings: getState().mappings.map(m =>
-      m.id === mapping.id ? { ...m, accessStatus: newStatus } : m
-    )})
+    setState({ mappings: getState().mappings.map(m => {
+      if (m.id !== mapping.id) return m
+      const updates: Partial<typeof m> = { accessStatus: newStatus }
+      if (driveWebUrl) {
+        updates.targetSite = m.targetSite ? { ...m.targetSite, webUrl: driveWebUrl } : m.targetSite
+        updates.targetDrive = m.targetDrive ? { ...m.targetDrive, webUrl: driveWebUrl } : m.targetDrive
+      }
+      return { ...m, ...updates }
+    })})
 
     const cell = container.querySelector(`[data-access-for="${CSS.escape(mapping.id)}"]`) as HTMLElement | null
     if (cell) cell.innerHTML = odAccessBadge({ ...mapping, accessStatus: newStatus })
