@@ -297,15 +297,19 @@ function createMappingNodeEl(node: TreeNode, targetEl: HTMLElement, isRoot = fal
   warnRegistry.set(node.path, warnEl)
 
   // Helper: apply/remove the mapped visual state on this row
-  function applyMappedState(isMapped: boolean, siteName?: string, isPlanned = false, mappingType?: 'auto' | 'manual' | 'planned'): void {
+  function applyMappedState(isMapped: boolean, siteName?: string, isPlanned = false, mappingType?: 'auto' | 'manual' | 'planned' | 'cant-find'): void {
     if (isFolder) {
-      const iconType = !isMapped ? 'none' : mappingType === 'auto' ? 'auto' : isPlanned ? 'planned' : 'manual'
+      const iconType = mappingType === 'cant-find' ? 'cant-find'
+        : !isMapped ? 'none'
+        : mappingType === 'auto' ? 'auto'
+        : isPlanned ? 'planned'
+        : 'manual'
       iconWrap.innerHTML = folderIconSvg(iconType)
       iconWrap.className = 'tree-icon-wrap'
     } else {
       iconWrap.textContent = '📄'
     }
-    row.classList.remove('mapping-row--mapped', 'mapping-row--auto', 'mapping-row--manual', 'mapping-row--planned')
+    row.classList.remove('mapping-row--mapped', 'mapping-row--auto', 'mapping-row--manual', 'mapping-row--planned', 'mapping-row--cant-find')
     if (isMapped) {
       row.classList.add('mapping-row--mapped')
       if (mappingType === 'auto') row.classList.add('mapping-row--auto')
@@ -313,6 +317,10 @@ function createMappingNodeEl(node: TreeNode, targetEl: HTMLElement, isRoot = fal
       else row.classList.add('mapping-row--manual')
       tagEl.textContent = siteName ? `${siteName}${isPlanned ? ' (planned)' : ''}` : '—'
       tagEl.className = `tree-col tree-col-mapped${isPlanned ? ' tree-col-mapped--planned' : ''}`
+    } else if (mappingType === 'cant-find') {
+      row.classList.add('mapping-row--cant-find')
+      tagEl.textContent = "Can't Find"
+      tagEl.className = 'tree-col tree-col-mapped tree-col-mapped--cant-find'
     } else {
       tagEl.textContent = '—'
       tagEl.className = 'tree-col tree-col-mapped tree-col-mapped--empty'
@@ -320,10 +328,13 @@ function createMappingNodeEl(node: TreeNode, targetEl: HTMLElement, isRoot = fal
   }
 
   const isMappedInitially = !!(existingMapping?.targetSite || existingMapping?.plannedSite)
+  const isCantFindInitially = existingMapping?.matchStatus === 'cant-find'
   const initialSiteName = existingMapping?.targetSite?.displayName ?? existingMapping?.plannedSite?.displayName
   const isPlannedInitially = !existingMapping?.targetSite && !!existingMapping?.plannedSite
-  const initialMappingType: 'auto' | 'manual' | undefined =
-    existingMapping?.matchStatus === 'matched' ? 'auto' : (isMappedInitially ? 'manual' : undefined)
+  const initialMappingType: 'auto' | 'manual' | 'cant-find' | undefined =
+    isCantFindInitially ? 'cant-find' :
+    existingMapping?.matchStatus === 'matched' ? 'auto' :
+    (isMappedInitially ? 'manual' : undefined)
   // For ancestor-inherited highlight: use the ancestor's type so children mirror their parent's colour
   const effectiveMappingType = initialMappingType ?? (isAncestorMapped ? ancestorMappingType ?? undefined : undefined)
   applyMappedState(isMappedInitially || isAncestorMapped, initialSiteName, isPlannedInitially, effectiveMappingType)
@@ -417,11 +428,13 @@ function createMappingNodeEl(node: TreeNode, targetEl: HTMLElement, isRoot = fal
         return
       }
 
-      openTargetPanel(targetEl, node, (siteName, isPlanned) => {
+      openTargetPanel(targetEl, node, (siteName, isPlanned, isCantFind) => {
         const isSelfMapped = !!siteName
-        const selfType: 'auto' | 'manual' | 'planned' | undefined = isSelfMapped ? (isPlanned ? 'planned' : 'manual') : undefined
+        const selfType: 'auto' | 'manual' | 'planned' | 'cant-find' | undefined =
+          isCantFind ? 'cant-find' :
+          isSelfMapped ? (isPlanned ? 'planned' : 'manual') : undefined
         applyMappedState(isSelfMapped || isAncestorMapped, siteName ?? undefined, isPlanned, selfType)
-        updateDescendantHighlights(li, selfType ?? (isAncestorMapped ? ancestorMappingType : null))
+        updateDescendantHighlights(li, isCantFind ? null : (selfType ?? (isAncestorMapped ? ancestorMappingType : null)))
         _statsRefreshCallback?.()
       })
     })
@@ -435,7 +448,7 @@ function createMappingNodeEl(node: TreeNode, targetEl: HTMLElement, isRoot = fal
 async function openTargetPanel(
   targetEl: HTMLElement,
   node: TreeNode,
-  onMappingChange: (siteName: string | null, isPlanned?: boolean) => void
+  onMappingChange: (siteName: string | null, isPlanned?: boolean, isCantFind?: boolean) => void
 ): Promise<void> {
   if (getState().currentProject?.type === 'OneDrive') {
     await openOneDriveTargetPanel(targetEl, node, onMappingChange)
@@ -887,9 +900,10 @@ async function openTargetPanel(
 async function openOneDriveTargetPanel(
   targetEl: HTMLElement,
   node: TreeNode,
-  onMappingChange: (siteName: string | null, isPlanned?: boolean) => void
+  onMappingChange: (siteName: string | null, isPlanned?: boolean, isCantFind?: boolean) => void
 ): Promise<void> {
   const existing = getState().mappings.find((m) => m.sourceNode.path === node.path)
+  const isCantFindExisting = existing?.matchStatus === 'cant-find'
   const existingUser: AppUser | null = existing?.targetSite
     ? { id: existing.targetSite.id, displayName: existing.targetSite.displayName,
         mail: existing.targetSite.webUrl, userPrincipalName: existing.targetSite.webUrl }
@@ -941,6 +955,13 @@ async function openOneDriveTargetPanel(
                 placeholder="Search by name or UPN…"
                 value="${escHtml(existingUser?.displayName ?? '')}" />
               <button type="button" id="btn-od-search" class="btn btn-primary btn-sm">Search</button>
+              <button type="button" id="btn-od-cant-find" class="btn btn-sm od-cant-find-btn${isCantFindExisting ? ' is-active' : ''}"
+                title="${isCantFindExisting ? "Remove Can't Find flag" : "Flag this folder — user cannot be found"}">
+                ${isCantFindExisting ? '↩ Clear Flag' : "🚫 Can't Find"}
+              </button>
+            </div>
+            <div id="od-cant-find-notice" class="od-cant-find-notice" style="${isCantFindExisting ? '' : 'display:none'}">
+              ⚠ This folder is flagged as <strong>Can't Find</strong> — no OneDrive user will be mapped for it.
             </div>
             <div id="od-user-results" class="site-results"></div>
             <div id="od-selected-user" class="selected-badge" style="${existingUser ? '' : 'display:none'}">
@@ -1028,8 +1049,82 @@ async function openOneDriveTargetPanel(
   let selectedUser: AppUser | null = existingUser
   let selectedDriveId = existing?.targetDrive?.id ?? ''
   let selectedDriveWebUrl = existing?.targetSite?.webUrl ?? ''
+  let cantFindActive = isCantFindExisting
 
   const migrationAccount = getState().currentProject?.projectData.autoMapSettings?.migrationAccount ?? ''
+
+  // ── Can't Find toggle ──────────────────────────────────────────────────────
+  const cantFindBtn = targetEl.querySelector('#btn-od-cant-find') as HTMLButtonElement
+  const cantFindNotice = targetEl.querySelector('#od-cant-find-notice') as HTMLElement
+
+  cantFindBtn.addEventListener('click', async () => {
+    cantFindActive = !cantFindActive
+    if (cantFindActive) {
+      // Flag as Can't Find — remove any existing mapping and create a cant-find record
+      const cantFindMapping: MigrationMapping = {
+        id: node.path,
+        sourceNode: node,
+        targetSite: null,
+        targetDrive: null,
+        targetFolderPath: '',
+        status: 'error',
+        matchStatus: 'cant-find',
+        accessStatus: 'unknown',
+      }
+      const mappings = [...getState().mappings.filter(m => m.sourceNode.path !== node.path), cantFindMapping]
+      setState({ mappings })
+      onMappingChange(null, false, true)
+
+      // Update button + notice
+      cantFindBtn.textContent = '↩ Clear Flag'
+      cantFindBtn.title = "Remove Can't Find flag"
+      cantFindBtn.classList.add('is-active')
+      cantFindNotice.style.display = ''
+
+      // Clear user selection UI
+      selectedUser = null
+      selectedDriveId = ''
+      selectedDriveWebUrl = ''
+      ;(targetEl.querySelector('#od-user-search') as HTMLInputElement).value = ''
+      ;(targetEl.querySelector('#od-selected-user') as HTMLElement).style.display = 'none'
+      ;(targetEl.querySelector('#od-drive-info') as HTMLElement).style.display = 'none'
+      ;(targetEl.querySelector('#od-user-results') as HTMLElement).innerHTML = ''
+
+      const btn = cantFindBtn
+      btn.disabled = true
+      btn.textContent = 'Saving…'
+      try {
+        await persistMappings(mappings)
+        btn.textContent = '↩ Clear Flag'
+      } catch {
+        btn.textContent = '↩ Clear Flag'
+      } finally {
+        btn.disabled = false
+      }
+    } else {
+      // Clear the Can't Find flag
+      const mappings = getState().mappings.filter(m => m.sourceNode.path !== node.path)
+      setState({ mappings })
+      onMappingChange(null, false, false)
+
+      cantFindBtn.textContent = "🚫 Can't Find"
+      cantFindBtn.title = "Flag this folder — user cannot be found"
+      cantFindBtn.classList.remove('is-active')
+      cantFindNotice.style.display = 'none'
+
+      const btn = cantFindBtn
+      btn.disabled = true
+      btn.textContent = 'Saving…'
+      try {
+        await persistMappings(mappings)
+        btn.textContent = "🚫 Can't Find"
+      } catch {
+        btn.textContent = "🚫 Can't Find"
+      } finally {
+        btn.disabled = false
+      }
+    }
+  })
 
   // Fetch UPN, drive URL, and check access for existing user on load
   if (existing?.targetSite?.id) {
@@ -1089,6 +1184,15 @@ async function openOneDriveTargetPanel(
           badge.innerHTML = `✓ ${escHtml(selectedUser.displayName)} <button class="btn-clear" id="btn-clear-od-user">✕</button>`
           badge.style.display = ''
           attachClearUser()
+
+          // If folder was flagged as Can't Find, selecting a user implicitly clears the flag
+          if (cantFindActive) {
+            cantFindActive = false
+            cantFindBtn.textContent = "🚫 Can't Find"
+            cantFindBtn.title = "Flag this folder — user cannot be found"
+            cantFindBtn.classList.remove('is-active')
+            cantFindNotice.style.display = 'none'
+          }
 
           // Load drive info
           const driveInfo = targetEl.querySelector('#od-drive-info') as HTMLElement
@@ -1418,7 +1522,7 @@ function computeRelativePath(nodePath: string, ancestorPath: string): string {
 
 // ─── Descendant highlight propagation ─────────────────────────────────────────
 
-function updateDescendantHighlights(parentLi: HTMLLIElement, parentMappingType: 'auto' | 'manual' | 'planned' | null): void {
+function updateDescendantHighlights(parentLi: HTMLLIElement, parentMappingType: 'auto' | 'manual' | 'planned' | 'cant-find' | null): void {
   const childUl = parentLi.querySelector<HTMLElement>(':scope > .tree-children')
   if (!childUl) return
   childUl.querySelectorAll<HTMLLIElement>(':scope > .mapping-node').forEach((childLi) => {
@@ -1463,22 +1567,27 @@ function updateDescendantHighlights(parentLi: HTMLLIElement, parentMappingType: 
  *  manual  – sage green   (user-chosen existing site)
  *  planned – soft violet  (user-chosen new site to be created)
  */
-function folderIconSvg(type: 'none' | 'auto' | 'manual' | 'planned'): string {
+function folderIconSvg(type: 'none' | 'auto' | 'manual' | 'planned' | 'cant-find'): string {
   const palette: Record<string, { tab: string; body: string }> = {
-    none:    { tab: '#C88A1A', body: '#E8A82A' },
-    auto:    { tab: '#3571B0', body: '#5594D4' },
-    manual:  { tab: '#3A8F62', body: '#56B07E' },
-    planned: { tab: '#7A58B8', body: '#9B78D4' },
+    none:        { tab: '#C88A1A', body: '#E8A82A' },
+    auto:        { tab: '#3571B0', body: '#5594D4' },
+    manual:      { tab: '#3A8F62', body: '#56B07E' },
+    planned:     { tab: '#7A58B8', body: '#9B78D4' },
+    'cant-find': { tab: '#A82020', body: '#D94040' },
   }
   const { tab, body } = palette[type] ?? palette.none
   const letter = type === 'auto' ? 'A' : type === 'manual' ? 'M' : type === 'planned' ? 'M' : ''
+  const overlay = type === 'cant-find'
+    ? `<line x1="7" y1="8" x2="13" y2="14" stroke="white" stroke-width="1.8" stroke-linecap="round" opacity="0.95"/>
+       <line x1="13" y1="8" x2="7" y2="14" stroke="white" stroke-width="1.8" stroke-linecap="round" opacity="0.95"/>`
+    : (letter ? `<text x="10" y="13.5" text-anchor="middle" font-family="'Segoe UI',system-ui,Arial,sans-serif" font-size="5.5" font-weight="800" fill="white" opacity="0.95">${letter}</text>` : '')
 
   // The folder shape: a back plate that forms the tab, and a front body rectangle.
   // viewBox is 20×17; both paths share the same stroke so the tab clips cleanly.
   return `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="17" viewBox="0 0 20 17" style="display:block;flex-shrink:0" aria-hidden="true">
     <path d="M1 6 L1 3.5 Q1 2.5 2 2.5 L7.5 2.5 L9 5 L18 5 Q19 5 19 6 Z" fill="${tab}"/>
     <rect x="1" y="5.5" width="18" height="10.5" rx="1.5" fill="${body}"/>
-    ${letter ? `<text x="10" y="13.5" text-anchor="middle" font-family="'Segoe UI',system-ui,Arial,sans-serif" font-size="5.5" font-weight="800" fill="white" opacity="0.95">${letter}</text>` : ''}
+    ${overlay}
   </svg>`
 }
 
@@ -1713,6 +1822,10 @@ function injectMappingStyles(): void {
     .mapping-row--planned:hover { background: rgba(122, 88, 184, 0.13); }
     .mapping-row--planned.mapping-row--active { background: rgba(122, 88, 184, 0.13); border-left-color: #7A58B8; }
 
+    .mapping-row--cant-find { background: rgba(164, 38, 44, 0.05); }
+    .mapping-row--cant-find:hover { background: rgba(164, 38, 44, 0.09); }
+    .mapping-row--cant-find.mapping-row--active { background: rgba(164, 38, 44, 0.09); border-left-color: #A82020; }
+
     .tree-name { flex: 1; font-size: 0.875rem; font-family: 'Consolas', monospace;
       white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
     .tree-name--loose { font-style: italic; color: var(--color-text-muted); }
@@ -1909,6 +2022,20 @@ function injectMappingStyles(): void {
     .subfolder-default-code { font-family: 'Consolas', monospace; font-size: 0.82rem;
       background: var(--color-surface-alt); padding: 1px 5px; border-radius: 3px;
       border: 1px solid var(--color-border); }
+
+    /* Can't Find button + notice */
+    .od-cant-find-btn {
+      font-size: 0.8rem; font-weight: 600; padding: 4px 10px; border-radius: 4px;
+      border: 1px solid #ddb0b0; background: transparent; color: #a4262c;
+      cursor: pointer; white-space: nowrap; transition: background 0.1s, border-color 0.1s; flex-shrink: 0;
+    }
+    .od-cant-find-btn:hover { background: #fde7e9; border-color: #a4262c; }
+    .od-cant-find-btn.is-active { background: #fde7e9; border-color: #a4262c; color: #a4262c; }
+    .od-cant-find-notice {
+      font-size: 0.82rem; color: #a4262c; background: #fde7e9;
+      border: 1px solid #f4b8bb; border-radius: 4px; padding: 7px 12px; margin-top: 6px;
+    }
+    .mapping-row--cant-find .tree-col-mapped--cant-find { color: #a4262c; font-weight: 600; font-size: 0.78rem; }
   `
   document.head.appendChild(style)
 }
