@@ -238,7 +238,8 @@ export function renderMappingPanel(container: HTMLElement): void {
 
 // ─── Lazy node element factory ────────────────────────────────────────────────
 
-function createMappingNodeEl(node: TreeNode, targetEl: HTMLElement, isRoot = false, isAncestorMapped = false): HTMLLIElement {
+function createMappingNodeEl(node: TreeNode, targetEl: HTMLElement, isRoot = false, ancestorMappingType: 'auto' | 'manual' | 'planned' | null = null): HTMLLIElement {
+  const isAncestorMapped = ancestorMappingType !== null
   const li = document.createElement('li')
   li.className = `mapping-node${isRoot ? ' mapping-node--root' : ''}`
 
@@ -296,7 +297,7 @@ function createMappingNodeEl(node: TreeNode, targetEl: HTMLElement, isRoot = fal
   warnRegistry.set(node.path, warnEl)
 
   // Helper: apply/remove the mapped visual state on this row
-  function applyMappedState(isMapped: boolean, siteName?: string, isPlanned = false, mappingType?: 'auto' | 'manual'): void {
+  function applyMappedState(isMapped: boolean, siteName?: string, isPlanned = false, mappingType?: 'auto' | 'manual' | 'planned'): void {
     if (isFolder) {
       const iconType = !isMapped ? 'none' : mappingType === 'auto' ? 'auto' : isPlanned ? 'planned' : 'manual'
       iconWrap.innerHTML = folderIconSvg(iconType)
@@ -323,7 +324,9 @@ function createMappingNodeEl(node: TreeNode, targetEl: HTMLElement, isRoot = fal
   const isPlannedInitially = !existingMapping?.targetSite && !!existingMapping?.plannedSite
   const initialMappingType: 'auto' | 'manual' | undefined =
     existingMapping?.matchStatus === 'matched' ? 'auto' : (isMappedInitially ? 'manual' : undefined)
-  applyMappedState(isMappedInitially || isAncestorMapped, initialSiteName, isPlannedInitially, initialMappingType)
+  // For ancestor-inherited highlight: use the ancestor's type so children mirror their parent's colour
+  const effectiveMappingType = initialMappingType ?? (isAncestorMapped ? ancestorMappingType ?? undefined : undefined)
+  applyMappedState(isMappedInitially || isAncestorMapped, initialSiteName, isPlannedInitially, effectiveMappingType)
 
   // Column data cells
   const rbInfo = _isOneDriveProject ? getRecycleBin(node) : { sizeBytes: 0, fileCount: 0 }
@@ -378,9 +381,16 @@ function createMappingNodeEl(node: TreeNode, targetEl: HTMLElement, isRoot = fal
         if (!childrenLoaded) {
           const childUl = document.createElement('ul')
           childUl.className = 'tree-list tree-children'
-          const isCurrentlyMapped = row.classList.contains('mapping-row--mapped')
+          // Determine the effective mapping type this row currently represents
+          // so children inherit the correct colour (auto/manual/planned or none).
+          const childAncestorType: 'auto' | 'manual' | 'planned' | null =
+            row.classList.contains('mapping-row--auto') ? 'auto' :
+            row.classList.contains('mapping-row--manual') ? 'manual' :
+            row.classList.contains('mapping-row--planned') ? 'planned' :
+            row.classList.contains('mapping-row--mapped') ? (ancestorMappingType ?? 'manual') :
+            null
           for (const child of node.children) {
-            childUl.appendChild(createMappingNodeEl(child, targetEl, false, isCurrentlyMapped))
+            childUl.appendChild(createMappingNodeEl(child, targetEl, false, childAncestorType))
           }
           li.appendChild(childUl)
           childrenLoaded = true
@@ -409,8 +419,9 @@ function createMappingNodeEl(node: TreeNode, targetEl: HTMLElement, isRoot = fal
 
       openTargetPanel(targetEl, node, (siteName, isPlanned) => {
         const isSelfMapped = !!siteName
-        applyMappedState(isSelfMapped || isAncestorMapped, siteName ?? undefined, isPlanned, isSelfMapped ? 'manual' : undefined)
-        updateDescendantHighlights(li, isSelfMapped || isAncestorMapped)
+        const selfType: 'auto' | 'manual' | 'planned' | undefined = isSelfMapped ? (isPlanned ? 'planned' : 'manual') : undefined
+        applyMappedState(isSelfMapped || isAncestorMapped, siteName ?? undefined, isPlanned, selfType)
+        updateDescendantHighlights(li, selfType ?? (isAncestorMapped ? ancestorMappingType : null))
         _statsRefreshCallback?.()
       })
     })
@@ -1407,21 +1418,34 @@ function computeRelativePath(nodePath: string, ancestorPath: string): string {
 
 // ─── Descendant highlight propagation ─────────────────────────────────────────
 
-function updateDescendantHighlights(parentLi: HTMLLIElement, parentIsMapped: boolean): void {
+function updateDescendantHighlights(parentLi: HTMLLIElement, parentMappingType: 'auto' | 'manual' | 'planned' | null): void {
   const childUl = parentLi.querySelector<HTMLElement>(':scope > .tree-children')
   if (!childUl) return
   childUl.querySelectorAll<HTMLLIElement>(':scope > .mapping-node').forEach((childLi) => {
     const childRow = childLi.querySelector<HTMLElement>(':scope > .mapping-row')
     if (!childRow) return
     const childPath = childRow.dataset.path ?? ''
-    const childSelfMapped = !!getState().mappings.find((m) => m.sourceNode.path === childPath && m.targetSite)
-    const shouldBeMapped = parentIsMapped || childSelfMapped
-    if (shouldBeMapped) {
-      childRow.classList.add('mapping-row--mapped')
-    } else {
-      childRow.classList.remove('mapping-row--mapped')
+    const childMapping = getState().mappings.find((m) => m.sourceNode.path === childPath)
+    const childSelfType: 'auto' | 'manual' | 'planned' | null =
+      childMapping?.matchStatus === 'matched' ? 'auto' :
+      childMapping?.targetSite ? 'manual' :
+      childMapping?.plannedSite ? 'planned' :
+      null
+    // Self-mapping wins; otherwise inherit parent type
+    const effectiveType = childSelfType ?? parentMappingType
+
+    childRow.classList.remove('mapping-row--mapped', 'mapping-row--auto', 'mapping-row--manual', 'mapping-row--planned')
+    if (effectiveType) {
+      childRow.classList.add('mapping-row--mapped', `mapping-row--${effectiveType}`)
     }
-    updateDescendantHighlights(childLi, shouldBeMapped)
+
+    // Also update the SVG folder icon on already-rendered child icons
+    const iconWrap = childRow.querySelector<HTMLElement>('.tree-icon-wrap')
+    if (iconWrap && iconWrap.querySelector('svg')) {
+      iconWrap.innerHTML = folderIconSvg(effectiveType ?? 'none')
+    }
+
+    updateDescendantHighlights(childLi, effectiveType)
   })
 }
 
