@@ -298,25 +298,21 @@ function createMappingNodeEl(node: TreeNode, targetEl: HTMLElement, isRoot = fal
   // Helper: apply/remove the mapped visual state on this row
   function applyMappedState(isMapped: boolean, siteName?: string, isPlanned = false, mappingType?: 'auto' | 'manual'): void {
     if (isFolder) {
-      let badgeHtml = ''
-      if (isMapped && mappingType === 'auto') {
-        badgeHtml = '<span class="mapped-folder-badge mapped-folder-badge--auto" title="Auto-mapped">A</span>'
-      } else if (isMapped && mappingType === 'manual') {
-        badgeHtml = '<span class="mapped-folder-badge mapped-folder-badge--manual" title="Manually mapped">M</span>'
-      }
-      iconWrap.innerHTML = `📁${badgeHtml}`
-      iconWrap.className = `tree-icon-wrap${isMapped ? ' tree-icon-wrap--mapped' : ''}`
+      const iconType = !isMapped ? 'none' : mappingType === 'auto' ? 'auto' : isPlanned ? 'planned' : 'manual'
+      iconWrap.innerHTML = folderIconSvg(iconType)
+      iconWrap.className = 'tree-icon-wrap'
     } else {
       iconWrap.textContent = '📄'
     }
+    row.classList.remove('mapping-row--mapped', 'mapping-row--auto', 'mapping-row--manual', 'mapping-row--planned')
     if (isMapped) {
       row.classList.add('mapping-row--mapped')
-      if (isPlanned) row.classList.add('mapping-row--planned'); else row.classList.remove('mapping-row--planned')
+      if (mappingType === 'auto') row.classList.add('mapping-row--auto')
+      else if (isPlanned) row.classList.add('mapping-row--planned')
+      else row.classList.add('mapping-row--manual')
       tagEl.textContent = siteName ? `${siteName}${isPlanned ? ' (planned)' : ''}` : '—'
       tagEl.className = `tree-col tree-col-mapped${isPlanned ? ' tree-col-mapped--planned' : ''}`
     } else {
-      row.classList.remove('mapping-row--mapped')
-      row.classList.remove('mapping-row--planned')
       tagEl.textContent = '—'
       tagEl.className = 'tree-col tree-col-mapped tree-col-mapped--empty'
     }
@@ -1422,6 +1418,39 @@ function updateDescendantHighlights(parentLi: HTMLLIElement, parentIsMapped: boo
   })
 }
 
+// ─── Folder icon SVG ──────────────────────────────────────────────────────────
+
+/**
+ * Returns an inline SVG folder icon whose colour reflects the mapping state.
+ * The A / M letter is embedded directly in the SVG so it appears to float
+ * inside the folder body rather than as a separate overlay badge.
+ *
+ * Colours are deliberately soft / unsaturated to avoid visual harshness.
+ *
+ *  none    – warm amber   (classic unset look)
+ *  auto    – calm blue    (system-matched)
+ *  manual  – sage green   (user-chosen existing site)
+ *  planned – soft violet  (user-chosen new site to be created)
+ */
+function folderIconSvg(type: 'none' | 'auto' | 'manual' | 'planned'): string {
+  const palette: Record<string, { tab: string; body: string }> = {
+    none:    { tab: '#C88A1A', body: '#E8A82A' },
+    auto:    { tab: '#3571B0', body: '#5594D4' },
+    manual:  { tab: '#3A8F62', body: '#56B07E' },
+    planned: { tab: '#7A58B8', body: '#9B78D4' },
+  }
+  const { tab, body } = palette[type] ?? palette.none
+  const letter = type === 'auto' ? 'A' : type === 'manual' ? 'M' : type === 'planned' ? 'M' : ''
+
+  // The folder shape: a back plate that forms the tab, and a front body rectangle.
+  // viewBox is 20×17; both paths share the same stroke so the tab clips cleanly.
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="17" viewBox="0 0 20 17" style="display:block;flex-shrink:0" aria-hidden="true">
+    <path d="M1 6 L1 3.5 Q1 2.5 2 2.5 L7.5 2.5 L9 5 L18 5 Q19 5 19 6 Z" fill="${tab}"/>
+    <rect x="1" y="5.5" width="18" height="10.5" rx="1.5" fill="${body}"/>
+    ${letter ? `<text x="10" y="13.5" text-anchor="middle" font-family="'Segoe UI',system-ui,Arial,sans-serif" font-size="5.5" font-weight="800" fill="white" opacity="0.95">${letter}</text>` : ''}
+  </svg>`
+}
+
 // ─── New Site people picker helpers ───────────────────────────────────────────
 
 function renderNsChips(targetEl: HTMLElement, selector: string, people: UserRef[]): void {
@@ -1637,22 +1666,21 @@ function injectMappingStyles(): void {
     .mapping-toggle-btn.invisible { visibility: hidden; pointer-events: none; }
     .toggle-icon { display: block; }
 
-    /* Folder icon with optional mapped-badge */
-    .tree-icon-wrap { position: relative; display: inline-flex; flex-shrink: 0; line-height: 1; }
-    .mapped-folder-badge {
-      position: absolute; bottom: -2px; right: -5px;
-      font-size: 0.45rem; font-style: normal; font-weight: 800;
-      border-radius: 50%; width: 9px; height: 9px;
-      display: flex; align-items: center; justify-content: center;
-      border: 1px solid white;
-    }
-    .mapped-folder-badge--auto   { background: #107c10; color: white; }
-    .mapped-folder-badge--manual { background: #0078d4; color: white; }
+    /* Folder SVG icon wrapper */
+    .tree-icon-wrap { display: inline-flex; flex-shrink: 0; align-items: center; line-height: 1; }
 
-    /* Mapped row highlighting */
-    .mapping-row--mapped { background: rgba(16, 124, 16, 0.07); }
-    .mapping-row--mapped:hover { background: rgba(16, 124, 16, 0.13); }
-    .mapping-row--mapped.mapping-row--active { background: rgba(16, 124, 16, 0.13); border-left-color: #107c10; }
+    /* Per-state row tints — soft, low-saturation backgrounds */
+    .mapping-row--auto    { background: rgba(53, 113, 176, 0.07); }
+    .mapping-row--auto:hover { background: rgba(53, 113, 176, 0.13); }
+    .mapping-row--auto.mapping-row--active { background: rgba(53, 113, 176, 0.13); border-left-color: #3571B0; }
+
+    .mapping-row--manual  { background: rgba(58, 143, 98, 0.07); }
+    .mapping-row--manual:hover { background: rgba(58, 143, 98, 0.13); }
+    .mapping-row--manual.mapping-row--active { background: rgba(58, 143, 98, 0.13); border-left-color: #3A8F62; }
+
+    .mapping-row--planned { background: rgba(122, 88, 184, 0.07); }
+    .mapping-row--planned:hover { background: rgba(122, 88, 184, 0.13); }
+    .mapping-row--planned.mapping-row--active { background: rgba(122, 88, 184, 0.13); border-left-color: #7A58B8; }
 
     .tree-name { flex: 1; font-size: 0.875rem; font-family: 'Consolas', monospace;
       white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
@@ -1660,7 +1688,7 @@ function injectMappingStyles(): void {
     /* Mapped-to column (replaces floating tag) */
     .tree-col-mapped { width: 140px; text-align: right; font-size: 0.78rem; font-weight: 500;
       color: #107c10; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex-shrink: 0; }
-    .tree-col-mapped--planned { color: #7a5900; }
+    .tree-col-mapped--planned { color: #6040a0; }
     .tree-col-mapped--empty { color: var(--color-text-muted); font-weight: 400; }
     .tch-col-mapped { width: 140px; }
     /* Access-denied row highlight and icon */
