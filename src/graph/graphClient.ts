@@ -107,12 +107,17 @@ export async function searchUsers(query: string): Promise<AppUser[]> {
   if (!query.trim()) return []
 
   // Strategy 1: /users with startsWith (requires User.ReadBasic.All)
+  // Filter on displayName, givenName, surname, and UPN so first name, last name,
+  // full display name, and email prefix all work as search terms.
   try {
     const response = await client()
       .api('/users')
-      .filter(`startsWith(displayName,'${query}') or startsWith(userPrincipalName,'${query}')`)
-      .select('id,displayName,mail,userPrincipalName')
-      .top(10)
+      .filter(
+        `startsWith(displayName,'${query}') or startsWith(givenName,'${query}') or ` +
+        `startsWith(surname,'${query}') or startsWith(userPrincipalName,'${query}')`
+      )
+      .select('id,displayName,givenName,surname,mail,userPrincipalName')
+      .top(15)
       .get() as { value: GraphUser[] }
     return (response.value ?? []).map(mapGraphUser)
   } catch { /* fall through to People API */ }

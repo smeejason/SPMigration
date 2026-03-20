@@ -1043,6 +1043,13 @@ async function openOneDriveTargetPanel(
   }
 
   // ── User search ────────────────────────────────────────────────────────────
+  targetEl.querySelector('#od-user-search')?.addEventListener('keydown', (e) => {
+    if ((e as KeyboardEvent).key === 'Enter') {
+      e.preventDefault()
+      ;(targetEl.querySelector('#btn-od-search') as HTMLButtonElement | null)?.click()
+    }
+  })
+
   targetEl.querySelector('#btn-od-search')?.addEventListener('click', async () => {
     const query = (targetEl.querySelector('#od-user-search') as HTMLInputElement).value.trim()
     const resultsEl = targetEl.querySelector('#od-user-results') as HTMLElement
