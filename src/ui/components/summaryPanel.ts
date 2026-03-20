@@ -15,8 +15,8 @@ export function renderSummaryPanel(container: HTMLElement): void {
 // ─── OneDrive Summary ─────────────────────────────────────────────────────────
 
 function renderOneDriveSummary(container: HTMLElement, mappings: MigrationMapping[]): void {
-  // Only show users that have actually been mapped (auto-matched or manually assigned)
-  const odMappings = mappings.filter(m => m.targetSite !== null)
+  // Include auto-matched, manually assigned, AND cant-find flagged rows
+  const odMappings = mappings.filter(m => m.targetSite !== null || m.matchStatus === 'cant-find')
 
   if (odMappings.length === 0) {
     container.innerHTML = `
@@ -29,12 +29,37 @@ function renderOneDriveSummary(container: HTMLElement, mappings: MigrationMappin
     return
   }
 
-  const matched      = odMappings.filter(m => m.matchStatus === 'matched')
-  const hasAccess    = odMappings.filter(m => m.accessStatus === 'accessible' || m.accessStatus === 'granted')
-  const noAccess     = odMappings.filter(m => m.accessStatus === 'no-access' || m.accessStatus === 'no-drive' || m.accessStatus === 'error')
-  const unresolved   = odMappings.filter(m => m.matchStatus !== 'matched' && m.matchStatus !== 'pending' && m.matchStatus !== undefined)
-  const totalSize    = odMappings.reduce((s, m) => s + m.sourceNode.sizeBytes, 0)
-  const totalFiles   = odMappings.reduce((s, m) => s + m.sourceNode.fileCount, 0)
+  const matched    = odMappings.filter(m => m.matchStatus === 'matched')
+  const cantFind   = odMappings.filter(m => m.matchStatus === 'cant-find')
+  const hasAccess  = odMappings.filter(m => m.accessStatus === 'accessible' || m.accessStatus === 'granted')
+  const noAccess   = odMappings.filter(m => m.accessStatus === 'no-access' || m.accessStatus === 'no-drive' || m.accessStatus === 'error')
+  const unresolved = odMappings.filter(m => m.matchStatus !== 'matched' && m.matchStatus !== 'pending' && m.matchStatus !== undefined && m.matchStatus !== 'cant-find')
+  const totalSize  = odMappings.reduce((s, m) => s + m.sourceNode.sizeBytes, 0)
+  const totalFiles = odMappings.reduce((s, m) => s + m.sourceNode.fileCount, 0)
+
+  // Build filter pills — only show statuses that have at least one row
+  const filterCounts: Record<string, number> = {
+    matched:    matched.length,
+    manual:     odMappings.filter(m => m.matchStatus === undefined).length,
+    'not-found': odMappings.filter(m => m.matchStatus === 'not-found').length,
+    'cant-find': cantFind.length,
+    ambiguous:  odMappings.filter(m => m.matchStatus === 'ambiguous').length,
+    error:      odMappings.filter(m => m.matchStatus === 'error').length,
+    pending:    odMappings.filter(m => m.matchStatus === 'pending').length,
+  }
+  const filterLabels: Record<string, string> = {
+    matched:     '✓ Matched',
+    manual:      '✏ Manual',
+    'not-found': '✗ Not Found',
+    'cant-find': "🚫 Can't Find",
+    ambiguous:   '? Ambiguous',
+    error:       '⚠ Error',
+    pending:     '⏳ Pending',
+  }
+  const filterPills = Object.entries(filterCounts)
+    .filter(([, n]) => n > 0)
+    .map(([k, n]) => `<button class="filter-pill${k === 'cant-find' ? ' filter-pill--cant-find' : ''}" data-filter="${k}">${filterLabels[k]} (${n})</button>`)
+    .join('')
 
   container.innerHTML = `
     <div class="od-summary-panel">
@@ -61,6 +86,11 @@ function renderOneDriveSummary(container: HTMLElement, mappings: MigrationMappin
           <div class="stat-value">${totalFiles.toLocaleString()}</div>
           <div class="stat-label">Files</div>
         </div>
+        ${cantFind.length > 0 ? `
+        <div class="stat-card stat-card--cant-find">
+          <div class="stat-value">${cantFind.length}</div>
+          <div class="stat-label">Can't Find</div>
+        </div>` : ''}
         ${noAccess.length > 0 ? `
         <div class="stat-card stat-card--danger">
           <div class="stat-value">${noAccess.length}</div>
@@ -119,6 +149,13 @@ function renderOneDriveSummary(container: HTMLElement, mappings: MigrationMappin
         </div>
       </div>
 
+      <!-- ── Filter Bar ── -->
+      <div class="summary-filter-bar" id="od-filter-bar">
+        <span class="filter-label">Filter:</span>
+        <button class="filter-pill filter-pill--active" data-filter="all">All (${odMappings.length})</button>
+        ${filterPills}
+      </div>
+
       <!-- ── Table ── -->
       <div class="summary-table-wrap">
         <table class="summary-table">
@@ -142,20 +179,50 @@ function renderOneDriveSummary(container: HTMLElement, mappings: MigrationMappin
 
   injectSummaryStyles()
 
-  container.querySelector('#btn-export-csv')?.addEventListener('click', () => exportOneDriveCsv(getState().mappings))
-  container.querySelector('#btn-export-json')?.addEventListener('click', () => exportOneDriveJson(getState().mappings))
+  // Track active filter for export
+  let activeOdFilter = 'all'
+
+  // Wire filter pills
+  const filterBar = container.querySelector('#od-filter-bar')!
+  filterBar.querySelectorAll<HTMLElement>('.filter-pill').forEach(btn => {
+    btn.addEventListener('click', () => {
+      filterBar.querySelectorAll('.filter-pill').forEach(b => b.classList.remove('filter-pill--active'))
+      btn.classList.add('filter-pill--active')
+      activeOdFilter = btn.dataset.filter!
+      container.querySelectorAll<HTMLTableRowElement>('tr[data-filter-status]').forEach(row => {
+        const match = activeOdFilter === 'all' || row.dataset.filterStatus === activeOdFilter
+        row.style.display = match ? '' : 'none'
+      })
+    })
+  })
+
+  container.querySelector('#btn-export-csv')?.addEventListener('click', () => {
+    const all = getState().mappings.filter(m => m.targetSite !== null || m.matchStatus === 'cant-find')
+    exportOneDriveCsv(applyOdFilter(all, activeOdFilter))
+  })
+  container.querySelector('#btn-export-json')?.addEventListener('click', () => {
+    const all = getState().mappings.filter(m => m.targetSite !== null || m.matchStatus === 'cant-find')
+    exportOneDriveJson(applyOdFilter(all, activeOdFilter))
+  })
   container.querySelector('#btn-check-perms')?.addEventListener('click', () => runCheckPermissions(container))
   container.querySelector('#btn-grant-access')?.addEventListener('click', () => runGrantAccess(container))
+}
+
+function applyOdFilter(mappings: MigrationMapping[], filter: string): MigrationMapping[] {
+  if (filter === 'all') return mappings
+  if (filter === 'manual') return mappings.filter(m => m.matchStatus === undefined)
+  return mappings.filter(m => m.matchStatus === filter)
 }
 
 // ─── Row / badge helpers ───────────────────────────────────────────────────────
 
 function odRowHtml(m: MigrationMapping): string {
-  const siteUrl    = siteUrlFromDriveUrl(m.targetSite?.webUrl ?? '')
-  const folderPath = m.targetFolderPath || '/'
-  const user       = m.resolvedDisplayName ?? m.targetSite?.displayName ?? '—'
+  const siteUrl      = siteUrlFromDriveUrl(m.targetSite?.webUrl ?? '')
+  const folderPath   = m.targetFolderPath || '/'
+  const user         = m.resolvedDisplayName ?? m.targetSite?.displayName ?? '—'
+  const filterStatus = m.matchStatus ?? 'manual'
   return `
-    <tr>
+    <tr data-filter-status="${filterStatus}">
       <td class="path-cell path-cell--wrap">${escHtml(m.sourceNode.originalPath)}</td>
       <td class="od-user-cell">${escHtml(user)}</td>
       <td class="path-cell path-cell--wrap">${siteUrl
@@ -168,11 +235,12 @@ function odRowHtml(m: MigrationMapping): string {
 }
 
 function odMatchBadge(m: MigrationMapping): string {
-  if (m.matchStatus === undefined)    return `<span class="badge badge-manual">✏ Manual</span>`
-  if (m.matchStatus === 'matched')    return `<span class="badge status-ready">✓ Matched</span>`
-  if (m.matchStatus === 'not-found')  return `<span class="badge status-error">✗ Not Found</span>`
-  if (m.matchStatus === 'ambiguous')  return `<span class="badge status-warning">? Ambiguous</span>`
-  if (m.matchStatus === 'error')      return `<span class="badge status-error">✗ Error</span>`
+  if (m.matchStatus === undefined)     return `<span class="badge badge-manual">✏ Manual</span>`
+  if (m.matchStatus === 'matched')     return `<span class="badge status-ready">✓ Matched</span>`
+  if (m.matchStatus === 'not-found')   return `<span class="badge status-error">✗ Not Found</span>`
+  if (m.matchStatus === 'cant-find')   return `<span class="badge badge-cant-find">🚫 Can't Find</span>`
+  if (m.matchStatus === 'ambiguous')   return `<span class="badge status-warning">? Ambiguous</span>`
+  if (m.matchStatus === 'error')       return `<span class="badge status-error">✗ Error</span>`
   return `<span class="badge status-pending">⏳ Pending</span>`
 }
 
@@ -398,9 +466,17 @@ function renderSharePointSummary(container: HTMLElement, mappings: MigrationMapp
 
   const ready      = mappings.filter(m => m.status === 'ready')
   const unmapped   = mappings.filter(m => m.status === 'pending')
+  const errored    = mappings.filter(m => m.status === 'error')
   const totalSize  = ready.reduce((s, m) => s + m.sourceNode.sizeBytes, 0)
   const totalFiles = ready.reduce((s, m) => s + m.sourceNode.fileCount, 0)
   const uniqueSites = new Set(ready.map(m => m.targetSite?.id).filter(Boolean)).size
+
+  // Build filter pills for statuses that are actually present
+  const spFilterPills = [
+    ready.length   > 0 ? `<button class="filter-pill" data-filter="ready">✅ Ready (${ready.length})</button>`   : '',
+    unmapped.length > 0 ? `<button class="filter-pill" data-filter="pending">⏳ Pending (${unmapped.length})</button>` : '',
+    errored.length  > 0 ? `<button class="filter-pill" data-filter="error">⚠ Error (${errored.length})</button>`   : '',
+  ].join('')
 
   container.innerHTML = `
     <div class="summary-panel">
@@ -432,6 +508,13 @@ function renderSharePointSummary(container: HTMLElement, mappings: MigrationMapp
         <button id="btn-export-json" class="btn btn-ghost">Export as JSON</button>
       </div>
 
+      <!-- ── Filter Bar ── -->
+      <div class="summary-filter-bar" id="sp-filter-bar">
+        <span class="filter-label">Filter:</span>
+        <button class="filter-pill filter-pill--active" data-filter="all">All (${mappings.length})</button>
+        ${spFilterPills}
+      </div>
+
       <div class="summary-table-wrap">
         <table class="summary-table">
           <thead>
@@ -455,15 +538,39 @@ function renderSharePointSummary(container: HTMLElement, mappings: MigrationMapp
     </div>`
 
   injectSummaryStyles()
-  container.querySelector('#btn-export-csv')?.addEventListener('click',  () => exportSpCsv(mappings))
-  container.querySelector('#btn-export-json')?.addEventListener('click', () => exportSpJson(mappings))
+
+  // Track active filter for export
+  let activeSpFilter = 'all'
+
+  // Wire SP filter pills
+  const spFilterBar = container.querySelector('#sp-filter-bar')!
+  spFilterBar.querySelectorAll<HTMLElement>('.filter-pill').forEach(btn => {
+    btn.addEventListener('click', () => {
+      spFilterBar.querySelectorAll('.filter-pill').forEach(b => b.classList.remove('filter-pill--active'))
+      btn.classList.add('filter-pill--active')
+      activeSpFilter = btn.dataset.filter!
+      container.querySelectorAll<HTMLTableRowElement>('tr[data-filter-status]').forEach(row => {
+        const match = activeSpFilter === 'all' || row.dataset.filterStatus === activeSpFilter
+        row.style.display = match ? '' : 'none'
+      })
+    })
+  })
+
+  container.querySelector('#btn-export-csv')?.addEventListener('click',  () => {
+    const filtered = activeSpFilter === 'all' ? mappings : mappings.filter(m => m.status === activeSpFilter)
+    exportSpCsv(filtered)
+  })
+  container.querySelector('#btn-export-json')?.addEventListener('click', () => {
+    const filtered = activeSpFilter === 'all' ? mappings : mappings.filter(m => m.status === activeSpFilter)
+    exportSpJson(filtered)
+  })
 }
 
 function spRowHtml(m: MigrationMapping): string {
-  const statusClass = m.status === 'ready' ? 'status-ready' : 'status-pending'
-  const statusLabel = m.status === 'ready' ? '✅ Ready' : '⏳ Pending'
+  const statusClass = m.status === 'ready' ? 'status-ready' : m.status === 'error' ? 'status-error' : 'status-pending'
+  const statusLabel = m.status === 'ready' ? '✅ Ready' : m.status === 'error' ? '⚠ Error' : '⏳ Pending'
   return `
-    <tr>
+    <tr data-filter-status="${m.status}">
       <td class="path-cell" title="${escHtml(m.sourceNode.originalPath)}">${escHtml(m.sourceNode.originalPath)}</td>
       <td>${formatBytes(m.sourceNode.sizeBytes)}</td>
       <td>${m.sourceNode.fileCount.toLocaleString()}</td>
@@ -612,6 +719,23 @@ function injectSummaryStyles(): void {
     .badge-neutral  { background: var(--color-surface-alt, #f5f5f5); color: var(--color-text-muted);
       border: 1px solid var(--color-border); }
     .badge-manual   { background: #e8f4fd; color: #0078d4; }
+    .badge-cant-find { background: #fde7e9; color: #a4262c; }
+
+    /* ── Can't Find stat card ── */
+    .stat-card--cant-find { border-top: 3px solid #a4262c; }
+    .stat-card--cant-find .stat-value { color: #a4262c; }
+
+    /* ── Filter bar ── */
+    .summary-filter-bar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+    .filter-label { font-size: 0.78rem; font-weight: 600; color: var(--color-text-muted);
+      margin-right: 2px; white-space: nowrap; }
+    .filter-pill { font-size: 0.75rem; font-weight: 600; padding: 3px 10px; border-radius: 12px;
+      border: 1px solid var(--color-border); background: var(--color-surface-alt);
+      color: var(--color-text-muted); cursor: pointer; white-space: nowrap; transition: all 0.1s; }
+    .filter-pill:hover { border-color: var(--color-primary); color: var(--color-primary); }
+    .filter-pill--active { background: var(--color-primary); color: white; border-color: var(--color-primary); }
+    .filter-pill--cant-find.filter-pill--active { background: #a4262c; border-color: #a4262c; }
+    .filter-pill--cant-find:not(.filter-pill--active):hover { border-color: #a4262c; color: #a4262c; }
 
     /* ── SharePoint export row ── */
     .summary-export-row { display: flex; gap: 10px; margin-bottom: 16px; }

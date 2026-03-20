@@ -8,6 +8,9 @@ import { updateProject, getSpConfig } from '../../graph/projectService'
 import { setState, getState } from '../../state/store'
 import type { TreeNode, MigrationMapping, OneDriveMatchStatus, AppUser } from '../../types'
 
+// Light-red folder with X — used for "Can't Find" flagged folders
+const CANT_FIND_FOLDER_ICON = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 17" width="18" height="15" style="display:inline-block;vertical-align:-2px;flex-shrink:0"><path d="M1 3A1 1 0 0 1 2 2H7.5L9.5 4H18A1 1 0 0 1 19 5V15A1 1 0 0 1 18 16H2A1 1 0 0 1 1 15V3Z" fill="#ffd6d6" stroke="#e08080" stroke-width="0.5"/><line x1="8" y1="8" x2="13" y2="13" stroke="#c50000" stroke-width="1.8" stroke-linecap="round"/><line x1="13" y1="8" x2="8" y2="13" stroke="#c50000" stroke-width="1.8" stroke-linecap="round"/></svg>`
+
 // ─── Entry point ──────────────────────────────────────────────────────────────
 
 export function renderAutoMapPanel(container: HTMLElement): void {
@@ -195,11 +198,13 @@ function createAutoMapNodeEl(
   const hasChildren = node.children.length > 0
   const isFolder = !node.name.includes('*')
 
-  const autoMapping = existingMappings.find(m => m.id === node.path && m.matchStatus === 'matched')
-  const manualMapping = existingMappings.find(m => m.id === node.path && m.matchStatus === undefined && !!(m.targetSite || m.targetDrive || m.plannedSite))
+  const autoMapping    = existingMappings.find(m => m.id === node.path && m.matchStatus === 'matched')
+  const manualMapping  = existingMappings.find(m => m.id === node.path && m.matchStatus === undefined && !!(m.targetSite || m.targetDrive || m.plannedSite))
+  const cantFindMapping = existingMappings.find(m => m.id === node.path && m.matchStatus === 'cant-find')
+  const isCantFind = !!cantFindMapping
 
   const row = document.createElement('div')
-  row.className = `automap-row${autoMapping || manualMapping ? ' automap-row--mapped' : ''}`
+  row.className = `automap-row${(autoMapping || manualMapping) ? ' automap-row--mapped' : ''}${isCantFind ? ' automap-row--cant-find' : ''}`
   row.dataset.path = node.path
   row.dataset.depth = String(node.depth)
 
@@ -212,10 +217,10 @@ function createAutoMapNodeEl(
   toggleIcon.textContent = '▶'
   toggleBtn.appendChild(toggleIcon)
 
-  // Folder icon
+  // Folder icon — light-red folder with X when flagged as can't find
   const iconWrap = document.createElement('span')
   iconWrap.className = 'automap-icon'
-  iconWrap.textContent = isFolder ? '📁' : '📄'
+  iconWrap.innerHTML = isCantFind ? CANT_FIND_FOLDER_ICON : (isFolder ? '📁' : '📄')
 
   // Name
   const nameEl = document.createElement('span')
@@ -228,7 +233,7 @@ function createAutoMapNodeEl(
   levelBadge.className = 'automap-level-badge'
   levelBadge.textContent = `L${node.depth + 1}`
 
-  // Single map-status badge: Auto | Manual | (empty)
+  // Map-status badge: Auto | Manual | Can't Find | (empty)
   const mapBadge = document.createElement('span')
   mapBadge.dataset.mapBadgeFor = node.path
   if (autoMapping) {
@@ -237,15 +242,63 @@ function createAutoMapNodeEl(
   } else if (manualMapping) {
     mapBadge.className = 'automap-map-badge map-badge--manual'
     mapBadge.textContent = 'Manual'
+  } else if (isCantFind) {
+    mapBadge.className = 'automap-map-badge map-badge--cant-find'
+    mapBadge.textContent = "Can't Find"
   } else {
     mapBadge.className = 'automap-map-badge'
   }
+
+  // Can't Find toggle button — quick flag for this folder
+  const cantFindBtn = document.createElement('button')
+  cantFindBtn.type = 'button'
+  cantFindBtn.className = `automap-cant-find-btn${isCantFind ? ' is-cant-find' : ''}`
+  cantFindBtn.dataset.cantFindFor = node.path
+  cantFindBtn.textContent = isCantFind ? '↩ Clear' : "Can't Find"
+  cantFindBtn.title = isCantFind ? 'Remove Can\'t Find flag' : 'Flag this folder as Can\'t Find'
+  cantFindBtn.addEventListener('click', async (e) => {
+    e.stopPropagation()
+    const isCF = getState().mappings.find(m => m.id === node.path)?.matchStatus === 'cant-find'
+    if (isCF) {
+      setState({ mappings: getState().mappings.filter(m => m.id !== node.path) })
+      iconWrap.innerHTML = isFolder ? '📁' : '📄'
+      mapBadge.className = 'automap-map-badge'
+      mapBadge.textContent = ''
+      cantFindBtn.classList.remove('is-cant-find')
+      cantFindBtn.textContent = "Can't Find"
+      cantFindBtn.title = 'Flag this folder as Can\'t Find'
+      row.classList.remove('automap-row--cant-find')
+    } else {
+      const mapping: MigrationMapping = {
+        id: node.path,
+        sourceNode: node,
+        targetSite: null,
+        targetDrive: null,
+        targetFolderPath: '',
+        status: 'error',
+        matchStatus: 'cant-find',
+        accessStatus: 'unknown',
+        resolvedDisplayName: folderNameToDisplayName(node.name),
+      }
+      setState({ mappings: [...getState().mappings.filter(m => m.id !== node.path), mapping] })
+      iconWrap.innerHTML = CANT_FIND_FOLDER_ICON
+      mapBadge.className = 'automap-map-badge map-badge--cant-find'
+      mapBadge.textContent = "Can't Find"
+      cantFindBtn.classList.add('is-cant-find')
+      cantFindBtn.textContent = '↩ Clear'
+      cantFindBtn.title = "Remove Can't Find flag"
+      row.classList.add('automap-row--cant-find')
+      row.classList.remove('automap-row--mapped')
+    }
+    await persistCantFindMappings()
+  })
 
   row.appendChild(toggleBtn)
   row.appendChild(iconWrap)
   row.appendChild(nameEl)
   row.appendChild(levelBadge)
   row.appendChild(mapBadge)
+  row.appendChild(cantFindBtn)
   li.appendChild(row)
 
   // Level selection on row click
@@ -403,6 +456,25 @@ async function runPhase1(
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
+async function persistCantFindMappings(): Promise<void> {
+  try {
+    const state = getState()
+    const project = state.currentProject!
+    const { siteId } = getSpConfig()
+    await saveMappingsFile(siteId, project.title, project.id, state.mappings)
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const { mappings: _r, ...restData } = project.projectData
+    const updatedData = {
+      ...restData,
+      mappingCount: state.mappings.filter(m => m.targetSite || m.plannedSite).length,
+    }
+    await updateProject(project.id, { projectData: updatedData })
+    setState({ currentProject: { ...project, projectData: updatedData } })
+  } catch (err) {
+    console.warn("[AutoMap] Failed to persist Can't Find flag:", err)
+  }
+}
+
 function folderNameToDisplayName(name: string): string {
   return name
     .replace(/[._-]+/g, ' ')
@@ -558,8 +630,17 @@ function injectAutoMapStyles(): void {
       padding: 1px 5px; border-radius: 10px; flex-shrink: 0; white-space: nowrap; }
     .automap-map-badge { font-size: 0.7rem; font-weight: 700; flex-shrink: 0;
       padding: 1px 8px; border-radius: 10px; min-width: 52px; text-align: center; }
-    .map-badge--auto   { background: #dff6dd; color: #107c10; }
-    .map-badge--manual { background: #e8f4fd; color: #0078d4; }
+    .map-badge--auto      { background: #dff6dd; color: #107c10; }
+    .map-badge--manual    { background: #e8f4fd; color: #0078d4; }
+    .map-badge--cant-find { background: #fde7e9; color: #a4262c; }
+    .automap-row--cant-find { background: rgba(164, 38, 44, 0.05) !important; }
+    .automap-cant-find-btn {
+      font-size: 0.68rem; font-weight: 600; padding: 1px 7px; border-radius: 10px;
+      border: 1px solid #ddb0b0; background: transparent; color: #a4262c;
+      cursor: pointer; flex-shrink: 0; white-space: nowrap; opacity: 0.5; transition: opacity 0.12s;
+    }
+    .automap-cant-find-btn:hover { opacity: 1; background: #fde7e9; }
+    .automap-cant-find-btn.is-cant-find { background: #fde7e9; opacity: 1; border-color: #a4262c; }
 
     /* Level highlighting via data attribute on tree container */
     ${Array.from({ length: 16 }, (_, i) =>

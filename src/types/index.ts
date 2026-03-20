@@ -97,7 +97,7 @@ export interface ParsedTreeSizeRow {
 
 // ─── OneDrive Auto Map ────────────────────────────────────────────────────────
 
-export type OneDriveMatchStatus = 'pending' | 'matched' | 'not-found' | 'ambiguous' | 'error'
+export type OneDriveMatchStatus = 'pending' | 'matched' | 'not-found' | 'ambiguous' | 'error' | 'cant-find'
 export type OneDriveAccessStatus = 'unknown' | 'accessible' | 'granted' | 'no-access' | 'no-drive' | 'error'
 
 export interface OneDriveUserMapping {
