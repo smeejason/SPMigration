@@ -1,0 +1,1193 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SharePoint Migration Viewer</title>
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: #f5f5f5;
+            color: #333;
+        }
+
+        .container {
+            max-width: 1600px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        .header {
+            background: white;
+            padding: 24px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+
+        h1 {
+            font-size: 28px;
+            color: #0078d4;
+            margin-bottom: 8px;
+        }
+
+        .subtitle {
+            color: #666;
+            font-size: 14px;
+        }
+
+        .upload-section {
+            background: white;
+            padding: 24px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+
+        .upload-area {
+            border: 2px dashed #0078d4;
+            border-radius: 8px;
+            padding: 40px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.3s;
+            background: #f8f9fa;
+        }
+
+        .upload-area:hover {
+            background: #e9f4ff;
+            border-color: #005a9e;
+        }
+
+        .upload-area.dragging {
+            background: #d4ebff;
+            border-color: #005a9e;
+        }
+
+        .upload-icon {
+            font-size: 48px;
+            margin-bottom: 16px;
+        }
+
+        .upload-text {
+            font-size: 16px;
+            color: #333;
+            margin-bottom: 8px;
+        }
+
+        .upload-subtext {
+            font-size: 14px;
+            color: #666;
+        }
+
+        input[type="file"] {
+            display: none;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 16px;
+            margin-bottom: 20px;
+        }
+
+        .stat-card {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+
+        .stat-label {
+            font-size: 12px;
+            color: #666;
+            text-transform: uppercase;
+            margin-bottom: 8px;
+        }
+
+        .stat-value {
+            font-size: 32px;
+            font-weight: 600;
+        }
+
+        .stat-subtext {
+            font-size: 12px;
+            color: #999;
+            margin-top: 4px;
+        }
+
+        .stat-value.success { color: #107c10; }
+        .stat-value.error { color: #d13438; }
+        .stat-value.skipped { color: #f7630c; }
+        .stat-value.total { color: #0078d4; }
+
+        .controls-section {
+            background: white;
+            padding: 16px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            display: flex;
+            gap: 12px;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+
+        .search-box {
+            flex: 1;
+            min-width: 250px;
+            padding: 10px 12px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+
+        .filter-group {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+        }
+
+        .filter-label {
+            font-size: 13px;
+            color: #666;
+            font-weight: 500;
+        }
+
+        .filter-checkbox {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 8px 12px;
+            border: 1px solid #ccc;
+            background: white;
+            border-radius: 4px;
+            font-size: 13px;
+            cursor: pointer;
+            transition: all 0.2s;
+            user-select: none;
+        }
+
+        .filter-checkbox:hover {
+            background: #f5f5f5;
+        }
+
+        .filter-checkbox input[type="checkbox"] {
+            cursor: pointer;
+            width: 16px;
+            height: 16px;
+        }
+
+        .filter-checkbox span {
+            cursor: pointer;
+        }
+
+        .filter-btn {
+            padding: 8px 14px;
+            border: 1px solid #ccc;
+            background: white;
+            border-radius: 4px;
+            font-size: 13px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .filter-btn:hover {
+            background: #f5f5f5;
+        }
+
+        .filter-btn.active {
+            background: #0078d4;
+            color: white;
+            border-color: #0078d4;
+        }
+
+        .viewer-section {
+            background: white;
+            padding: 24px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+
+        .tree-view {
+            font-size: 14px;
+        }
+
+        .tree-item {
+            margin: 2px 0;
+        }
+
+        .tree-folder {
+            cursor: pointer;
+            padding: 8px;
+            border-radius: 4px;
+            transition: background 0.2s;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            user-select: none;
+        }
+
+        .tree-folder:hover {
+            background: #f5f5f5;
+        }
+
+        .tree-folder.has-failed {
+            background: #fff3f3;
+            border-left: 3px solid #d13438;
+            padding-left: 5px;
+        }
+
+        .tree-folder.has-failed:hover {
+            background: #ffe8e8;
+        }
+
+        .tree-file {
+            padding: 8px;
+            border-radius: 4px;
+            transition: background 0.2s;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            cursor: pointer;
+            user-select: none;
+        }
+
+        .tree-file:hover {
+            background: #f5f5f5;
+        }
+
+        .tree-children {
+            margin-left: 20px;
+        }
+
+        .icon {
+            width: 20px;
+            text-align: center;
+            flex-shrink: 0;
+        }
+
+        .file-name {
+            flex: 1;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .status-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 4px 10px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            flex-shrink: 0;
+        }
+
+        .status-success {
+            background: #dff6dd;
+            color: #107c10;
+        }
+
+        .status-failed {
+            background: #fde7e9;
+            color: #d13438;
+        }
+
+        .status-skipped {
+            background: #fff4ce;
+            color: #f7630c;
+        }
+
+        .status-partial {
+            background: #e1dfdd;
+            color: #605e5c;
+        }
+
+        .file-details {
+            margin-top: 8px;
+            margin-left: 28px;
+            padding: 12px;
+            background: #f9f9f9;
+            border-left: 3px solid #0078d4;
+            border-radius: 4px;
+            font-size: 12px;
+        }
+
+        .detail-section {
+            margin-bottom: 12px;
+        }
+
+        .detail-section:last-child {
+            margin-bottom: 0;
+        }
+
+        .detail-section-title {
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 6px;
+            font-size: 13px;
+        }
+
+        .detail-row {
+            margin: 4px 0;
+            display: grid;
+            grid-template-columns: 140px 1fr;
+            gap: 8px;
+        }
+
+        .detail-label {
+            font-weight: 600;
+            color: #666;
+        }
+
+        .detail-value {
+            word-break: break-word;
+            color: #333;
+        }
+
+        .detail-value.path {
+            font-family: 'Consolas', 'Monaco', monospace;
+            font-size: 11px;
+            background: white;
+            padding: 4px 8px;
+            border-radius: 3px;
+            border: 1px solid #e0e0e0;
+        }
+
+        .detail-value.error {
+            color: #d13438;
+            font-weight: 500;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #666;
+        }
+
+        .spinner {
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #0078d4;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 16px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .error-message {
+            background: #fde7e9;
+            color: #d13438;
+            padding: 16px;
+            border-radius: 4px;
+            margin-bottom: 20px;
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 60px 20px;
+            color: #666;
+        }
+
+        .empty-state-icon {
+            font-size: 64px;
+            margin-bottom: 16px;
+            opacity: 0.5;
+        }
+
+        .folder-count {
+            font-size: 11px;
+            color: #999;
+            margin-left: auto;
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useMemo } = React;
+
+        function SharePointMigrationViewer() {
+            const [files, setFiles] = useState([]);
+            const [loading, setLoading] = useState(false);
+            const [error, setError] = useState(null);
+            const [migrationData, setMigrationData] = useState([]);
+            const [searchTerm, setSearchTerm] = useState('');
+            const [expandedFolders, setExpandedFolders] = useState(new Set());
+            const [statusFilter, setStatusFilter] = useState('all');
+            const [hideRecycleBin, setHideRecycleBin] = useState(false);
+            const [isDragging, setIsDragging] = useState(false);
+
+            const processItemStatus = (item) => {
+                // Check if item is in recycle bin
+                const isInRecycleBin = item.Source?.includes('$RECYCLE.BIN');
+                const originalStatus = item.Status?.toLowerCase();
+                
+                if (isInRecycleBin) {
+                    if (originalStatus === 'migrated') {
+                        return {
+                            ...item,
+                            DisplayStatus: 'Migrated Trash',
+                            OriginalStatus: item.Status,
+                            IsRecycleBin: true,
+                            RecycleBinType: 'migrated'
+                        };
+                    } else if (originalStatus === 'failed' || originalStatus === 'skipped') {
+                        return {
+                            ...item,
+                            DisplayStatus: 'Recycle Bin',
+                            OriginalStatus: item.Status,
+                            IsRecycleBin: true,
+                            RecycleBinType: 'not-migrated'
+                        };
+                    }
+                }
+                
+                return {
+                    ...item,
+                    DisplayStatus: item.Status,
+                    OriginalStatus: item.Status,
+                    IsRecycleBin: false
+                };
+            };
+
+            const consolidateItems = (items) => {
+                const itemMap = new Map();
+                
+                items.forEach(item => {
+                    const key = item.Source;
+                    if (!key) return;
+                    
+                    if (itemMap.has(key)) {
+                        // Merge with existing item, preferring non-empty values
+                        const existing = itemMap.get(key);
+                        const merged = { ...existing };
+                        
+                        // Merge all properties, preferring new values if they exist
+                        Object.keys(item).forEach(prop => {
+                            if (item[prop] && (!merged[prop] || merged[prop] === 'N/A')) {
+                                merged[prop] = item[prop];
+                            }
+                        });
+                        
+                        itemMap.set(key, merged);
+                    } else {
+                        itemMap.set(key, item);
+                    }
+                });
+                
+                return Array.from(itemMap.values());
+            };
+
+            const handleFileUpload = async (uploadedFiles) => {
+                setLoading(true);
+                setError(null);
+                const allData = [];
+
+                try {
+                    for (const file of uploadedFiles) {
+                        if (file.name.endsWith('.zip')) {
+                            const zip = await JSZip.loadAsync(file);
+                            
+                            for (const [filename, zipEntry] of Object.entries(zip.files)) {
+                                // Look for ItemReport and ItemFailureReport files
+                                if ((filename.includes('ItemReport') || filename.includes('ItemFailureReport')) 
+                                    && filename.endsWith('.csv') && !zipEntry.dir) {
+                                    const content = await zipEntry.async('text');
+                                    const parsed = Papa.parse(content, {
+                                        header: true,
+                                        skipEmptyLines: true
+                                    });
+                                    
+                                    allData.push(...parsed.data);
+                                }
+                            }
+                        }
+                    }
+
+                    // Consolidate duplicates and process recycle bin status
+                    const consolidated = consolidateItems(allData);
+                    const processedData = consolidated.map(processItemStatus);
+
+                    // Append new data to existing data instead of replacing
+                    setMigrationData(prevData => {
+                        const combined = [...prevData, ...processedData];
+                        return consolidateItems(combined);
+                    });
+                    setFiles(prevFiles => [...prevFiles, ...Array.from(uploadedFiles)]);
+                } catch (err) {
+                    setError(`Error processing files: ${err.message}`);
+                } finally {
+                    setLoading(false);
+                }
+            };
+
+            const handleDrop = (e) => {
+                e.preventDefault();
+                setIsDragging(false);
+                const droppedFiles = Array.from(e.dataTransfer.files);
+                handleFileUpload(droppedFiles);
+            };
+
+            const handleDragOver = (e) => {
+                e.preventDefault();
+                setIsDragging(true);
+            };
+
+            const handleDragLeave = (e) => {
+                e.preventDefault();
+                setIsDragging(false);
+            };
+
+            const handleFileChange = (e) => {
+                const selectedFiles = Array.from(e.target.files);
+                handleFileUpload(selectedFiles);
+            };
+
+            const stats = useMemo(() => {
+                const total = migrationData.length;
+                const success = migrationData.filter(item => 
+                    item.Status?.toLowerCase() === 'migrated'
+                ).length;
+                const failed = migrationData.filter(item => 
+                    item.Status?.toLowerCase() === 'failed'
+                ).length;
+                const failedRecycleBin = migrationData.filter(item =>
+                    item.Status?.toLowerCase() === 'failed' && item.IsRecycleBin
+                ).length;
+                const failedOther = failed - failedRecycleBin;
+                
+                const skipped = migrationData.filter(item => 
+                    item.Status?.toLowerCase() === 'skipped'
+                ).length;
+                const skippedRecycleBin = migrationData.filter(item =>
+                    item.Status?.toLowerCase() === 'skipped' && item.IsRecycleBin
+                ).length;
+                const skippedOther = skipped - skippedRecycleBin;
+                
+                const partial = migrationData.filter(item => 
+                    item.Status?.toLowerCase() === 'partial success'
+                ).length;
+
+                return { 
+                    total, 
+                    success, 
+                    failed, 
+                    failedRecycleBin, 
+                    failedOther,
+                    skipped, 
+                    skippedRecycleBin,
+                    skippedOther,
+                    partial 
+                };
+            }, [migrationData]);
+
+            const filteredData = useMemo(() => {
+                let data = migrationData;
+                
+                // Filter by status
+                if (statusFilter !== 'all') {
+                    data = data.filter(item => {
+                        const status = item.Status?.toLowerCase();
+                        if (statusFilter === 'migrated') return status === 'migrated';
+                        if (statusFilter === 'failed') return status === 'failed';
+                        if (statusFilter === 'skipped') return status === 'skipped';
+                        if (statusFilter === 'partial') return status === 'partial success';
+                        return true;
+                    });
+                }
+                
+                // Filter recycle bin
+                if (hideRecycleBin) {
+                    data = data.filter(item => !item.IsRecycleBin);
+                }
+                
+                return data;
+            }, [migrationData, statusFilter, hideRecycleBin]);
+
+            const hasFailed = (node) => {
+                // Check if this node has failed items
+                const hasFailedItems = node.items?.some(item => 
+                    item.Status?.toLowerCase() === 'failed'
+                );
+                
+                if (hasFailedItems) return true;
+                
+                // Check if folder item itself is failed
+                if (node.folderItem?.Status?.toLowerCase() === 'failed') return true;
+                
+                // Recursively check children
+                if (node.children && Object.keys(node.children).length > 0) {
+                    return Object.values(node.children).some(child => hasFailed(child));
+                }
+                
+                return false;
+            };
+
+            const buildTree = useMemo(() => {
+                const tree = {};
+
+                filteredData.forEach(item => {
+                    const sourcePath = item.Source || '';
+                    if (!sourcePath) return;
+
+                    // Remove leading \\ and split by \ or /
+                    const cleanPath = sourcePath.replace(/^\\\\/, '');
+                    const pathParts = cleanPath.split(/[/\\]/).filter(p => p);
+                    let current = tree;
+
+                    pathParts.forEach((part, index) => {
+                        if (!current[part]) {
+                            current[part] = {
+                                name: part,
+                                isFolder: index < pathParts.length - 1 || item.Type?.toLowerCase() === 'folder',
+                                children: {},
+                                items: [],
+                                folderItem: null,
+                                path: pathParts.slice(0, index + 1).join('\\')
+                            };
+                        }
+
+                        if (index === pathParts.length - 1) {
+                            current[part].items.push(item);
+                            // If this is a folder type, store it as the folder item
+                            if (item.Type?.toLowerCase() === 'folder') {
+                                current[part].folderItem = item;
+                                current[part].isFolder = true;
+                            } else {
+                                current[part].isFolder = false;
+                            }
+                        }
+
+                        current = current[part].children;
+                    });
+                });
+
+                return tree;
+            }, [filteredData]);
+
+            const searchFilteredTree = useMemo(() => {
+                if (!searchTerm) return buildTree;
+
+                const searchLower = searchTerm.toLowerCase();
+
+                const filterNode = (node) => {
+                    const filtered = {};
+                    
+                    Object.entries(node).forEach(([key, value]) => {
+                        const nameMatches = key.toLowerCase().includes(searchLower);
+                        const hasMatchingChildren = Object.keys(value.children).length > 0;
+                        const itemMatches = value.items.some(item => 
+                            JSON.stringify(item).toLowerCase().includes(searchLower)
+                        );
+
+                        if (nameMatches || hasMatchingChildren || itemMatches) {
+                            const filteredChildren = filterNode(value.children);
+                            if (nameMatches || itemMatches || Object.keys(filteredChildren).length > 0) {
+                                filtered[key] = {
+                                    ...value,
+                                    children: filteredChildren
+                                };
+                            }
+                        }
+                    });
+
+                    return filtered;
+                };
+
+                return filterNode(buildTree);
+            }, [buildTree, searchTerm]);
+
+            const toggleFolder = (path) => {
+                const newExpanded = new Set(expandedFolders);
+                if (newExpanded.has(path)) {
+                    newExpanded.delete(path);
+                } else {
+                    newExpanded.add(path);
+                }
+                setExpandedFolders(newExpanded);
+            };
+
+            const getStatusBadge = (item) => {
+                const status = item?.DisplayStatus || item?.Status;
+                if (!status) return null;
+                const statusLower = status.toLowerCase();
+                
+                // Check if this is a recycle bin item
+                if (item?.IsRecycleBin) {
+                    if (item.RecycleBinType === 'migrated') {
+                        return <span className="status-badge status-success">🗑️⚠️ Migrated Trash</span>;
+                    } else {
+                        return <span className="status-badge status-skipped">🗑️ Recycle Bin</span>;
+                    }
+                }
+                
+                if (statusLower === 'migrated') {
+                    return <span className="status-badge status-success">✓ Migrated</span>;
+                } else if (statusLower === 'failed') {
+                    return <span className="status-badge status-failed">✗ Failed</span>;
+                } else if (statusLower === 'skipped') {
+                    return <span className="status-badge status-skipped">⊘ Skipped</span>;
+                } else if (statusLower === 'partial success') {
+                    return <span className="status-badge status-partial">◐ Partial</span>;
+                }
+                return <span className="status-badge">{status}</span>;
+            };
+
+            const formatBytes = (bytes) => {
+                if (!bytes) return 'N/A';
+                const num = parseInt(bytes);
+                if (isNaN(num)) return bytes;
+                if (num === 0) return '0 Bytes';
+                const k = 1024;
+                const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+                const i = Math.floor(Math.log(num) / Math.log(k));
+                return Math.round((num / Math.pow(k, i)) * 100) / 100 + ' ' + sizes[i];
+            };
+
+            const TreeNode = ({ name, node, path = '' }) => {
+                const currentPath = path ? `${path}\\${name}` : name;
+                const isExpanded = expandedFolders.has(currentPath);
+                const hasChildren = Object.keys(node.children).length > 0;
+                const [showDetails, setShowDetails] = useState(false);
+
+                const childCount = useMemo(() => {
+                    const count = (node) => {
+                        let total = 0;
+                        Object.values(node).forEach(child => {
+                            total += 1;
+                            if (Object.keys(child.children).length > 0) {
+                                total += count(child.children);
+                            }
+                        });
+                        return total;
+                    };
+                    return count(node.children);
+                }, [node.children]);
+
+                if (node.isFolder) {
+                    const folderItem = node.folderItem;
+                    const hasFolderStatus = folderItem !== null;
+                    const containsFailures = hasFailed(node);
+                    
+                    return (
+                        <div className="tree-item">
+                            <div 
+                                className={`tree-folder ${containsFailures ? 'has-failed' : ''}`}
+                                onClick={() => toggleFolder(currentPath)}
+                                onDoubleClick={(e) => {
+                                    e.stopPropagation();
+                                    if (hasFolderStatus) {
+                                        setShowDetails(!showDetails);
+                                    }
+                                }}
+                            >
+                                <span className="icon">{isExpanded ? '📂' : '📁'}</span>
+                                <span className="file-name">{name}</span>
+                                {childCount > 0 && (
+                                    <span className="folder-count">({childCount} items)</span>
+                                )}
+                                {hasFolderStatus && getStatusBadge(folderItem)}
+                            </div>
+                            
+                            {showDetails && hasFolderStatus && (
+                                <div className="file-details" style={{ marginLeft: '28px', marginTop: '8px', marginBottom: '8px' }}>
+                                    <div className="detail-section">
+                                        <div className="detail-section-title">Folder Migration Status</div>
+                                        <div className="detail-row">
+                                            <span className="detail-label">Status:</span>
+                                            <span className="detail-value">{folderItem.DisplayStatus || folderItem.Status}</span>
+                                        </div>
+                                        {folderItem.IsRecycleBin && (
+                                            <div className="detail-row">
+                                                <span className="detail-label">Original Status:</span>
+                                                <span className="detail-value">{folderItem.OriginalStatus}</span>
+                                            </div>
+                                        )}
+                                        {folderItem['Result category'] && (
+                                            <div className="detail-row">
+                                                <span className="detail-label">Category:</span>
+                                                <span className="detail-value">{folderItem['Result category']}</span>
+                                            </div>
+                                        )}
+                                        {folderItem.Message && (
+                                            <div className="detail-row">
+                                                <span className="detail-label">Message:</span>
+                                                <span className="detail-value error">{folderItem.Message}</span>
+                                            </div>
+                                        )}
+                                    </div>
+
+                                    <div className="detail-section">
+                                        <div className="detail-section-title">Paths</div>
+                                        <div className="detail-row">
+                                            <span className="detail-label">Source:</span>
+                                            <span className="detail-value path">{folderItem.Source}</span>
+                                        </div>
+                                        <div className="detail-row">
+                                            <span className="detail-label">Destination:</span>
+                                            <span className="detail-value path">{folderItem.Destination}</span>
+                                        </div>
+                                    </div>
+
+                                    {folderItem['Incremental round'] && (
+                                        <div className="detail-section">
+                                            <div className="detail-section-title">Migration Details</div>
+                                            <div className="detail-row">
+                                                <span className="detail-label">Round:</span>
+                                                <span className="detail-value">{folderItem['Incremental round']}</span>
+                                            </div>
+                                            {folderItem['Device name'] && (
+                                                <div className="detail-row">
+                                                    <span className="detail-label">Device:</span>
+                                                    <span className="detail-value">{folderItem['Device name']}</span>
+                                                </div>
+                                            )}
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+                            
+                            {isExpanded && hasChildren && (
+                                <div className="tree-children">
+                                    {Object.entries(node.children)
+                                        .sort(([a, nodeA], [b, nodeB]) => {
+                                            // Folders first, then alphabetically
+                                            if (nodeA.isFolder && !nodeB.isFolder) return -1;
+                                            if (!nodeA.isFolder && nodeB.isFolder) return 1;
+                                            return a.localeCompare(b);
+                                        })
+                                        .map(([childName, childNode]) => (
+                                            <TreeNode 
+                                                key={childName} 
+                                                name={childName} 
+                                                node={childNode}
+                                                path={currentPath}
+                                            />
+                                        ))}
+                                </div>
+                            )}
+                        </div>
+                    );
+                } else {
+                    // File node - could have multiple items if there are duplicates
+                    const item = node.items[0] || {};
+                    return (
+                        <div className="tree-item">
+                            <div 
+                                className="tree-file"
+                                onClick={() => setShowDetails(!showDetails)}
+                            >
+                                <span className="icon">📄</span>
+                                <span className="file-name">{name}</span>
+                                {getStatusBadge(item)}
+                            </div>
+                            {showDetails && (
+                                <div className="file-details">
+                                    <div className="detail-section">
+                                        <div className="detail-section-title">File Information</div>
+                                        <div className="detail-row">
+                                            <span className="detail-label">File Name:</span>
+                                            <span className="detail-value">{item['Item name']}</span>
+                                        </div>
+                                        {item.Extension && (
+                                            <div className="detail-row">
+                                                <span className="detail-label">Extension:</span>
+                                                <span className="detail-value">{item.Extension}</span>
+                                            </div>
+                                        )}
+                                        {item['Item size (bytes)'] && (
+                                            <div className="detail-row">
+                                                <span className="detail-label">Size:</span>
+                                                <span className="detail-value">
+                                                    {formatBytes(item['Item size (bytes)'])}
+                                                </span>
+                                            </div>
+                                        )}
+                                        {item.Type && (
+                                            <div className="detail-row">
+                                                <span className="detail-label">Type:</span>
+                                                <span className="detail-value">{item.Type}</span>
+                                            </div>
+                                        )}
+                                    </div>
+
+                                    <div className="detail-section">
+                                        <div className="detail-section-title">Migration Status</div>
+                                        <div className="detail-row">
+                                            <span className="detail-label">Status:</span>
+                                            <span className="detail-value">{item.DisplayStatus || item.Status}</span>
+                                        </div>
+                                        {item.IsRecycleBin && (
+                                            <div className="detail-row">
+                                                <span className="detail-label">Original Status:</span>
+                                                <span className="detail-value">{item.OriginalStatus}</span>
+                                            </div>
+                                        )}
+                                        {item['Result category'] && (
+                                            <div className="detail-row">
+                                                <span className="detail-label">Category:</span>
+                                                <span className="detail-value">{item['Result category']}</span>
+                                            </div>
+                                        )}
+                                        {item.Message && (
+                                            <div className="detail-row">
+                                                <span className="detail-label">Message:</span>
+                                                <span className="detail-value error">{item.Message}</span>
+                                            </div>
+                                        )}
+                                        {item['Error code'] && (
+                                            <div className="detail-row">
+                                                <span className="detail-label">Error Code:</span>
+                                                <span className="detail-value error">{item['Error code']}</span>
+                                            </div>
+                                        )}
+                                    </div>
+
+                                    <div className="detail-section">
+                                        <div className="detail-section-title">Paths</div>
+                                        <div className="detail-row">
+                                            <span className="detail-label">Source:</span>
+                                            <span className="detail-value path">{item.Source}</span>
+                                        </div>
+                                        <div className="detail-row">
+                                            <span className="detail-label">Destination:</span>
+                                            <span className="detail-value path">{item.Destination}</span>
+                                        </div>
+                                    </div>
+
+                                    {(item['Incremental round'] || item['Task ID'] || item['Device name']) && (
+                                        <div className="detail-section">
+                                            <div className="detail-section-title">Migration Details</div>
+                                            {item['Incremental round'] && (
+                                                <div className="detail-row">
+                                                    <span className="detail-label">Round:</span>
+                                                    <span className="detail-value">{item['Incremental round']}</span>
+                                                </div>
+                                            )}
+                                            {item['Device name'] && (
+                                                <div className="detail-row">
+                                                    <span className="detail-label">Device:</span>
+                                                    <span className="detail-value">{item['Device name']}</span>
+                                                </div>
+                                            )}
+                                            {item['Task ID'] && (
+                                                <div className="detail-row">
+                                                    <span className="detail-label">Task ID:</span>
+                                                    <span className="detail-value">{item['Task ID']}</span>
+                                                </div>
+                                            )}
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+                        </div>
+                    );
+                }
+            };
+
+            return (
+                <div className="container">
+                    <div className="header">
+                        <h1>SharePoint Migration Viewer</h1>
+                        <p className="subtitle">Upload migration report ZIP files to visualize source files and their migration status</p>
+                    </div>
+
+                    <div className="upload-section">
+                        <div 
+                            className={`upload-area ${isDragging ? 'dragging' : ''}`}
+                            onDrop={handleDrop}
+                            onDragOver={handleDragOver}
+                            onDragLeave={handleDragLeave}
+                            onClick={() => document.getElementById('fileInput').click()}
+                        >
+                            <div className="upload-icon">📦</div>
+                            <div className="upload-text">Drop ZIP files here or click to browse</div>
+                            <div className="upload-subtext">
+                                Supports multiple ZIP files containing ItemReport and ItemFailureReport CSVs
+                            </div>
+                        </div>
+                        <input 
+                            id="fileInput"
+                            type="file" 
+                            multiple 
+                            accept=".zip"
+                            onChange={handleFileChange}
+                        />
+                        {migrationData.length > 0 && (
+                            <div style={{ marginTop: '12px', textAlign: 'center' }}>
+                                <button 
+                                    className="btn btn-primary"
+                                    onClick={() => {
+                                        setMigrationData([]);
+                                        setFiles([]);
+                                        setExpandedFolders(new Set());
+                                        setSearchTerm('');
+                                        setStatusFilter('all');
+                                        setHideRecycleBin(false);
+                                    }}
+                                    style={{ background: '#d13438' }}
+                                >
+                                    Clear All Data
+                                </button>
+                            </div>
+                        )}
+                    </div>
+
+                    {error && (
+                        <div className="error-message">
+                            {error}
+                        </div>
+                    )}
+
+                    {loading && (
+                        <div className="loading">
+                            <div className="spinner"></div>
+                            <div>Processing ZIP files and extracting migration data...</div>
+                        </div>
+                    )}
+
+                    {!loading && migrationData.length > 0 && (
+                        <>
+                            <div className="stats-grid">
+                                <div className="stat-card">
+                                    <div className="stat-label">Total Files</div>
+                                    <div className="stat-value total">{stats.total.toLocaleString()}</div>
+                                </div>
+                                <div className="stat-card">
+                                    <div className="stat-label">Successful</div>
+                                    <div className="stat-value success">{stats.success.toLocaleString()}</div>
+                                    <div className="stat-subtext">
+                                        {stats.total > 0 ? Math.round((stats.success / stats.total) * 100) : 0}%
+                                    </div>
+                                </div>
+                                <div className="stat-card">
+                                    <div className="stat-label">Failed</div>
+                                    <div className="stat-value error">{stats.failed.toLocaleString()}</div>
+                                    <div className="stat-subtext">
+                                        {stats.total > 0 ? Math.round((stats.failed / stats.total) * 100) : 0}%
+                                    </div>
+                                    {stats.failedRecycleBin > 0 && (
+                                        <div style={{ fontSize: '11px', marginTop: '8px', color: '#666' }}>
+                                            🗑️ {stats.failedRecycleBin} Recycle Bin<br/>
+                                            📄 {stats.failedOther} Other
+                                        </div>
+                                    )}
+                                </div>
+                                <div className="stat-card">
+                                    <div className="stat-label">Skipped</div>
+                                    <div className="stat-value skipped">{stats.skipped.toLocaleString()}</div>
+                                    <div className="stat-subtext">
+                                        {stats.total > 0 ? Math.round((stats.skipped / stats.total) * 100) : 0}%
+                                    </div>
+                                    {stats.skippedRecycleBin > 0 && (
+                                        <div style={{ fontSize: '11px', marginTop: '8px', color: '#666' }}>
+                                            🗑️ {stats.skippedRecycleBin} Recycle Bin<br/>
+                                            📄 {stats.skippedOther} Other
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+
+                            <div className="controls-section">
+                                <input 
+                                    type="text"
+                                    className="search-box"
+                                    placeholder="Search files and folders..."
+                                    value={searchTerm}
+                                    onChange={(e) => setSearchTerm(e.target.value)}
+                                />
+                                
+                                <div className="filter-group">
+                                    <span className="filter-label">Filter:</span>
+                                    <button 
+                                        className={`filter-btn ${statusFilter === 'all' ? 'active' : ''}`}
+                                        onClick={() => setStatusFilter('all')}
+                                    >
+                                        All
+                                    </button>
+                                    <button 
+                                        className={`filter-btn ${statusFilter === 'migrated' ? 'active' : ''}`}
+                                        onClick={() => setStatusFilter('migrated')}
+                                    >
+                                        Migrated
+                                    </button>
+                                    <button 
+                                        className={`filter-btn ${statusFilter === 'failed' ? 'active' : ''}`}
+                                        onClick={() => setStatusFilter('failed')}
+                                    >
+                                        Failed
+                                    </button>
+                                    <button 
+                                        className={`filter-btn ${statusFilter === 'skipped' ? 'active' : ''}`}
+                                        onClick={() => setStatusFilter('skipped')}
+                                    >
+                                        Skipped
+                                    </button>
+                                </div>
+
+                                <div className="filter-group">
+                                    <label className="filter-checkbox">
+                                        <input
+                                            type="checkbox"
+                                            checked={hideRecycleBin}
+                                            onChange={(e) => setHideRecycleBin(e.target.checked)}
+                                        />
+                                        <span>🗑️ Hide Recycle Bin</span>
+                                    </label>
+                                </div>
+                            </div>
+
+                            <div className="viewer-section">
+                                <div className="tree-view">
+                                    {Object.entries(searchFilteredTree)
+                                        .sort(([a, nodeA], [b, nodeB]) => {
+                                            if (nodeA.isFolder && !nodeB.isFolder) return -1;
+                                            if (!nodeA.isFolder && nodeB.isFolder) return 1;
+                                            return a.localeCompare(b);
+                                        })
+                                        .map(([name, node]) => (
+                                            <TreeNode key={name} name={name} node={node} />
+                                        ))}
+                                </div>
+                            </div>
+                        </>
+                    )}
+
+                    {!loading && migrationData.length === 0 && files.length === 0 && (
+                        <div className="empty-state">
+                            <div className="empty-state-icon">📊</div>
+                            <div>No migration data loaded</div>
+                            <div style={{ fontSize: '14px', marginTop: '8px' }}>
+                                Upload ZIP files containing ItemReport and ItemFailureReport CSVs to get started
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        }
+
+        ReactDOM.render(<SharePointMigrationViewer />, document.getElementById('root'));
+    </script>
+</body>
+</html>

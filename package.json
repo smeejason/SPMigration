@@ -1,0 +1,26 @@
+{
+  "name": "sp-migration-planner",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "dev:live": "vite --mode live",
+    "build": "tsc && vite build",
+    "build:live": "tsc && vite build --mode live",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@azure/msal-browser": "^3.27.0",
+    "@microsoft/microsoft-graph-client": "^3.0.7",
+    "exceljs": "^4.4.0",
+    "jszip": "^3.10.1",
+    "papaparse": "^5.4.1"
+  },
+  "devDependencies": {
+    "@types/jszip": "^3.4.0",
+    "@types/papaparse": "^5.3.14",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.5"
+  }
+}
