@@ -218,7 +218,8 @@ function applyOdFilter(mappings: MigrationMapping[], filter: string): MigrationM
 
 function odRowHtml(m: MigrationMapping): string {
   const siteUrl      = siteUrlFromDriveUrl(m.targetSite?.webUrl ?? '')
-  const folderPath   = m.targetFolderPath || '/'
+  const projectDefault = getState().currentProject?.projectData.autoMapSettings?.targetFolderPath ?? ''
+  const folderPath   = m.targetFolderPath || projectDefault || ''
   const user         = m.resolvedDisplayName ?? m.targetSite?.displayName ?? '—'
   const filterStatus = m.matchStatus ?? 'manual'
   return `
@@ -228,7 +229,7 @@ function odRowHtml(m: MigrationMapping): string {
       <td class="path-cell path-cell--wrap">${siteUrl
         ? `<a href="${escHtml(siteUrl)}" target="_blank" rel="noopener">${escHtml(siteUrl)}</a>`
         : '—'}</td>
-      <td class="path-cell">${escHtml(folderPath)}</td>
+      <td class="path-cell">${folderPath ? escHtml(folderPath) : ''}</td>
       <td>${odMatchBadge(m)}</td>
       <td data-access-for="${escHtml(m.id)}">${odAccessBadge(m)}</td>
     </tr>`
@@ -432,12 +433,13 @@ async function persistMappings(): Promise<void> {
 // ─── OneDrive exports ─────────────────────────────────────────────────────────
 
 function exportOneDriveCsv(mappings: MigrationMapping[]): void {
+  const projectDefault = getState().currentProject?.projectData.autoMapSettings?.targetFolderPath ?? ''
   const headers = ['Source Path', 'User', 'Destination OneDrive URL', 'Folder Path', 'Match Status', 'Access Status']
   const rows = mappings.map(m => [
     m.sourceNode.originalPath,
     m.resolvedDisplayName ?? m.targetSite?.displayName ?? '',
     siteUrlFromDriveUrl(m.targetSite?.webUrl ?? ''),
-    m.targetFolderPath || '/',
+    m.targetFolderPath || projectDefault || '',
     m.matchStatus ?? '',
     m.accessStatus ?? '',
   ])
@@ -446,11 +448,12 @@ function exportOneDriveCsv(mappings: MigrationMapping[]): void {
 }
 
 function exportOneDriveJson(mappings: MigrationMapping[]): void {
+  const projectDefault = getState().currentProject?.projectData.autoMapSettings?.targetFolderPath ?? ''
   const tasks = mappings.map(m => ({
     SourcePath:             m.sourceNode.originalPath,
     TargetPath:             siteUrlFromDriveUrl(m.targetSite?.webUrl ?? ''),
     TargetList:             'Documents',
-    TargetListRelativePath: m.targetFolderPath || '',
+    TargetListRelativePath: m.targetFolderPath || projectDefault || '',
   }))
   downloadFile(JSON.stringify({ Tasks: tasks }, null, 2), 'onedrive-migration-plan.json', 'application/json')
 }

@@ -68,6 +68,14 @@ export function renderAutoMapPanel(container: HTMLElement): void {
             <button id="btn-confirm-level" class="btn btn-primary btn-sm" ${selectedLevel >= 0 ? '' : 'disabled'}>Confirm Level</button>
           </div>
 
+          <div class="form-group automap-dest-folder-group">
+            <label>Destination folder in users OneDrive <span class="hint">(optional)</span></label>
+            <input id="dest-folder-path" type="text" class="form-input"
+              placeholder="e.g. Migration/Phase1"
+              value="${escHtml(settings?.targetFolderPath ?? '')}" />
+            <div class="form-hint">Default subfolder path for all OneDrive destinations. Can be overridden per mapping on the Map tab.</div>
+          </div>
+
           <div class="automap-phase-section">
             <div class="phase-header"><span class="phase-num">Phase 1</span> Find &amp; Map Users</div>
             <button id="btn-phase1" class="btn btn-primary" ${phase1Done || selectedLevel >= 0 ? '' : 'disabled'}>
@@ -148,12 +156,33 @@ export function renderAutoMapPanel(container: HTMLElement): void {
     }
   )
 
+  // ── Destination Folder Path ────────────────────────────────────────────────
+  const destFolderInput = container.querySelector('#dest-folder-path') as HTMLInputElement
+  destFolderInput.addEventListener('change', async () => {
+    const project = getState().currentProject
+    if (!project) return
+    const existing = project.projectData.autoMapSettings
+    const updatedData = {
+      ...project.projectData,
+      autoMapSettings: {
+        selectedLevel: existing?.selectedLevel ?? selectedLevel,
+        migrationAccount: existing?.migrationAccount ?? '',
+        targetFolderPath: destFolderInput.value.trim(),
+      },
+    }
+    try {
+      await updateProject(project.id, { projectData: updatedData })
+      setState({ currentProject: { ...project, projectData: updatedData } })
+    } catch { /* non-fatal */ }
+  })
+
   // ── Confirm Level ──────────────────────────────────────────────────────────
   const confirmBtn = container.querySelector('#btn-confirm-level') as HTMLButtonElement
   confirmBtn.addEventListener('click', async () => {
     const migrationAccount = (container.querySelector('#migration-account') as HTMLInputElement).value.trim()
+    const targetFolderPath = (container.querySelector('#dest-folder-path') as HTMLInputElement).value.trim()
     const project = getState().currentProject!
-    const updatedData = { ...project.projectData, autoMapSettings: { selectedLevel, migrationAccount, targetFolderPath: '' } }
+    const updatedData = { ...project.projectData, autoMapSettings: { selectedLevel, migrationAccount, targetFolderPath } }
     try {
       await updateProject(project.id, { projectData: updatedData })
       setState({ currentProject: { ...project, projectData: updatedData } })
