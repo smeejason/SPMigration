@@ -42,8 +42,14 @@ jobs:
           # For more information regarding Static Web App workflow configurations, please visit: https://aka.ms/swaworkflowconfig
           app_location: "/" # App source code path
           api_location: "" # Api source code path - optional
-          output_location: "" # Built app content directory - optional
+          output_location: "dist" # Built app content directory
+          app_build_command: "npm run build:live"
           github_id_token: ${{ steps.idtoken.outputs.result }}
+        env:
+          VITE_CLIENT_ID: ${{ secrets.VITE_CLIENT_ID }}
+          VITE_TENANT_ID: ${{ secrets.VITE_TENANT_ID }}
+          VITE_SP_SITE_ID: ${{ secrets.VITE_SP_SITE_ID }}
+          VITE_SP_LIST_ID: ${{ secrets.VITE_SP_LIST_ID }}
           ###### End of Repository/Build Configurations ######
 
   close_pull_request_job:
