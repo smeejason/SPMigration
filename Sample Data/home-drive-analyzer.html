@@ -1,0 +1,1953 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Home Drive Migration Analyzer</title>
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: #f5f5f5; color: #333;
+        }
+        .container { max-width: 1600px; margin: 0 auto; padding: 20px; }
+        .header {
+            background: white; padding: 24px; border-radius: 8px;
+            margin-bottom: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        h1 { font-size: 28px; color: #0078d4; margin-bottom: 8px; }
+        .subtitle { color: #666; font-size: 14px; }
+        .upload-section {
+            background: white; padding: 24px; border-radius: 8px;
+            margin-bottom: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .upload-area {
+            border: 2px dashed #0078d4; border-radius: 8px; padding: 40px;
+            text-align: center; cursor: pointer; transition: all 0.3s; background: #f8f9fa;
+        }
+        .upload-area:hover { background: #e9f4ff; border-color: #005a9e; }
+        .upload-area.dragging { background: #d4ebff; border-color: #005a9e; }
+        .upload-icon { font-size: 48px; margin-bottom: 16px; }
+        .upload-text { font-size: 16px; color: #333; margin-bottom: 8px; }
+        .upload-subtext { font-size: 14px; color: #666; }
+        input[type="file"] { display: none; }
+        .stats-grid {
+            display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 16px; margin-bottom: 20px;
+        }
+        .stat-card {
+            background: white; padding: 20px; border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .stat-card.highlight { border-left: 4px solid #d13438; }
+        .stat-label { font-size: 12px; color: #666; text-transform: uppercase; margin-bottom: 8px; }
+        .stat-value { font-size: 28px; font-weight: 600; }
+        .stat-subtext { font-size: 12px; color: #999; margin-top: 4px; }
+        .stat-value.primary { color: #0078d4; }
+        .stat-value.success { color: #107c10; }
+        .stat-value.warning { color: #f7630c; }
+        .stat-value.danger { color: #d13438; }
+        .controls-section {
+            background: white; padding: 16px; border-radius: 8px;
+            margin-bottom: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            display: flex; gap: 12px; flex-wrap: wrap; align-items: center;
+        }
+        .search-box {
+            flex: 1; min-width: 250px; padding: 10px 12px;
+            border: 1px solid #ccc; border-radius: 4px; font-size: 14px;
+        }
+        .search-box:focus { outline: none; border-color: #0078d4; box-shadow: 0 0 0 2px rgba(0,120,212,0.2); }
+        .filter-group { display: flex; gap: 8px; align-items: center; }
+        .filter-label { font-size: 13px; color: #666; font-weight: 500; }
+        .btn {
+            padding: 8px 16px; border: 1px solid #ccc; background: white;
+            border-radius: 4px; font-size: 13px; cursor: pointer; transition: all 0.2s;
+            display: inline-flex; align-items: center; gap: 6px;
+        }
+        .btn:hover { background: #f5f5f5; }
+        .btn.active { background: #0078d4; color: white; border-color: #0078d4; }
+        .btn-success { background: #107c10; color: white; border-color: #107c10; }
+        .btn-success:hover { background: #0b5a0b; }
+        .viewer-section {
+            background: white; padding: 24px; border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .tree-view { font-size: 14px; }
+        .tree-item { margin: 1px 0; }
+        .tree-folder {
+            cursor: pointer; padding: 8px 10px; border-radius: 4px;
+            transition: background 0.15s; display: flex; align-items: center; gap: 8px;
+            user-select: none;
+        }
+        .tree-folder:hover { background: #f0f6ff; }
+        .tree-folder.selected { background: #e1efff; border-left: 3px solid #0078d4; }
+        .tree-folder.has-recycle { border-right: 3px solid #f7630c; }
+        .tree-children { margin-left: 24px; border-left: 1px solid #e8e8e8; }
+        .icon { width: 20px; text-align: center; flex-shrink: 0; }
+        .folder-name { flex: 1; min-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+        .folder-meta { display: flex; gap: 0; align-items: center; flex-shrink: 0; font-size: 12px; color: #666; }
+        .folder-meta > * { box-sizing: border-box; }
+        .col-total  { width: 90px;  text-align: right; padding-right: 8px; flex-shrink: 0; }
+        .col-recycle{ width: 130px; text-align: center; flex-shrink: 0; overflow: hidden; display: flex; align-items: center; justify-content: center; }
+        .col-files  { width: 90px;  text-align: right; padding-right: 8px; flex-shrink: 0; }
+        .col-mapping{ width: 120px; text-align: center; flex-shrink: 0; }
+        .col-migrate{ width: 90px;  text-align: right; padding-right: 4px; font-weight: 600; color: #333; flex-shrink: 0; }
+        .col-postmigrate { width: 110px; text-align: right; padding-right: 4px; flex-shrink: 0; }
+        .folder-size { font-weight: 600; color: #333; width: 90px; text-align: right; padding-right: 4px; }
+        .folder-files { width: 90px; text-align: right; padding-right: 8px; }
+        .checkbox-wrapper {
+            display: flex; align-items: center; justify-content: center;
+            width: 20px; height: 20px; flex-shrink: 0;
+        }
+        .checkbox-wrapper input[type="checkbox"] {
+            width: 16px; height: 16px; cursor: pointer; accent-color: #0078d4;
+        }
+        .detail-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; margin-bottom: 16px; padding: 12px; background: #f8f9fa; border-radius: 4px; }
+        .detail-grid > div { font-size: 13px; }
+        .detail-grid strong { margin-right: 6px; color: #333; }
+        .mapping-section { padding: 12px; background: #f0f8ff; border-radius: 4px; margin-bottom: 12px; border-left: 3px solid #0078d4; }
+        .mapping-section.unmapped { background: #fff8f0; border-left-color: #f7630c; }
+        .mapping-label { font-size: 11px; font-weight: 600; color: #666; text-transform: uppercase; margin-bottom: 4px; }
+        .mapping-value { font-size: 14px; font-weight: 500; color: #333; margin-bottom: 4px; }
+        .mapping-value.unmapped { color: #d13438; font-weight: 600; }
+        .mapping-subtext { font-size: 12px; color: #666; }
+        .mapping-select { width: 100%; padding: 8px; margin-top: 8px; border: 1px solid #ccc; border-radius: 4px; font-size: 13px; }
+        .mapping-select:focus { outline: none; border-color: #0078d4; box-shadow: 0 0 0 2px rgba(0,120,212,0.2); }
+        .sub-row { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-radius: 4px; font-size: 12px; border-left: 1px solid #e8e8e8; margin-left: 8px; }
+        .sub-row.recycle-row { background: #fff0f0; }
+        .badge { display: inline-flex; align-items: center; gap: 4px; padding: 4px 8px; border-radius: 3px; font-size: 12px; font-weight: 500; }
+        .badge-recycle { background: #fde7e9; color: #d13438; }
+        .badge {
+            display: inline-flex; align-items: center; gap: 4px;
+            padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600;
+        }
+        .badge-recycle { background: #fff4ce; color: #f7630c; }
+        .badge-mapped { background: #d4edda; color: #155724; }
+        .badge-unmapped { background: #fff3cd; color: #856404; }
+        .mapping-status-col { min-width: 120px; text-align: center; }
+        .status-indicator { display: inline-flex; align-items: center; gap: 4px; padding: 4px 8px; border-radius: 4px; font-size: 12px; font-weight: 500; }
+        .status-mapped { background: #d4edda; color: #155724; }
+        .status-unmapped { background: #fff3cd; color: #856404; }
+        .export-section {
+            background: white; padding: 16px; border-radius: 8px;
+            margin-bottom: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            display: flex; gap: 12px; align-items: center; flex-wrap: wrap;
+        }
+        .selected-count { font-size: 14px; font-weight: 600; color: #0078d4; }
+        .select-actions { display: flex; gap: 8px; align-items: center; }
+        .wave-input {
+            padding: 6px 10px; border: 1px solid #ccc; border-radius: 4px;
+            font-size: 13px; width: 180px;
+        }
+        .wave-input:focus { outline: none; border-color: #0078d4; }
+        .loading { text-align: center; padding: 40px; color: #666; }
+        .spinner {
+            border: 3px solid #f3f3f3; border-top: 3px solid #0078d4;
+            border-radius: 50%; width: 40px; height: 40px;
+            animation: spin 1s linear infinite; margin: 0 auto 16px;
+        }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        .empty-state { text-align: center; padding: 60px 20px; color: #666; }
+        .empty-state-icon { font-size: 64px; margin-bottom: 16px; opacity: 0.5; }
+        .progress-bar {
+            width: 100%; height: 6px; background: #e8e8e8; border-radius: 3px;
+            overflow: hidden; margin-top: 8px;
+        }
+        .progress-fill { height: 100%; border-radius: 3px; transition: width 0.3s; }
+        .table-header {
+            display: flex; align-items: center; gap: 8px; padding: 8px 10px;
+            background: #f8f9fa; border-radius: 4px; margin-bottom: 8px;
+            font-size: 12px; font-weight: 600; color: #666; text-transform: uppercase;
+            border-bottom: 2px solid #e8e8e8;
+        }
+        .sub-row {
+            padding: 6px 12px; margin: 1px 0 1px 4px;
+            display: flex; align-items: center; gap: 8px;
+            border-radius: 3px; font-size: 13px;
+        }
+        .sub-row.recycle-row { background: #fff8f0; }
+        .detail-grid {
+            padding: 10px 12px; background: #f8f9fa; border-radius: 4px;
+            margin: 4px 0 4px 4px; font-size: 12px; display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 8px;
+        }
+        /* ===== Wave Styles ===== */
+        .wave-mgmt-bar {
+            background: white; padding: 12px 16px; border-radius: 8px;
+            margin-bottom: 12px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
+        }
+        .wave-mgmt-divider {
+            width: 1px; height: 28px; background: #e0e0e0; flex-shrink: 0;
+        }
+        .wave-mgmt-label { font-size: 12px; font-weight: 600; color: #666; white-space: nowrap; }
+        .wave-name-input {
+            padding: 6px 10px; border: 1px solid #ccc; border-radius: 4px;
+            font-size: 13px; width: 150px;
+        }
+        .wave-name-input:focus { outline: none; border-color: #0078d4; box-shadow: 0 0 0 2px rgba(0,120,212,0.2); }
+        .wave-select {
+            padding: 6px 10px; border: 1px solid #ccc; border-radius: 4px;
+            font-size: 13px; min-width: 140px; background: white; cursor: pointer;
+        }
+        .wave-select:focus { outline: none; border-color: #0078d4; }
+        .btn-primary { background: #0078d4; color: white; border-color: #0078d4; }
+        .btn-primary:hover { background: #005a9e; }
+        .btn-danger { background: white; color: #d13438; border-color: #d13438; font-size: 12px; padding: 4px 8px; }
+        .btn-danger:hover { background: #fde7e9; }
+        .wave-group { margin-bottom: 12px; border-radius: 6px; overflow: hidden; border: 1px solid #e0e0e0; }
+        .wave-header {
+            display: flex; align-items: center; gap: 10px;
+            padding: 10px 14px; font-weight: 600; font-size: 14px;
+            background: #f8f9fa; cursor: default; user-select: none;
+            border-left: 4px solid #ccc; transition: background 0.15s;
+        }
+        .wave-header.drag-over { background: #e1efff !important; outline: 2px dashed #0078d4; outline-offset: -2px; }
+        .wave-header-name { flex: 1; }
+        .wave-header-meta { font-size: 12px; font-weight: 400; color: #666; margin-left: 8px; }
+        .wave-header-actions { display: flex; gap: 6px; align-items: center; }
+        .wave-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+        .wave-badge {
+            display: inline-block; padding: 1px 7px; border-radius: 10px;
+            font-size: 10px; font-weight: 700; color: white;
+            margin-left: 6px; vertical-align: middle; flex-shrink: 0;
+        }
+        .wave-empty-hint {
+            padding: 12px 16px; font-size: 12px; color: #999; font-style: italic;
+            background: white; border-top: 1px dashed #e8e8e8;
+        }
+        .unassigned-header {
+            padding: 8px 14px; font-size: 11px; font-weight: 700;
+            color: #999; text-transform: uppercase; letter-spacing: 0.5px;
+            border-bottom: 1px solid #e8e8e8; margin-top: 16px; margin-bottom: 4px;
+            display: flex; align-items: center; gap: 8px;
+        }
+        .unassigned-header::before { content: ''; flex: 0 0 24px; height: 1px; background: #e0e0e0; }
+        .unassigned-header::after { content: ''; flex: 1; height: 1px; background: #e0e0e0; }
+        .drag-handle {
+            cursor: grab; color: #bbb; font-size: 14px; flex-shrink: 0;
+            padding: 0 2px; line-height: 1; letter-spacing: -1px;
+        }
+        .drag-handle:hover { color: #888; }
+        .drag-handle:active { cursor: grabbing; }
+        .tree-folder.is-dragging { opacity: 0.35; }
+        .remove-from-wave-btn {
+            background: none; border: none; cursor: pointer; color: #bbb;
+            font-size: 14px; padding: 0 4px; line-height: 1; flex-shrink: 0;
+        }
+        .remove-from-wave-btn:hover { color: #d13438; }
+        /* ===== Session Bar Styles ===== */
+        .session-bar {
+            background: white; padding: 10px 16px; border-radius: 8px;
+            margin-bottom: 12px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
+            font-size: 13px;
+        }
+        .btn-session {
+            padding: 6px 14px; border: 1px solid #ccc; background: white;
+            border-radius: 4px; font-size: 13px; cursor: pointer;
+            transition: all 0.2s; display: inline-flex; align-items: center; gap: 6px;
+        }
+        .btn-session:hover { background: #f0f0f0; border-color: #0078d4; }
+        .btn-session-reset { border-color: #d13438; color: #d13438; }
+        .btn-session-reset:hover { background: #fde7e9; border-color: #a1262a; color: #a1262a; }
+        .session-autosave {
+            display: inline-flex; align-items: center; gap: 6px;
+            font-size: 12px; color: #107c10;
+        }
+        .session-autosave-idle { color: #999; }
+        .session-dot {
+            width: 8px; height: 8px; border-radius: 50%;
+            background: #107c10; display: inline-block; flex-shrink: 0;
+        }
+        .session-hint { font-size: 11px; color: #666; font-style: italic; }
+        .session-pending-banner {
+            background: #fff4ce; color: #856404; border: 1px solid #f7d060;
+            border-radius: 4px; padding: 6px 12px; font-size: 12px;
+            font-weight: 600; flex: 1; min-width: 200px;
+        }
+        .session-clear-btn {
+            background: none; border: none; cursor: pointer; font-size: 12px;
+            color: #856404; text-decoration: underline; padding: 0 0 0 8px;
+        }
+        .session-clear-btn:hover { color: #d13438; }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script>
+    (function() {
+        'use strict';
+        var e = React.createElement;
+        var useState = React.useState;
+        var useMemo = React.useMemo;
+        var useEffect = React.useEffect;
+
+        // ===== Utility Functions =====
+        function formatSize(bytes) {
+            if (bytes == null || isNaN(bytes)) return '0 B';
+            if (bytes === 0) return '0 B';
+            var units = ['B', 'KB', 'MB', 'GB', 'TB'];
+            var i = Math.floor(Math.log(Math.abs(bytes)) / Math.log(1024));
+            var idx = Math.min(i, units.length - 1);
+            return (bytes / Math.pow(1024, idx)).toFixed(idx === 0 ? 0 : 2) + ' ' + units[idx];
+        }
+
+        function parseSizeToBytes(value, numberFormat) {
+            if (value == null || value === '' || isNaN(Number(value))) return 0;
+            var num = Number(value);
+            if (!numberFormat) return num;
+            var fmt = numberFormat.toUpperCase();
+            if (fmt.includes('TB')) return num * Math.pow(1024, 4);
+            if (fmt.includes('GB')) return num * Math.pow(1024, 3);
+            if (fmt.includes('MB')) return num * Math.pow(1024, 2);
+            if (fmt.includes('KB')) return num * 1024;
+            return num;
+        }
+
+        // ===== Fuzzy Name Matching =====
+        function levenshteinDistance(s1, s2) {
+            // Guard against null/undefined inputs
+            if (!s1) s1 = '';
+            if (!s2) s2 = '';
+            var m = s1.length, n = s2.length;
+            var dp = [];
+            for (var i = 0; i <= m; i++) {
+                dp[i] = [];
+                for (var j = 0; j <= n; j++) {
+                    dp[i][j] = 0;
+                }
+            }
+            for (var i = 0; i <= m; i++) dp[i][0] = i;
+            for (var j = 0; j <= n; j++) dp[0][j] = j;
+            for (var i = 1; i <= m; i++) {
+                for (var j = 1; j <= n; j++) {
+                    if (s1[i - 1] === s2[j - 1]) {
+                        dp[i][j] = dp[i - 1][j - 1];
+                    } else {
+                        dp[i][j] = 1 + Math.min(dp[i - 1][j], dp[i][j - 1], dp[i - 1][j - 1]);
+                    }
+                }
+            }
+            return dp[m][n];
+        }
+
+        function normalizeUsername(name) {
+            // Remove spaces, dots, underscores; lowercase
+            return name.toLowerCase().replace(/[\s._-]/g, '');
+        }
+
+        function findBestMatch(sourceUsername, targetNames) {
+            // Guard against null/undefined inputs
+            if (!sourceUsername || !targetNames || targetNames.length === 0) {
+                return null;
+            }
+            var normalized = normalizeUsername(sourceUsername);
+            var best = { name: null, score: Infinity, distance: Infinity };
+            targetNames.forEach(function(target) {
+                if (!target) return; // Skip null/undefined targets
+                var targetNorm = normalizeUsername(target);
+                var distance = levenshteinDistance(normalized, targetNorm);
+                if (distance < best.distance) {
+                    best = { name: target, score: distance, distance: distance };
+                }
+            });
+            return best.distance <= 3 ? best.name : null; // Match if within 3 edits
+        }
+
+        // ===== CSV Parser =====
+        function parseOneDriveCSV(csvText) {
+            var lines = csvText.split('\n');
+            if (lines.length < 2) throw new Error('CSV file appears to be empty');
+
+            var headers = lines[0].split(',').map(function(h) { return h.trim(); });
+            var ownerColIdx = headers.indexOf('Owner Display Name');
+            var principalColIdx = headers.indexOf('Owner Principal Name');
+            var storageColIdx = headers.indexOf('Storage Used (Byte)');
+            var storageAllocColIdx = headers.indexOf('Storage Allocated (Byte)');
+            var deletedColIdx = headers.indexOf('Is Deleted');
+
+            if (ownerColIdx === -1 || principalColIdx === -1 || storageColIdx === -1) {
+                throw new Error('CSV missing required columns: Owner Display Name, Owner Principal Name, Storage Used (Byte)');
+            }
+
+            var users = {};
+            for (var i = 1; i < lines.length; i++) {
+                var line = lines[i].trim();
+                if (!line) continue;
+
+                // Simple CSV parsing (handles quoted fields)
+                var cells = [];
+                var current = '';
+                var inQuote = false;
+                for (var j = 0; j < line.length; j++) {
+                    var char = line[j];
+                    if (char === '"') {
+                        inQuote = !inQuote;
+                    } else if (char === ',' && !inQuote) {
+                        cells.push(current.trim().replace(/^"|"$/g, ''));
+                        current = '';
+                    } else {
+                        current += char;
+                    }
+                }
+                cells.push(current.trim().replace(/^"|"$/g, ''));
+
+                if (cells.length <= Math.max(ownerColIdx, principalColIdx, storageColIdx)) continue;
+
+                var ownerName = cells[ownerColIdx].trim();
+                var isDeleted = deletedColIdx >= 0 ? cells[deletedColIdx].trim().toLowerCase() === 'true' : false;
+                if (!ownerName || isDeleted) continue;
+
+                users[normalizeUsername(ownerName)] = {
+                    displayName: ownerName,
+                    principalName: cells[principalColIdx],
+                    storageUsed: parseInt(cells[storageColIdx]) || 0,
+                    storageAllocated: storageAllocColIdx >= 0 ? (parseInt(cells[storageAllocColIdx]) || 0) : 0
+                };
+            }
+            return users;
+        }
+
+        // ===== Excel Parser =====
+        function parseTreeSizeExcel(workbook) {
+            var sheetName = workbook.SheetNames[0];
+            var sheet = workbook.Sheets[sheetName];
+            var range = XLSX.utils.decode_range(sheet['!ref']);
+
+            var headerRow = -1;
+            for (var r = 0; r <= Math.min(range.e.r, 10); r++) {
+                var cell = sheet[XLSX.utils.encode_cell({ r: r, c: 0 })];
+                if (cell && String(cell.v).trim() === 'Full Path') {
+                    headerRow = r;
+                    break;
+                }
+            }
+            if (headerRow === -1) throw new Error('Could not find "Full Path" header in Excel file');
+
+            var headers = [];
+            for (var c = 0; c <= range.e.c; c++) {
+                var hc = sheet[XLSX.utils.encode_cell({ r: headerRow, c: c })];
+                headers.push(hc ? String(hc.v).trim() : 'Col' + c);
+            }
+
+            var colIdx = {};
+            headers.forEach(function(h, i) { colIdx[h] = i; });
+
+            var pathCol = colIdx['Full Path'];
+            var sizeCol = colIdx['Size'];
+            var allocCol = colIdx['Allocated'];
+            var filesCol = colIdx['Files'];
+            var foldersCol = colIdx['Folders'];
+            var lastModCol = colIdx['Last Modified'];
+            var ownerCol = colIdx['Owner'];
+
+            var rows = [];
+            for (var r2 = headerRow + 1; r2 <= range.e.r; r2++) {
+                var pathCell = sheet[XLSX.utils.encode_cell({ r: r2, c: pathCol })];
+                if (!pathCell || !pathCell.v) continue;
+
+                var fullPath = String(pathCell.v).trim();
+                var sizeCell = sheet[XLSX.utils.encode_cell({ r: r2, c: sizeCol })];
+                var allocCell = sheet[XLSX.utils.encode_cell({ r: r2, c: allocCol })];
+                var filesCell = sheet[XLSX.utils.encode_cell({ r: r2, c: filesCol })];
+                var foldersCell = sheet[XLSX.utils.encode_cell({ r: r2, c: foldersCol })];
+                var lastModCell = sheet[XLSX.utils.encode_cell({ r: r2, c: lastModCol })];
+                var ownerCell = sheet[XLSX.utils.encode_cell({ r: r2, c: ownerCol })];
+
+                var sizeBytes = parseSizeToBytes(
+                    sizeCell ? sizeCell.v : 0,
+                    sizeCell ? sizeCell.z : null
+                );
+                var allocBytes = parseSizeToBytes(
+                    allocCell ? allocCell.v : 0,
+                    allocCell ? allocCell.z : null
+                );
+
+                rows.push({
+                    fullPath: fullPath,
+                    sizeBytes: sizeBytes,
+                    allocBytes: allocBytes,
+                    files: filesCell ? Number(filesCell.v) || 0 : 0,
+                    folders: foldersCell ? Number(foldersCell.v) || 0 : 0,
+                    lastModified: lastModCell ? (lastModCell.w || '') : '',
+                    owner: ownerCell ? String(ownerCell.v || '') : ''
+                });
+            }
+            return rows;
+        }
+
+        // ===== Build User-Level Tree =====
+        function buildUserTree(rows) {
+            var basePrefix = '';
+            for (var ri = 0; ri < rows.length; ri++) {
+                var p = rows[ri].fullPath.replace(/\\+$/, '');
+                var pts = p.replace(/^\\\\/, '').split('\\');
+                if (pts.length === 2) {
+                    basePrefix = p + '\\';
+                    break;
+                }
+            }
+            if (!basePrefix) {
+                var firstPath = (rows[0] && rows[0].fullPath) || '';
+                var m = firstPath.match(/^(\\\\[^\\]+\\[^\\]+\\)/);
+                if (m) basePrefix = m[1];
+                else throw new Error('Cannot detect base path from data');
+            }
+
+            var basePrefixLower = basePrefix.toLowerCase();
+            var users = {};
+
+            // Pass 1: collect all data per user
+            rows.forEach(function(row) {
+                var path = row.fullPath;
+                if (path.toLowerCase().indexOf(basePrefixLower) !== 0) return;
+
+                var relative = path.substring(basePrefix.length).replace(/\\+$/, '');
+                if (!relative) return;
+
+                var parts = relative.split('\\').filter(function(x) { return x; });
+                if (parts.length === 0) return;
+
+                var username = parts[0];
+                if (username === '*.*') return;
+
+                if (!users[username]) {
+                    users[username] = {
+                        name: username, sizeBytes: 0, allocBytes: 0,
+                        files: 0, folders: 0, recycleBinSizeBytes: 0,
+                        recycleBinFiles: 0, lastModified: '', owner: '',
+                        subFolders: [], hasRecycleBin: false,
+                        _hasRootEntry: false,
+                        path: basePrefix + username
+                    };
+                }
+
+                var user = users[username];
+
+                // User root entry (e.g. \\BHFP03\NationalHomeDrives\Username\)
+                if (parts.length === 1) {
+                    user.sizeBytes = row.sizeBytes;
+                    user.allocBytes = row.allocBytes;
+                    user.files = row.files;
+                    user.folders = row.folders;
+                    user.lastModified = row.lastModified;
+                    user.owner = row.owner;
+                    user._hasRootEntry = true;
+                }
+
+                // Direct subfolder of user (depth 2, e.g. Username\Documents\)
+                // Skip *.* entries - those are loose files already counted in parent totals
+                if (parts.length === 2 && parts[1] !== '*.*') {
+                    var subName = parts[1];
+                    var existing = user.subFolders.find(function(s) { return s.name === subName; });
+                    if (!existing) {
+                        existing = {
+                            name: subName, sizeBytes: 0, files: 0, folders: 0,
+                            isRecycleBin: subName.toUpperCase() === '$RECYCLE.BIN',
+                            isLooseFiles: false
+                        };
+                        user.subFolders.push(existing);
+                    }
+                    existing.sizeBytes = row.sizeBytes;
+                    existing.files = row.files;
+                    existing.folders = row.folders;
+                }
+
+                // *.* at depth 2 = loose files in user root folder
+                if (parts.length === 2 && parts[1] === '*.*') {
+                    var existingLoose = user.subFolders.find(function(s) { return s.name === '[Loose Files]'; });
+                    if (!existingLoose) {
+                        existingLoose = { name: '[Loose Files]', sizeBytes: 0, files: 0, folders: 0, isRecycleBin: false, isLooseFiles: true };
+                        user.subFolders.push(existingLoose);
+                    }
+                    existingLoose.sizeBytes = row.sizeBytes;
+                    existingLoose.files = row.files;
+                }
+
+                // Detect $RECYCLE.BIN folder entries at ANY depth under this user.
+                // TreeSize sizes are inclusive (parent includes children), so we only
+                // count each $RECYCLE.BIN folder entry itself, not its children.
+                // These are already included in the user's total size - we track them
+                // so we can subtract them to get "data to migrate".
+                for (var i = 1; i < parts.length; i++) {
+                    if (parts[i].toUpperCase() === '$RECYCLE.BIN' && i === parts.length - 1) {
+                        user.recycleBinSizeBytes += row.sizeBytes;
+                        user.recycleBinFiles += row.files;
+                        user.hasRecycleBin = true;
+                        break;
+                    }
+                }
+            });
+
+            // Pass 2: for users WITHOUT a root entry, compute totals from subfolders
+            // TreeSize "Level N" exports only include root rows for the top N items
+            Object.values(users).forEach(function(user) {
+                if (!user._hasRootEntry) {
+                    // Sum subfolder sizes (NOT *.* - those are already inside subfolder totals)
+                    var totalSize = 0, totalFiles = 0, totalFolders = 0;
+                    // Also sum *.* (loose files) since they're NOT inside any subfolder
+                    user.subFolders.forEach(function(sub) {
+                        totalSize += sub.sizeBytes;
+                        totalFiles += sub.files;
+                        totalFolders += sub.folders;
+                    });
+                    user.sizeBytes = totalSize;
+                    user.files = totalFiles;
+                    user.folders = totalFolders;
+                }
+                // Clean up internal flag
+                delete user._hasRootEntry;
+            });
+
+            return Object.values(users);
+        }
+
+        // ===== UserRow Component =====
+        function UserRow(props) {
+            var user = props.user;
+            var isExpanded = props.isExpanded;
+            var isSelected = props.isSelected;
+            var onToggleExpand = props.onToggleExpand;
+            var onToggleSelect = props.onToggleSelect;
+            var mapping = props.mapping;
+            var oneDriveData = props.oneDriveData;
+            var onSetManualMapping = props.onSetManualMapping;
+            var userMappings = props.userMappings;
+            var manualMappings = props.manualMappings;
+            var waveAssignments = props.waveAssignments || {};
+            var waves = props.waves || [];
+            var draggedUser = props.draggedUser;
+            var setDraggedUser = props.setDraggedUser;
+            var onRemoveFromWave = props.onRemoveFromWave;
+
+            var netSize = user.sizeBytes - user.recycleBinSizeBytes;
+            var netFiles = user.files - user.recycleBinFiles;
+
+            // Find which wave this user belongs to (if any)
+            var assignedWaveId = waveAssignments[user.name] || null;
+            var assignedWave = assignedWaveId ? waves.find(function(w) { return w.id === assignedWaveId; }) : null;
+
+            var folderClasses = 'tree-folder';
+            if (isSelected) folderClasses += ' selected';
+            if (user.hasRecycleBin) folderClasses += ' has-recycle';
+            if (draggedUser === user.name) folderClasses += ' is-dragging';
+
+            var children = [];
+
+            // Main row
+            var metaChildren = [];
+            metaChildren.push(e('span', { key: 'total', className: 'col-total' }, formatSize(user.sizeBytes)));
+            if (user.hasRecycleBin) {
+                metaChildren.push(
+                    e('span', { key: 'rb', className: 'col-recycle' },
+                        e('span', { className: 'badge badge-recycle', style: { maxWidth: '126px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } },
+                            '\uD83D\uDDD1 ' + formatSize(user.recycleBinSizeBytes)
+                        )
+                    )
+                );
+            } else {
+                metaChildren.push(e('span', { key: 'rb-empty', className: 'col-recycle' }));
+            }
+            metaChildren.push(e('span', { key: 'files', className: 'col-files' }, netFiles.toLocaleString() + ' files'));
+
+            // Mapping status column
+            var mappingData = oneDriveData && Object.keys(oneDriveData).length > 0 ? true : false;
+            if (mappingData) {
+                var isMapped = oneDriveData && Object.keys(oneDriveData).length > 0;
+                var targetName = null;
+                if (isMapped && oneDriveData) {
+                    Object.keys(oneDriveData).forEach(function(key) {
+                        if (!targetName) {
+                            var target = oneDriveData[key];
+                            if (target && target.displayName) {
+                                var normSource = user.name.toLowerCase().replace(/[\s._]/g, '');
+                                var normTarget = target.displayName.toLowerCase().replace(/[\s._]/g, '');
+                                if (normSource === normTarget) {
+                                    targetName = target.displayName;
+                                }
+                            }
+                        }
+                    });
+                }
+                var statusClass = targetName ? 'status-mapped' : 'status-unmapped';
+                var statusText = targetName ? '✓ Mapped' : '⚠ Unmapped';
+                metaChildren.push(
+                    e('span', { key: 'mapping', className: 'col-mapping' },
+                        e('span', { className: 'status-indicator ' + statusClass }, statusText)
+                    )
+                );
+            }
+
+            metaChildren.push(e('span', { key: 'size', className: 'col-migrate' }, formatSize(netSize)));
+
+            // After Migration column — only when OneDrive data is loaded
+            if (oneDriveData && Object.keys(oneDriveData).length > 0) {
+                var userMapping = userMappings && userMappings[user.name];
+                var postMigrateEl;
+                if (!userMapping || !userMapping.isMapped) {
+                    postMigrateEl = e('span', { key: 'postmigrate', className: 'col-postmigrate', style: { color: '#bbb' } }, '—');
+                } else {
+                    // Find target user's storage data
+                    var targetOD = null;
+                    Object.values(oneDriveData).forEach(function(od) {
+                        if (od && od.displayName === userMapping.targetName) targetOD = od;
+                    });
+                    if (!targetOD) {
+                        postMigrateEl = e('span', { key: 'postmigrate', className: 'col-postmigrate', style: { color: '#bbb' } }, '—');
+                    } else {
+                        var postTotal = (targetOD.storageUsed || 0) + netSize;
+                        var alloc = targetOD.storageAllocated || 0;
+                        var pmColour, pmBg;
+                        if (alloc === 0) {
+                            pmColour = '#333'; pmBg = 'transparent';
+                        } else if (postTotal >= alloc) {
+                            pmColour = '#a1262a'; pmBg = '#fde7e9';
+                        } else if (postTotal / alloc >= 0.8) {
+                            pmColour = '#856404'; pmBg = '#fff4ce';
+                        } else {
+                            pmColour = '#0b5a0b'; pmBg = '#dff6dd';
+                        }
+                        var pmTitle = alloc > 0
+                            ? 'Current: ' + formatSize(targetOD.storageUsed) + ' + Migrating: ' + formatSize(netSize) + ' = ' + formatSize(postTotal) + ' of ' + formatSize(alloc) + ' allocated'
+                            : 'Current: ' + formatSize(targetOD.storageUsed) + ' + Migrating: ' + formatSize(netSize);
+                        postMigrateEl = e('span', {
+                            key: 'postmigrate', className: 'col-postmigrate',
+                            title: pmTitle,
+                            style: {
+                                display: 'inline-flex', alignItems: 'center', justifyContent: 'flex-end',
+                                gap: '3px', fontWeight: '600', fontSize: '12px',
+                                color: pmColour, background: pmBg,
+                                borderRadius: '3px', padding: alloc > 0 ? '1px 5px' : '0'
+                            }
+                        },
+                            formatSize(postTotal),
+                            alloc > 0 && postTotal >= alloc ? e('span', { style: { fontSize: '10px', fontWeight: '700' } }, ' OVER') : null
+                        );
+                    }
+                }
+                metaChildren.push(postMigrateEl);
+            }
+
+            // Name with optional wave badge
+            var nameContent = [
+                e('span', { key: 'uname' }, user.name)
+            ];
+            if (assignedWave) {
+                nameContent.push(
+                    e('span', { key: 'wbadge', className: 'wave-badge', style: { background: assignedWave.color } }, assignedWave.name)
+                );
+            }
+
+            children.push(
+                e('div', {
+                    key: 'row',
+                    className: folderClasses,
+                    draggable: true,
+                    onDragStart: function(ev) {
+                        ev.stopPropagation();
+                        ev.dataTransfer.effectAllowed = 'move';
+                        ev.dataTransfer.setData('text/plain', user.name);
+                        if (setDraggedUser) setDraggedUser(user.name);
+                    },
+                    onDragEnd: function(ev) {
+                        ev.stopPropagation();
+                        if (setDraggedUser) setDraggedUser(null);
+                    },
+                    onClick: function() { onToggleExpand(user.name); }
+                },
+                    // Drag handle
+                    e('span', {
+                        className: 'drag-handle',
+                        title: 'Drag to assign to a wave',
+                        onClick: function(ev) { ev.stopPropagation(); }
+                    }, '⠿'),
+                    e('div', {
+                        className: 'checkbox-wrapper',
+                        onClick: function(ev) { ev.stopPropagation(); onToggleSelect(user.name); }
+                    }, e('input', { type: 'checkbox', checked: isSelected, readOnly: true })),
+                    e('span', { className: 'icon' }, isExpanded ? '\uD83D\uDCC2' : '\uD83D\uDCC1'),
+                    e('span', { className: 'folder-name' }, nameContent),
+                    // Remove from wave button
+                    assignedWave ? e('button', {
+                        key: 'rmv',
+                        className: 'remove-from-wave-btn',
+                        title: 'Remove from ' + assignedWave.name,
+                        onClick: function(ev) { ev.stopPropagation(); if (onRemoveFromWave) onRemoveFromWave(user.name); }
+                    }, '✕') : null,
+                    e('div', { className: 'folder-meta' }, metaChildren)
+                )
+            );
+
+            // Expanded content
+            if (isExpanded) {
+                var expandedItems = [];
+
+                // Details grid
+                expandedItems.push(
+                    e('div', { key: 'details', className: 'detail-grid' },
+                        e('div', null, e('strong', null, 'Total Size: '), formatSize(user.sizeBytes)),
+                        e('div', null, e('strong', null, 'Migrate Size: '), e('span', { style: { color: '#107c10' } }, formatSize(netSize))),
+                        e('div', null, e('strong', null, 'Recycle Bin: '), e('span', { style: { color: '#d13438' } }, formatSize(user.recycleBinSizeBytes))),
+                        e('div', null, e('strong', null, 'Files: '), user.files.toLocaleString() + ' (' + netFiles.toLocaleString() + ' to migrate)'),
+                        e('div', null, e('strong', null, 'Sub-folders: '), user.folders.toLocaleString()),
+                        e('div', null, e('strong', null, 'Owner: '), user.owner || 'N/A'),
+                        e('div', null, e('strong', null, 'Last Modified: '), user.lastModified || 'N/A')
+                    )
+                );
+
+                // Target mapping section
+                var mappingInfo = null;
+                if (oneDriveData && Object.keys(oneDriveData).length > 0) {
+                    // Check userMappings for current mapping status
+                    var userMapping = userMappings && userMappings[user.name] ? userMappings[user.name] : null;
+                    var isMapped = userMapping && userMapping.isMapped;
+                    var isManualMapping = userMapping && userMapping.isManual;
+                    var targetName = userMapping ? userMapping.targetName : null;
+
+                    var targetUser = null;
+                    if (targetName) {
+                        Object.keys(oneDriveData).forEach(function(key) {
+                            if (oneDriveData[key].displayName === targetName) {
+                                targetUser = oneDriveData[key];
+                            }
+                        });
+                    }
+
+                    var mappingClass = 'mapping-section' + (isMapped ? '' : ' unmapped');
+                    var mappingChildren = [];
+
+                    mappingChildren.push(e('div', { key: 'label', className: 'mapping-label' }, 'Target OneDrive User'));
+
+                    if (isMapped) {
+                        mappingChildren.push(
+                            e('div', { key: 'target-name', className: 'mapping-value' },
+                                targetUser.displayName + (isManualMapping ? ' (manually mapped)' : '')
+                            )
+                        );
+                        mappingChildren.push(
+                            e('div', { key: 'target-principal', className: 'mapping-subtext' }, 'Principal: ' + targetUser.principalName)
+                        );
+                        if (targetUser.storageUsed > 0) {
+                            mappingChildren.push(
+                                e('div', { key: 'target-storage', className: 'mapping-subtext' }, 'Storage Used: ' + formatSize(targetUser.storageUsed))
+                            );
+                        }
+                        if (targetUser.storageAllocated > 0) {
+                            mappingChildren.push(
+                                e('div', { key: 'target-alloc', className: 'mapping-subtext' }, 'Storage Allocated: ' + formatSize(targetUser.storageAllocated))
+                            );
+                            // Post-migration check
+                            var netMigrateSize = user.sizeBytes - user.recycleBinSizeBytes;
+                            var postTotal = targetUser.storageUsed + netMigrateSize;
+                            var pctUsed = (postTotal / targetUser.storageAllocated) * 100;
+                            var pmColour, pmBg, pmLabel;
+                            if (pctUsed >= 100) {
+                                pmColour = '#a1262a'; pmBg = '#fde7e9'; pmLabel = 'OVER QUOTA';
+                            } else if (pctUsed >= 80) {
+                                pmColour = '#856404'; pmBg = '#fff4ce'; pmLabel = Math.round(pctUsed) + '% after migration — Warning';
+                            } else {
+                                pmColour = '#0b5a0b'; pmBg = '#dff6dd'; pmLabel = Math.round(pctUsed) + '% after migration — OK';
+                            }
+                            mappingChildren.push(
+                                e('div', { key: 'post-migrate', style: { marginTop: '6px', padding: '4px 8px', borderRadius: '3px', background: pmBg, color: pmColour, fontSize: '11px', fontWeight: '600' } },
+                                    '\u2192 After migration: ' + formatSize(postTotal) + ' / ' + formatSize(targetUser.storageAllocated) + ' \u2014 ' + pmLabel
+                                )
+                            );
+                        }
+                        // Show clear/change option for manual mappings
+                        if (isManualMapping) {
+                            mappingChildren.push(
+                                e('button', {
+                                    key: 'clear-button',
+                                    style: { marginTop: '8px', padding: '4px 8px', fontSize: '12px', cursor: 'pointer', background: '#fff3cd', border: '1px solid #ffc107', borderRadius: '3px' },
+                                    onClick: function() { onSetManualMapping(user.name, null); }
+                                }, 'Clear mapping')
+                            );
+                        }
+                    } else {
+                        mappingChildren.push(
+                            e('div', { key: 'not-found', className: 'mapping-value unmapped' }, 'NOT FOUND - Manual Mapping Required')
+                        );
+                        mappingChildren.push(
+                            e('div', { key: 'select-label', style: { fontSize: '12px', color: '#666', marginTop: '8px', marginBottom: '4px' } }, 'Select target user:')
+                        );
+                        var oneDriveNames = Object.keys(oneDriveData).length > 0 ? Object.values(oneDriveData).map(function(t) { return t.displayName; }).sort() : [];
+                        mappingChildren.push(
+                            e('select', {
+                                key: 'select',
+                                className: 'mapping-select',
+                                defaultValue: '',
+                                onChange: function(ev) {
+                                    if (ev.target.value) {
+                                        onSetManualMapping(user.name, ev.target.value);
+                                    }
+                                }
+                            },
+                                e('option', { value: '' }, '-- Select a user --'),
+                                oneDriveNames.map(function(name) {
+                                    return e('option', { key: name, value: name }, name);
+                                })
+                            )
+                        );
+                    }
+
+                    expandedItems.push(e('div', { key: 'mapping', className: mappingClass }, mappingChildren));
+                }
+
+                // Sub-folders section header
+                expandedItems.push(e('div', { key: 'sub-header', style: { fontSize: '11px', fontWeight: '600', color: '#666', textTransform: 'uppercase', marginTop: '12px', marginBottom: '8px' } }, 'Sub-folders'));
+
+                // Sub-folders sorted by size
+                var sorted = user.subFolders.slice().sort(function(a, b) { return b.sizeBytes - a.sizeBytes; });
+                sorted.forEach(function(sub) {
+                    var icon = sub.isRecycleBin ? '\uD83D\uDDD1' : sub.isLooseFiles ? '\uD83D\uDCC4' : '\uD83D\uDCC1';
+                    var nameStyle = {
+                        flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                        color: sub.isRecycleBin ? '#d13438' : '#333',
+                        fontStyle: sub.isRecycleBin ? 'italic' : 'normal'
+                    };
+                    var sizeStyle = {
+                        fontSize: '12px', fontWeight: 600, minWidth: '80px', textAlign: 'right',
+                        color: sub.isRecycleBin ? '#d13438' : '#333'
+                    };
+
+                    expandedItems.push(
+                        e('div', { key: sub.name, className: 'sub-row' + (sub.isRecycleBin ? ' recycle-row' : '') },
+                            e('span', { className: 'icon', style: { fontSize: '14px' } }, icon),
+                            e('span', { style: nameStyle }, sub.name + (sub.isRecycleBin ? ' (excluded from migration)' : '')),
+                            e('span', { style: { fontSize: '12px', color: '#999', minWidth: '70px', textAlign: 'right' } }, sub.files.toLocaleString() + ' files'),
+                            e('span', { style: sizeStyle }, formatSize(sub.sizeBytes))
+                        )
+                    );
+                });
+
+                children.push(e('div', { key: 'expanded', className: 'tree-children' }, expandedItems));
+            }
+
+            return e('div', { className: 'tree-item' }, children);
+        }
+
+        // ===== Main App =====
+        function App() {
+            var _loading = useState(false);
+            var loading = _loading[0], setLoading = _loading[1];
+            var _error = useState(null);
+            var error = _error[0], setError = _error[1];
+            var _users = useState([]);
+            var users = _users[0], setUsers = _users[1];
+            var _search = useState('');
+            var searchTerm = _search[0], setSearchTerm = _search[1];
+            var _sortBy = useState('name');
+            var sortBy = _sortBy[0], setSortBy = _sortBy[1];
+            var _sortDir = useState('asc');
+            var sortDir = _sortDir[0], setSortDir = _sortDir[1];
+            var _expanded = useState({});
+            var expandedUsers = _expanded[0], setExpandedUsers = _expanded[1];
+            var _selected = useState({});
+            var selectedUsers = _selected[0], setSelectedUsers = _selected[1];
+            var _wave = useState('Wave 1');
+            var waveName = _wave[0], setWaveName = _wave[1];
+            var _dragging = useState(false);
+            var isDragging = _dragging[0], setIsDragging = _dragging[1];
+            var _fname = useState('');
+            var fileName = _fname[0], setFileName = _fname[1];
+            var _csvData = useState({});
+            var oneDriveData = _csvData[0], setOneDriveData = _csvData[1];
+            var _csvName = useState('');
+            var csvFileName = _csvName[0], setCsvFileName = _csvName[1];
+            var _showMapping = useState(false);
+            var showMapping = _showMapping[0], setShowMapping = _showMapping[1];
+            var _mappingFilter = useState('all');
+            var mappingFilter = _mappingFilter[0], setMappingFilter = _mappingFilter[1];
+            var _userMappings = useState({});
+            var userMappings = _userMappings[0], setUserMappings = _userMappings[1];
+            var _manualMappings = useState({});
+            var manualMappings = _manualMappings[0], setManualMappings = _manualMappings[1];
+            // Wave state
+            var _waves = useState([]);
+            var waves = _waves[0], setWaves = _waves[1];
+            var _waveAssignments = useState({});
+            var waveAssignments = _waveAssignments[0], setWaveAssignments = _waveAssignments[1];
+            var _newWaveName = useState('Wave 1');
+            var newWaveName = _newWaveName[0], setNewWaveName = _newWaveName[1];
+            var _draggedUser = useState(null);
+            var draggedUser = _draggedUser[0], setDraggedUser = _draggedUser[1];
+            var _exportWaveId = useState('');
+            var exportWaveId = _exportWaveId[0], setExportWaveId = _exportWaveId[1];
+            var _addToWaveId = useState('');
+            var addToWaveId = _addToWaveId[0], setAddToWaveId = _addToWaveId[1];
+            var _dragOverWaveId = useState(null);
+            var dragOverWaveId = _dragOverWaveId[0], setDragOverWaveId = _dragOverWaveId[1];
+            var _autoWaveCount = useState('3');
+            var autoWaveCount = _autoWaveCount[0], setAutoWaveCount = _autoWaveCount[1];
+            // Session persistence state
+            var _pendingSession = useState(null);
+            var pendingSession = _pendingSession[0], setPendingSession = _pendingSession[1];
+            var _autoSaveTime = useState(null);
+            var autoSaveTime = _autoSaveTime[0], setAutoSaveTime = _autoSaveTime[1];
+            var _sessionFileName = useState('');
+            var sessionFileName = _sessionFileName[0], setSessionFileName = _sessionFileName[1];
+
+            // Wave colour palette
+            var WAVE_COLORS = ['#0078d4','#107c10','#f7630c','#881798','#00b4d2','#c19c00'];
+
+            // ===== Wave Functions =====
+            function createWave() {
+                var name = newWaveName.trim();
+                if (!name) return;
+                var newWave = {
+                    id: Date.now().toString(),
+                    name: name,
+                    color: WAVE_COLORS[waves.length % WAVE_COLORS.length]
+                };
+                var nextWaves = waves.concat([newWave]);
+                setWaves(nextWaves);
+                setNewWaveName('Wave ' + (nextWaves.length + 1));
+                // Auto-select the new wave for export/add-to
+                setExportWaveId(newWave.id);
+                setAddToWaveId(newWave.id);
+            }
+
+            function assignToWave(userNames, waveId) {
+                setWaveAssignments(function(prev) {
+                    var next = Object.assign({}, prev);
+                    userNames.forEach(function(n) { next[n] = waveId; });
+                    return next;
+                });
+            }
+
+            function removeFromWave(userName) {
+                setWaveAssignments(function(prev) {
+                    var next = Object.assign({}, prev);
+                    delete next[userName];
+                    return next;
+                });
+            }
+
+            function deleteWave(waveId) {
+                if (!window.confirm('Delete this wave? Users will become unassigned.')) return;
+                setWaves(function(prev) { return prev.filter(function(w) { return w.id !== waveId; }); });
+                setWaveAssignments(function(prev) {
+                    var next = Object.assign({}, prev);
+                    Object.keys(next).forEach(function(k) { if (next[k] === waveId) delete next[k]; });
+                    return next;
+                });
+                setExportWaveId(function(prev) { return prev === waveId ? '' : prev; });
+                setAddToWaveId(function(prev) { return prev === waveId ? '' : prev; });
+            }
+
+            function autoGenerateWaves() {
+                var n = parseInt(autoWaveCount, 10);
+                if (isNaN(n) || n < 1) { alert('Please enter a valid number of waves (1 or more).'); return; }
+                if (!users || users.length === 0) { alert('No user data loaded yet.'); return; }
+                if (n > users.length) { alert('Number of waves (' + n + ') cannot exceed number of users (' + users.length + ').'); return; }
+                if (!window.confirm('This will replace all existing waves and assignments. Continue?')) return;
+
+                // Build new waves
+                var newWaves = [];
+                for (var i = 0; i < n; i++) {
+                    newWaves.push({
+                        id: (Date.now() + i).toString(),
+                        name: 'Wave ' + (i + 1),
+                        color: WAVE_COLORS[i % WAVE_COLORS.length]
+                    });
+                }
+
+                // Sort users by net migrate size descending (largest first)
+                var sorted = users.slice().sort(function(a, b) {
+                    var sizeA = (a.sizeBytes || 0) - (a.recycleBinSizeBytes || 0);
+                    var sizeB = (b.sizeBytes || 0) - (b.recycleBinSizeBytes || 0);
+                    return sizeB - sizeA;
+                });
+
+                // Greedy assignment: always assign next user to the wave with the least total size
+                var waveTotals = newWaves.map(function() { return 0; });
+                var newAssignments = {};
+
+                sorted.forEach(function(u) {
+                    // Find wave index with smallest current total
+                    var minIdx = 0;
+                    for (var j = 1; j < n; j++) {
+                        if (waveTotals[j] < waveTotals[minIdx]) minIdx = j;
+                    }
+                    newAssignments[u.name] = newWaves[minIdx].id;
+                    waveTotals[minIdx] += (u.sizeBytes || 0) - (u.recycleBinSizeBytes || 0);
+                });
+
+                setWaves(newWaves);
+                setWaveAssignments(newAssignments);
+                setNewWaveName('Wave ' + (n + 1));
+                setExportWaveId(newWaves[0].id);
+                setAddToWaveId(newWaves[0].id);
+            }
+
+            function exportWaveJSON(waveId) {
+                var wave = waves.find(function(w) { return w.id === waveId; });
+                if (!wave) return;
+                var waveUsers = users.filter(function(u) { return waveAssignments[u.name] === waveId; });
+                if (waveUsers.length === 0) { alert('No users in this wave.'); return; }
+
+                var tasks = [];
+                waveUsers.forEach(function(u) {
+                    tasks.push({
+                        SourcePath: u.path || ('\\\\BHFP03\\NationalHomeDrives\\' + u.name),
+                        TargetPath: 'https://barnardosnz-my.sharepoint.com/personal/bill_smith_barnardos_org_nz',
+                        TargetList: 'Documents',
+                        TargetListRelativePath: 'Migration'
+                    });
+                });
+
+                var jsonData = {
+                    Tasks: tasks
+                };
+
+                var jsonContent = JSON.stringify(jsonData, null, 2);
+                var blob = new Blob([jsonContent], { type: 'application/json;charset=utf-8;' });
+                var url = URL.createObjectURL(blob);
+                var a = document.createElement('a');
+                a.href = url;
+                a.download = wave.name.replace(/\s+/g, '-').toLowerCase() + '.json';
+                a.click();
+                URL.revokeObjectURL(url);
+            }
+
+            function handleExcelUpload(file) {
+                if (!file) return;
+                setLoading(true);
+                setError(null);
+                setFileName(file.name);
+
+                file.arrayBuffer().then(function(data) {
+                    try {
+                        var workbook = XLSX.read(data, { cellStyles: true, cellNF: true });
+                        var rows = parseTreeSizeExcel(workbook);
+                        var userTree = buildUserTree(rows);
+                        setUsers(userTree);
+                        setSelectedUsers({});
+                        setExpandedUsers({});
+                        setShowMapping(false);
+                    } catch (err) {
+                        setError('Error processing Excel file: ' + err.message);
+                        console.error(err);
+                    }
+                    setLoading(false);
+                }).catch(function(err) {
+                    setError('Error reading Excel file: ' + err.message);
+                    setLoading(false);
+                });
+            }
+
+            function handleCSVUpload(file) {
+                if (!file) return;
+                setError(null);
+                setCsvFileName(file.name);
+
+                var reader = new FileReader();
+                reader.onload = function(e) {
+                    try {
+                        var csvText = e.target.result;
+                        var targets = parseOneDriveCSV(csvText);
+                        setOneDriveData(targets);
+                        setShowMapping(true);
+                    } catch (err) {
+                        setError('Error processing CSV file: ' + err.message);
+                        console.error(err);
+                    }
+                };
+                reader.onerror = function() {
+                    setError('Error reading CSV file');
+                };
+                reader.readAsText(file);
+            }
+
+            function handleDrop(ev) {
+                ev.preventDefault();
+                setIsDragging(false);
+                var file = ev.dataTransfer.files[0];
+                if (file && (file.name.endsWith('.xlsx') || file.name.endsWith('.xls'))) {
+                    handleExcelUpload(file);
+                } else if (file && file.name.endsWith('.csv')) {
+                    handleCSVUpload(file);
+                } else {
+                    setError('Please drop an Excel file (.xlsx/.xls) or CSV file (.csv)');
+                }
+            }
+
+            // Compute stats
+            var stats = useMemo(function() {
+                if (users.length === 0) return null;
+                var totalUsers = users.length;
+                var totalSizeBytes = 0, totalFiles = 0, totalRecycleBinBytes = 0, totalRecycleBinFiles = 0, usersWithRecycleBin = 0;
+                var mappedCount = 0, unmappedCount = 0;
+                users.forEach(function(u) {
+                    totalSizeBytes += u.sizeBytes;
+                    totalFiles += u.files;
+                    totalRecycleBinBytes += u.recycleBinSizeBytes;
+                    totalRecycleBinFiles += u.recycleBinFiles;
+                    if (u.hasRecycleBin) usersWithRecycleBin++;
+                    // Count mapped/unmapped
+                    if (userMappings[u.name] && userMappings[u.name].isMapped) {
+                        mappedCount++;
+                    } else if (Object.keys(oneDriveData).length > 0) {
+                        unmappedCount++;
+                    }
+                });
+                var selectedKeys = Object.keys(selectedUsers).filter(function(k) { return selectedUsers[k]; });
+                var selectedSize = 0, selectedFiles = 0;
+                users.forEach(function(u) {
+                    if (selectedUsers[u.name]) {
+                        selectedSize += u.sizeBytes - u.recycleBinSizeBytes;
+                        selectedFiles += u.files - u.recycleBinFiles;
+                    }
+                });
+                return {
+                    totalUsers: totalUsers, totalSizeBytes: totalSizeBytes, totalFiles: totalFiles,
+                    totalRecycleBinBytes: totalRecycleBinBytes, totalRecycleBinFiles: totalRecycleBinFiles,
+                    migrateSize: totalSizeBytes - totalRecycleBinBytes,
+                    migrateFiles: totalFiles - totalRecycleBinFiles,
+                    usersWithRecycleBin: usersWithRecycleBin,
+                    mappedCount: mappedCount, unmappedCount: unmappedCount,
+                    selectedCount: selectedKeys.length, selectedSize: selectedSize, selectedFiles: selectedFiles
+                };
+            }, [users, selectedUsers, userMappings, oneDriveData]);
+
+            // Filter and sort
+            var sortedFilteredUsers = useMemo(function() {
+                var filtered = users;
+                if (searchTerm) {
+                    var term = searchTerm.toLowerCase();
+                    filtered = users.filter(function(u) {
+                        return u.name.toLowerCase().indexOf(term) >= 0 || u.owner.toLowerCase().indexOf(term) >= 0;
+                    });
+                }
+                // Apply mapping filter
+                if (mappingFilter !== 'all') {
+                    filtered = filtered.filter(function(u) {
+                        var mapping = userMappings[u.name];
+                        if (mappingFilter === 'mapped') return mapping && mapping.isMapped;
+                        if (mappingFilter === 'unmapped') return !mapping || !mapping.isMapped;
+                        return true;
+                    });
+                }
+                return filtered.slice().sort(function(a, b) {
+                    var cmp = 0;
+                    switch (sortBy) {
+                        case 'name': cmp = a.name.localeCompare(b.name); break;
+                        case 'size': cmp = (a.sizeBytes - a.recycleBinSizeBytes) - (b.sizeBytes - b.recycleBinSizeBytes); break;
+                        case 'totalSize': cmp = a.sizeBytes - b.sizeBytes; break;
+                        case 'files': cmp = a.files - b.files; break;
+                        case 'recycle': cmp = a.recycleBinSizeBytes - b.recycleBinSizeBytes; break;
+                        default: cmp = a.name.localeCompare(b.name);
+                    }
+                    return sortDir === 'asc' ? cmp : -cmp;
+                });
+            }, [users, searchTerm, sortBy, sortDir, mappingFilter, userMappings]);
+
+            function toggleExpand(name) {
+                setExpandedUsers(function(prev) {
+                    var next = Object.assign({}, prev);
+                    next[name] = !prev[name];
+                    return next;
+                });
+            }
+
+            function toggleSelect(name) {
+                setSelectedUsers(function(prev) {
+                    var next = Object.assign({}, prev);
+                    next[name] = !prev[name];
+                    return next;
+                });
+            }
+
+            function selectAll() {
+                var next = {};
+                sortedFilteredUsers.forEach(function(u) { next[u.name] = true; });
+                setSelectedUsers(next);
+            }
+
+            function deselectAll() {
+                setSelectedUsers({});
+            }
+
+            function toggleSort(field) {
+                if (sortBy === field) {
+                    setSortDir(function(d) { return d === 'asc' ? 'desc' : 'asc'; });
+                } else {
+                    setSortBy(field);
+                    setSortDir(field === 'name' ? 'asc' : 'desc');
+                }
+            }
+
+            function setManualMapping(userName, targetDisplayName) {
+                setManualMappings(function(prev) {
+                    var next = Object.assign({}, prev);
+                    if (targetDisplayName) {
+                        next[userName] = targetDisplayName;
+                    } else {
+                        delete next[userName];
+                    }
+                    return next;
+                });
+            }
+
+            // ===== Session Persistence Functions =====
+            function exportSession() {
+                var sessionData = {
+                    version: 1,
+                    savedAt: new Date().toISOString(),
+                    sourceFileHint: fileName || '',
+                    targetFileHint: csvFileName || '',
+                    manualMappings: manualMappings,
+                    waves: waves,
+                    waveAssignments: waveAssignments
+                };
+                var jsonContent = JSON.stringify(sessionData, null, 2);
+                var blob = new Blob([jsonContent], { type: 'application/json;charset=utf-8;' });
+                var url = URL.createObjectURL(blob);
+                var a = document.createElement('a');
+                a.href = url;
+                var ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+                a.download = 'migration-session-' + ts + '.json';
+                a.click();
+                URL.revokeObjectURL(url);
+            }
+
+            function loadSessionFromFile(file) {
+                if (!file) return;
+                var reader = new FileReader();
+                reader.onload = function(ev) {
+                    try {
+                        var parsed = JSON.parse(ev.target.result);
+                        if (!parsed || typeof parsed !== 'object' || !parsed.version) {
+                            setError('Invalid session file: missing version field');
+                            return;
+                        }
+                        setSessionFileName(file.name);
+                        setPendingSession(parsed);
+                    } catch (ex) {
+                        setError('Could not parse session file: ' + ex.message);
+                    }
+                };
+                reader.onerror = function() { setError('Error reading session file'); };
+                reader.readAsText(file);
+            }
+
+            function formatAutoSaveTime(date) {
+                if (!date) return '';
+                var h = date.getHours();
+                var m = date.getMinutes();
+                return (h < 10 ? '0' + h : h) + ':' + (m < 10 ? '0' + m : m);
+            }
+
+            function clearSavedSession() {
+                try { localStorage.removeItem('home-drive-migration-session'); } catch(ex) {}
+                setPendingSession(null);
+                setAutoSaveTime(null);
+                setSessionFileName('');
+            }
+
+            function resetSession() {
+                if (!window.confirm('This will clear all waves, wave assignments and manual mappings. The loaded data will remain. Are you sure?')) return;
+                setWaves([]);
+                setWaveAssignments({});
+                setManualMappings({});
+                setSelectedUsers({});
+                setAddToWaveId('');
+                setExportWaveId('');
+                try { localStorage.removeItem('home-drive-migration-session'); } catch(ex) {}
+                setAutoSaveTime(null);
+                setSessionFileName('');
+                setPendingSession(null);
+            }
+
+            function exportJSON() {
+                var selectedArray = users.filter(function(u) { return selectedUsers[u.name]; });
+                if (selectedArray.length === 0) return;
+
+                var tasks = [];
+                selectedArray.forEach(function(u) {
+                    tasks.push({
+                        SourcePath: u.path || ('\\\\BHFP03\\NationalHomeDrives\\' + u.name),
+                        TargetPath: 'https://barnardosnz-my.sharepoint.com/personal/bill_smith_barnardos_org_nz',
+                        TargetList: 'Documents',
+                        TargetListRelativePath: 'Migration'
+                    });
+                });
+
+                var jsonData = {
+                    Tasks: tasks
+                };
+
+                var jsonContent = JSON.stringify(jsonData, null, 2);
+                var blob = new Blob([jsonContent], { type: 'application/json;charset=utf-8;' });
+                var url = URL.createObjectURL(blob);
+                var a = document.createElement('a');
+                a.href = url;
+                a.download = waveName.replace(/\s+/g, '-').toLowerCase() + '.json';
+                a.click();
+                URL.revokeObjectURL(url);
+            }
+
+            function sortArrow(field) {
+                if (sortBy === field) return sortDir === 'asc' ? ' \u25B4' : ' \u25BE';
+                return '';
+            }
+
+            // Compute user mappings whenever oneDriveData or manualMappings change
+            useMemo(function() {
+                if (!oneDriveData || !users || Object.keys(oneDriveData).length === 0 || users.length === 0) {
+                    setUserMappings({});
+                    return;
+                }
+                var mappings = {};
+                users.forEach(function(user) {
+                    if (!user || !user.name) return; // Skip invalid users
+                    var targetName = null;
+
+                    // Check manual mappings first
+                    if (manualMappings && manualMappings[user.name]) {
+                        targetName = manualMappings[user.name];
+                    } else {
+                        // Otherwise try auto-matching
+                        Object.keys(oneDriveData).forEach(function(key) {
+                            if (!targetName) {
+                                var target = oneDriveData[key];
+                                if (target && target.displayName) {
+                                    var normSource = user.name.toLowerCase().replace(/[\s._]/g, '');
+                                    var normTarget = target.displayName.toLowerCase().replace(/[\s._]/g, '');
+                                    if (normSource === normTarget) {
+                                        targetName = target.displayName;
+                                    }
+                                }
+                            }
+                        });
+                    }
+
+                    mappings[user.name] = {
+                        isMapped: !!targetName,
+                        targetName: targetName,
+                        isManual: !!(manualMappings && manualMappings[user.name])
+                    };
+                });
+                setUserMappings(mappings);
+            }, [oneDriveData, users, manualMappings]);
+
+            // ===== Session useEffect Hooks =====
+
+            // Hook A: On mount, read localStorage and store as pendingSession
+            useEffect(function() {
+                try {
+                    var raw = localStorage.getItem('home-drive-migration-session');
+                    if (raw) {
+                        var parsed = JSON.parse(raw);
+                        if (parsed && typeof parsed === 'object' && parsed.version) {
+                            setPendingSession(parsed);
+                        }
+                    }
+                } catch (ex) {
+                    console.warn('Could not read session from localStorage:', ex);
+                }
+            }, []);
+
+            // Hook B: Auto-save manualMappings, waves, waveAssignments whenever they change
+            useEffect(function() {
+                // Guard: don't overwrite a stored session with empty state on first render
+                if (
+                    Object.keys(manualMappings).length === 0 &&
+                    waves.length === 0 &&
+                    Object.keys(waveAssignments).length === 0
+                ) { return; }
+                try {
+                    var sessionData = {
+                        version: 1,
+                        savedAt: new Date().toISOString(),
+                        sourceFileHint: fileName || '',
+                        targetFileHint: csvFileName || '',
+                        manualMappings: manualMappings,
+                        waves: waves,
+                        waveAssignments: waveAssignments
+                    };
+                    localStorage.setItem('home-drive-migration-session', JSON.stringify(sessionData));
+                    setAutoSaveTime(new Date());
+                } catch (ex) {
+                    console.warn('Could not auto-save session:', ex);
+                }
+            }, [manualMappings, waves, waveAssignments]);
+
+            // Hook C: When users loads, apply pendingSession if one is waiting
+            useEffect(function() {
+                if (!pendingSession || users.length === 0) return;
+
+                // Restore waves in full
+                if (pendingSession.waves && Array.isArray(pendingSession.waves)) {
+                    setWaves(pendingSession.waves);
+                }
+
+                // Restore manualMappings — only for usernames present in loaded users
+                if (pendingSession.manualMappings && typeof pendingSession.manualMappings === 'object') {
+                    var validNames = {};
+                    users.forEach(function(u) { validNames[u.name] = true; });
+                    var filteredMappings = {};
+                    Object.keys(pendingSession.manualMappings).forEach(function(uname) {
+                        if (validNames[uname]) filteredMappings[uname] = pendingSession.manualMappings[uname];
+                    });
+                    setManualMappings(filteredMappings);
+                }
+
+                // Restore waveAssignments — only for usernames present in loaded users
+                if (pendingSession.waveAssignments && typeof pendingSession.waveAssignments === 'object') {
+                    var validNames2 = {};
+                    users.forEach(function(u) { validNames2[u.name] = true; });
+                    var filteredAssignments = {};
+                    Object.keys(pendingSession.waveAssignments).forEach(function(uname) {
+                        if (validNames2[uname]) filteredAssignments[uname] = pendingSession.waveAssignments[uname];
+                    });
+                    setWaveAssignments(filteredAssignments);
+                }
+
+                // Clear pending — banner dismisses, won't re-fire on next users change
+                setPendingSession(null);
+            }, [users, pendingSession]);
+
+            // ===== Render =====
+            var content = [];
+
+            // Header
+            content.push(
+                e('div', { key: 'header', className: 'header' },
+                    e('h1', null, 'Home Drive Migration Analyzer'),
+                    e('p', { className: 'subtitle' },
+                        'Upload TreeSize Excel reports to analyze user home drives for migration planning',
+                        fileName ? e('span', { style: { marginLeft: '12px', color: '#0078d4' } }, '| Loaded: ' + fileName) : null
+                    )
+                )
+            );
+
+            // Upload section
+            content.push(
+                e('div', { key: 'upload', className: 'upload-section' },
+                    e('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginBottom: '16px' } },
+                        // Excel upload
+                        e('div', null,
+                            e('div', { style: { fontSize: '12px', fontWeight: '600', color: '#333', marginBottom: '8px', textTransform: 'uppercase' } }, 'Source: Home Drives'),
+                            e('div', {
+                                className: 'upload-area' + (isDragging ? ' dragging' : ''),
+                                onDrop: function(ev) { ev.preventDefault(); setIsDragging(false); if (ev.dataTransfer.files[0]) handleExcelUpload(ev.dataTransfer.files[0]); },
+                                onDragOver: function(ev) { ev.preventDefault(); setIsDragging(true); },
+                                onDragLeave: function(ev) { ev.preventDefault(); setIsDragging(false); },
+                                onClick: function() { document.getElementById('excelInput').click(); }
+                            },
+                                e('div', { className: 'upload-icon' }, '\uD83D\uDCCA'),
+                                e('div', { className: 'upload-text' }, 'Drop TreeSize Excel'),
+                                e('div', { className: 'upload-subtext' }, fileName ? fileName : '.xlsx or .xls')
+                            ),
+                            e('input', {
+                                id: 'excelInput', type: 'file', accept: '.xlsx,.xls',
+                                onChange: function(ev) { if (ev.target.files[0]) handleExcelUpload(ev.target.files[0]); }
+                            })
+                        ),
+                        // CSV upload
+                        e('div', null,
+                            e('div', { style: { fontSize: '12px', fontWeight: '600', color: '#333', marginBottom: '8px', textTransform: 'uppercase' } }, 'Target: OneDrive'),
+                            e('div', {
+                                className: 'upload-area',
+                                onDrop: function(ev) { ev.preventDefault(); ev.stopPropagation(); if (ev.dataTransfer.files[0] && ev.dataTransfer.files[0].name.endsWith('.csv')) { handleCSVUpload(ev.dataTransfer.files[0]); } else { setError('Please drop a CSV file'); } },
+                                onDragOver: function(ev) { ev.preventDefault(); ev.stopPropagation(); },
+                                onDragLeave: function(ev) { ev.preventDefault(); ev.stopPropagation(); },
+                                onClick: function() { document.getElementById('csvInput').click(); }
+                            },
+                                e('div', { className: 'upload-icon' }, '\uD83D\uDCCA'),
+                                e('div', { className: 'upload-text' }, 'Drop OneDrive CSV'),
+                                e('div', { className: 'upload-subtext' }, csvFileName ? csvFileName : '.csv')
+                            ),
+                            e('input', {
+                                id: 'csvInput', type: 'file', accept: '.csv',
+                                onChange: function(ev) { if (ev.target.files[0]) handleCSVUpload(ev.target.files[0]); }
+                            })
+                        )
+                    ),
+                    // Hidden session file input
+                    e('input', {
+                        id: 'sessionInput', type: 'file', accept: '.json',
+                        onChange: function(ev) {
+                            if (ev.target.files[0]) {
+                                loadSessionFromFile(ev.target.files[0]);
+                                ev.target.value = '';
+                            }
+                        }
+                    })
+                )
+            );
+
+            // Session bar (always visible)
+            content.push(
+                e('div', { key: 'session-bar', className: 'session-bar' },
+                    e('button', {
+                        className: 'btn-session',
+                        onClick: exportSession,
+                        title: 'Download your mappings and waves as a .json file'
+                    }, '\uD83D\uDCBE Save Session'),
+                    e('button', {
+                        className: 'btn-session',
+                        onClick: function() { document.getElementById('sessionInput').click(); },
+                        title: 'Restore mappings and waves from a previously saved session file'
+                    }, '\uD83D\uDCC2 Load Session'),
+                    e('button', {
+                        className: 'btn-session btn-session-reset',
+                        onClick: resetSession,
+                        title: 'Clear all waves, assignments and manual mappings'
+                    }, '\uD83D\uDDD1 Reset Session'),
+                    autoSaveTime
+                        ? e('span', { className: 'session-autosave' },
+                            e('span', { className: 'session-dot' }),
+                            'Auto-saved at ' + formatAutoSaveTime(autoSaveTime)
+                          )
+                        : e('span', { className: 'session-autosave session-autosave-idle' }, 'No changes saved yet'),
+                    sessionFileName
+                        ? e('span', { className: 'session-hint' }, 'Session: ' + sessionFileName)
+                        : null,
+                    pendingSession
+                        ? e('div', { className: 'session-pending-banner' },
+                            '\u26A0\uFE0F Session loaded \u2014 upload your Excel & CSV to restore mappings and waves',
+                            pendingSession.sourceFileHint
+                                ? e('span', { className: 'session-hint', style: { marginLeft: '8px' } },
+                                    '(source was: ' + pendingSession.sourceFileHint + ')')
+                                : null,
+                            e('button', {
+                                className: 'session-clear-btn',
+                                onClick: clearSavedSession,
+                                title: 'Discard this saved session'
+                            }, 'Discard')
+                          )
+                        : null
+                )
+            );
+
+            // Error
+            if (error) {
+                content.push(e('div', {
+                    key: 'error',
+                    style: { background: '#fde7e9', color: '#d13438', padding: '16px', borderRadius: '4px', marginBottom: '20px' }
+                }, error));
+            }
+
+            // Loading
+            if (loading) {
+                content.push(e('div', { key: 'loading', className: 'loading' },
+                    e('div', { className: 'spinner' }),
+                    e('div', null, 'Processing Excel file...')
+                ));
+            }
+
+            // Main content
+            if (!loading && users.length > 0 && stats) {
+                // Stats grid
+                content.push(
+                    e('div', { key: 'stats', className: 'stats-grid' },
+                        e('div', { className: 'stat-card' },
+                            e('div', { className: 'stat-label' }, 'Users to Migrate'),
+                            e('div', { className: 'stat-value primary' }, stats.totalUsers.toLocaleString()),
+                            e('div', { className: 'stat-subtext' },
+                                Object.keys(oneDriveData).length > 0 ?
+                                    (stats.mappedCount + ' mapped, ' + stats.unmappedCount + ' unmapped') :
+                                    'user home drives found'
+                            )
+                        ),
+                        e('div', { className: 'stat-card' },
+                            e('div', { className: 'stat-label' }, 'Data to Migrate'),
+                            e('div', { className: 'stat-value success' }, formatSize(stats.migrateSize)),
+                            e('div', { className: 'stat-subtext' }, formatSize(stats.totalRecycleBinBytes) + ' excluded (recycle bin)')
+                        ),
+                        e('div', { className: 'stat-card' },
+                            e('div', { className: 'stat-label' }, 'Total Data Size'),
+                            e('div', { className: 'stat-value warning' }, formatSize(stats.totalSizeBytes)),
+                            e('div', { className: 'stat-subtext' }, 'across all user drives')
+                        ),
+                        e('div', { className: 'stat-card' },
+                            e('div', { className: 'stat-label' }, 'Files to Migrate'),
+                            e('div', { className: 'stat-value primary' }, stats.migrateFiles.toLocaleString()),
+                            e('div', { className: 'stat-subtext' }, 'of ' + stats.totalFiles.toLocaleString() + ' total files')
+                        ),
+                        e('div', { className: 'stat-card highlight' },
+                            e('div', { className: 'stat-label' }, 'Recycle Bin (Excluded)'),
+                            e('div', { className: 'stat-value danger' }, formatSize(stats.totalRecycleBinBytes)),
+                            e('div', { className: 'stat-subtext' }, stats.totalRecycleBinFiles.toLocaleString() + ' files in ' + stats.usersWithRecycleBin + ' user bins'),
+                            e('div', { className: 'progress-bar' },
+                                e('div', { className: 'progress-fill', style: { width: ((stats.totalRecycleBinBytes / stats.totalSizeBytes) * 100) + '%', background: '#d13438' } })
+                            )
+                        )
+                    )
+                );
+
+                // Wave Management Bar
+                content.push(
+                    e('div', { key: 'wave-mgmt', className: 'wave-mgmt-bar' },
+                        // Create Wave
+                        e('span', { className: 'wave-mgmt-label' }, 'Create Wave:'),
+                        e('input', {
+                            className: 'wave-name-input', type: 'text', value: newWaveName,
+                            placeholder: 'Wave name...',
+                            onChange: function(ev) { setNewWaveName(ev.target.value); },
+                            onKeyDown: function(ev) { if (ev.key === 'Enter') createWave(); }
+                        }),
+                        e('button', { className: 'btn btn-primary', onClick: createWave }, '+ Create Wave'),
+
+                        e('div', { className: 'wave-mgmt-divider' }),
+
+                        // Auto-generate waves
+                        e('span', { className: 'wave-mgmt-label' }, 'Auto-Generate:'),
+                        e('input', {
+                            type: 'number', min: '1', className: 'wave-name-input',
+                            style: { width: '64px', textAlign: 'center' },
+                            value: autoWaveCount,
+                            placeholder: 'n',
+                            onChange: function(ev) { setAutoWaveCount(ev.target.value); },
+                            onKeyDown: function(ev) { if (ev.key === 'Enter') autoGenerateWaves(); }
+                        }),
+                        e('button', {
+                            className: 'btn btn-primary',
+                            disabled: !users || users.length === 0,
+                            style: { opacity: (!users || users.length === 0) ? 0.5 : 1 },
+                            onClick: autoGenerateWaves
+                        }, '\u26A1 Generate Waves'),
+
+                        e('div', { className: 'wave-mgmt-divider' }),
+
+                        // Select actions
+                        e('span', { className: 'wave-mgmt-label' }, 'Select:'),
+                        e('button', { className: 'btn', onClick: selectAll }, 'All Visible'),
+                        e('button', { className: 'btn', onClick: deselectAll }, 'None'),
+                        e('span', { style: { fontSize: '13px', color: '#0078d4', fontWeight: '600' } },
+                            stats.selectedCount + ' selected'
+                        ),
+
+                        // Add selected to wave (only show if waves exist and something is selected)
+                        waves.length > 0 ? e('div', { className: 'wave-mgmt-divider' }) : null,
+                        waves.length > 0 ? e('span', { className: 'wave-mgmt-label' }, 'Add to wave:') : null,
+                        waves.length > 0 ? e('select', {
+                            className: 'wave-select',
+                            value: addToWaveId,
+                            onChange: function(ev) { setAddToWaveId(ev.target.value); }
+                        },
+                            e('option', { value: '' }, '-- select wave --'),
+                            waves.map(function(w) {
+                                return e('option', { key: w.id, value: w.id }, w.name);
+                            })
+                        ) : null,
+                        waves.length > 0 ? e('button', {
+                            className: 'btn btn-success',
+                            disabled: stats.selectedCount === 0 || !addToWaveId,
+                            style: { opacity: (stats.selectedCount === 0 || !addToWaveId) ? 0.5 : 1 },
+                            onClick: function() {
+                                if (!addToWaveId) return;
+                                var names = Object.keys(selectedUsers).filter(function(k) { return selectedUsers[k]; });
+                                assignToWave(names, addToWaveId);
+                                setSelectedUsers({});
+                            }
+                        }, 'Add (' + stats.selectedCount + ')') : null,
+
+                        e('div', { style: { marginLeft: 'auto' } }),
+
+                        // Export wave JSON
+                        waves.length > 0 ? e('div', { className: 'wave-mgmt-divider' }) : null,
+                        waves.length > 0 ? e('span', { className: 'wave-mgmt-label' }, 'Export:') : null,
+                        waves.length > 0 ? e('select', {
+                            className: 'wave-select',
+                            value: exportWaveId,
+                            onChange: function(ev) { setExportWaveId(ev.target.value); }
+                        },
+                            e('option', { value: '' }, '-- select wave --'),
+                            waves.map(function(w) {
+                                var count = users.filter(function(u) { return waveAssignments[u.name] === w.id; }).length;
+                                return e('option', { key: w.id, value: w.id }, w.name + ' (' + count + ' users)');
+                            })
+                        ) : null,
+                        waves.length > 0 ? e('button', {
+                            className: 'btn btn-success',
+                            disabled: !exportWaveId,
+                            style: { opacity: !exportWaveId ? 0.5 : 1 },
+                            onClick: function() { if (exportWaveId) exportWaveJSON(exportWaveId); }
+                        }, '\u2913 Export JSON') : null
+                    )
+                );
+
+                // Controls
+                var controlsChildren = [
+                    e('input', {
+                        type: 'text', className: 'search-box',
+                        placeholder: 'Search users by name or owner...',
+                        value: searchTerm,
+                        onChange: function(ev) { setSearchTerm(ev.target.value); }
+                    }),
+                    e('div', { className: 'filter-group' },
+                        e('span', { className: 'filter-label' }, 'Sort:'),
+                        e('button', { className: 'btn' + (sortBy === 'name' ? ' active' : ''), onClick: function() { toggleSort('name'); } }, 'Name' + sortArrow('name')),
+                        e('button', { className: 'btn' + (sortBy === 'size' ? ' active' : ''), onClick: function() { toggleSort('size'); } }, 'Migrate Size' + sortArrow('size')),
+                        e('button', { className: 'btn' + (sortBy === 'totalSize' ? ' active' : ''), onClick: function() { toggleSort('totalSize'); } }, 'Total Size' + sortArrow('totalSize')),
+                        e('button', { className: 'btn' + (sortBy === 'files' ? ' active' : ''), onClick: function() { toggleSort('files'); } }, 'Files' + sortArrow('files')),
+                        e('button', { className: 'btn' + (sortBy === 'recycle' ? ' active' : ''), onClick: function() { toggleSort('recycle'); } }, 'Recycle Bin' + sortArrow('recycle'))
+                    )
+                ];
+
+                // Add mapping filter if CSV is loaded
+                if (Object.keys(oneDriveData).length > 0) {
+                    controlsChildren.push(
+                        e('div', { className: 'filter-group' },
+                            e('span', { className: 'filter-label' }, 'Mapping:'),
+                            e('button', { className: 'btn' + (mappingFilter === 'all' ? ' active' : ''), onClick: function() { setMappingFilter('all'); } }, 'All'),
+                            e('button', { className: 'btn' + (mappingFilter === 'mapped' ? ' active' : ''), onClick: function() { setMappingFilter('mapped'); } }, 'Mapped'),
+                            e('button', { className: 'btn' + (mappingFilter === 'unmapped' ? ' active' : ''), onClick: function() { setMappingFilter('unmapped'); } }, 'Unmapped')
+                        )
+                    );
+                }
+
+                content.push(e('div', { key: 'controls', className: 'controls-section' }, controlsChildren));
+
+                // Helper to build a UserRow element
+                function makeUserRow(user, extraProps) {
+                    return e(UserRow, Object.assign({
+                        key: user.name,
+                        user: user,
+                        isExpanded: !!expandedUsers[user.name],
+                        isSelected: !!selectedUsers[user.name],
+                        onToggleExpand: toggleExpand,
+                        onToggleSelect: toggleSelect,
+                        mapping: null,
+                        oneDriveData: oneDriveData,
+                        onSetManualMapping: setManualMapping,
+                        userMappings: userMappings,
+                        manualMappings: manualMappings,
+                        waveAssignments: waveAssignments,
+                        waves: waves,
+                        draggedUser: draggedUser,
+                        setDraggedUser: setDraggedUser,
+                        onRemoveFromWave: removeFromWave
+                    }, extraProps || {}));
+                }
+
+                var tableHeaderContent = e('div', { className: 'table-header' },
+                    e('span', { style: { width: '14px', flexShrink: 0 } }),
+                    e('div', { className: 'checkbox-wrapper', style: { visibility: 'hidden' } }, e('input', { type: 'checkbox', readOnly: true })),
+                    e('span', { className: 'icon' }),
+                    e('span', { className: 'folder-name' }, 'User Folder'),
+                    e('div', { className: 'folder-meta' },
+                        e('span', { className: 'col-total' }, 'Total Size'),
+                        e('span', { className: 'col-recycle' }, 'Recycle Bin'),
+                        e('span', { className: 'col-files' }, 'Files'),
+                        Object.keys(oneDriveData).length > 0 ? e('span', { className: 'col-mapping' }, 'Mapping') : null,
+                        e('span', { className: 'col-migrate' }, 'Migrate Size'),
+                        Object.keys(oneDriveData).length > 0 ? e('span', { className: 'col-postmigrate' }, 'After Migration') : null
+                    )
+                );
+
+                var treeContent;
+
+                if (waves.length === 0) {
+                    // No waves yet — flat list as before
+                    var treeRows = sortedFilteredUsers.map(function(user) { return makeUserRow(user); });
+                    treeContent = e('div', { className: 'tree-view' }, treeRows);
+                } else {
+                    // Grouped by wave
+                    var groupedContent = [];
+
+                    waves.forEach(function(wave) {
+                        var waveUsers = sortedFilteredUsers.filter(function(u) {
+                            return waveAssignments[u.name] === wave.id;
+                        });
+                        var waveSize = waveUsers.reduce(function(sum, u) { return sum + u.sizeBytes - u.recycleBinSizeBytes; }, 0);
+                        var isDragTarget = dragOverWaveId === wave.id;
+
+                        var waveHeaderEl = e('div', {
+                            key: 'wh-' + wave.id,
+                            className: 'wave-header' + (isDragTarget ? ' drag-over' : ''),
+                            style: { borderLeftColor: wave.color },
+                            onDragOver: function(ev) { ev.preventDefault(); setDragOverWaveId(wave.id); },
+                            onDragLeave: function(ev) { setDragOverWaveId(null); },
+                            onDrop: function(ev) {
+                                ev.preventDefault();
+                                setDragOverWaveId(null);
+                                if (draggedUser) { assignToWave([draggedUser], wave.id); setDraggedUser(null); }
+                            }
+                        },
+                            e('span', { className: 'wave-dot', style: { background: wave.color } }),
+                            e('span', { className: 'wave-header-name' }, wave.name),
+                            e('span', { className: 'wave-header-meta' },
+                                waveUsers.length + ' users · ' + formatSize(waveSize) + ' to migrate'
+                            ),
+                            e('div', { className: 'wave-header-actions' },
+                                e('button', {
+                                    className: 'btn btn-danger',
+                                    onClick: function(ev) { ev.stopPropagation(); deleteWave(wave.id); }
+                                }, '✕ Delete Wave')
+                            )
+                        );
+
+                        var waveBody = waveUsers.length > 0
+                            ? waveUsers.map(function(user) { return makeUserRow(user); })
+                            : [e('div', { key: 'empty', className: 'wave-empty-hint' },
+                                'Drop users here or select users and click "Add"')];
+
+                        groupedContent.push(
+                            e('div', { key: 'wave-' + wave.id, className: 'wave-group' },
+                                waveHeaderEl,
+                                e('div', { className: 'tree-view' }, waveBody)
+                            )
+                        );
+                    });
+
+                    // Unassigned users
+                    var unassignedUsers = sortedFilteredUsers.filter(function(u) {
+                        return !waveAssignments[u.name];
+                    });
+
+                    if (unassignedUsers.length > 0) {
+                        groupedContent.push(
+                            e('div', { key: 'unassigned-header', className: 'unassigned-header' },
+                                'Unassigned (' + unassignedUsers.length + ')'
+                            )
+                        );
+                        groupedContent.push(
+                            e('div', { key: 'unassigned-rows', className: 'tree-view' },
+                                unassignedUsers.map(function(user) { return makeUserRow(user); })
+                            )
+                        );
+                    }
+
+                    treeContent = e('div', null, groupedContent);
+                }
+
+                content.push(
+                    e('div', { key: 'viewer', className: 'viewer-section' },
+                        tableHeaderContent,
+                        treeContent,
+                        sortedFilteredUsers.length === 0 && searchTerm ?
+                            e('div', { className: 'empty-state' }, e('div', null, 'No users match "' + searchTerm + '"')) : null
+                    )
+                );
+            }
+
+            // Empty state
+            if (!loading && users.length === 0) {
+                content.push(
+                    e('div', { key: 'empty', className: 'empty-state' },
+                        e('div', { className: 'empty-state-icon' }, '\uD83D\uDCCA'),
+                        e('div', null, 'No data loaded'),
+                        e('div', { style: { fontSize: '14px', marginTop: '8px' } },
+                            'Upload a TreeSize Excel report (.xlsx) and OneDrive CSV to analyze migration mappings')
+                    )
+                );
+            }
+
+            return e('div', { className: 'container' }, content);
+        }
+
+        ReactDOM.render(e(App), document.getElementById('root'));
+    })();
+    </script>
+</body>
+</html>
