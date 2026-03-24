@@ -576,8 +576,8 @@ async function openTargetPanel(
             <small class="form-hint">Letters, numbers, and hyphens only.</small>
           </div>
           <div class="form-group">
-            <label>Description</label>
-            <textarea id="planned-desc" class="form-input" rows="2" placeholder="Optional description">${escHtml(existing?.plannedSite?.description ?? '')}</textarea>
+            <label>Description <span class="required">*</span></label>
+            <textarea id="planned-desc" class="form-input" rows="2" placeholder="e.g. Site for the Engineering team">${escHtml(existing?.plannedSite?.description ?? '')}</textarea>
           </div>
           <div class="form-group">
             <label class="checkbox-label">
@@ -763,11 +763,19 @@ async function openTargetPanel(
   attachNsPeopleSearch(targetEl, '#ns-members-search', '#ns-members-dropdown', nsMembers, () => renderNsChips(targetEl, '#ns-members-chips', nsMembers))
 
   plannedNameInput?.addEventListener('input', () => {
+    setFieldError(plannedNameInput, null)
     if (plannedAliasInput.dataset.userEdited) return
     plannedAliasInput.value = plannedNameInput.value
       .toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-').slice(0, 60)
   })
-  plannedAliasInput?.addEventListener('input', () => { plannedAliasInput.dataset.userEdited = '1' })
+  plannedAliasInput?.addEventListener('input', () => {
+    plannedAliasInput.dataset.userEdited = '1'
+    setFieldError(plannedAliasInput, null)
+  })
+  ;(targetEl.querySelector('#planned-desc') as HTMLTextAreaElement)
+    ?.addEventListener('input', () => {
+      setFieldError(targetEl.querySelector('#planned-desc') as HTMLElement, null)
+    })
 
   // Apply site type button
   targetEl.querySelector('#btn-ns-apply-type')?.addEventListener('click', () => {
@@ -790,24 +798,76 @@ async function openTargetPanel(
     renderNsChips(targetEl, '#ns-members-chips', nsMembers)
   })
 
-  // ── Helper: collect planned site config from form ────────────────────────────
+  // ── Inline field error helpers ────────────────────────────────────────────────
+  function setFieldError(el: HTMLElement, message: string | null): void {
+    const existing = el.parentElement?.querySelector('.ns-field-error')
+    if (message) {
+      el.classList.add('form-input--error')
+      if (!existing) {
+        const err = document.createElement('span')
+        err.className = 'ns-field-error'
+        err.textContent = message
+        el.insertAdjacentElement('afterend', err)
+      } else {
+        (existing as HTMLElement).textContent = message
+      }
+    } else {
+      el.classList.remove('form-input--error')
+      existing?.remove()
+    }
+  }
+
+  function clearFieldErrors(): void {
+    targetEl.querySelectorAll('.ns-field-error').forEach(e => e.remove())
+    targetEl.querySelectorAll('.form-input--error').forEach(e => e.classList.remove('form-input--error'))
+  }
+
+  // ── Helper: collect + validate planned site config from form ─────────────────
   function collectPlannedSiteConfig(): NewSiteConfig | null {
-    const plannedName = plannedNameInput.value.trim()
-    if (!plannedName) { plannedNameInput.focus(); return null }
+    clearFieldErrors()
+    const plannedName  = plannedNameInput.value.trim()
     const plannedAlias = plannedAliasInput.value.trim()
-    const plannedDesc = (targetEl.querySelector('#planned-desc') as HTMLTextAreaElement).value.trim()
+    const descEl       = targetEl.querySelector('#planned-desc') as HTMLTextAreaElement
+    const plannedDesc  = descEl.value.trim()
+
+    let valid = true
+
+    if (!plannedName) {
+      setFieldError(plannedNameInput, 'Site display name is required.')
+      valid = false
+    }
+
+    if (!plannedAlias) {
+      setFieldError(plannedAliasInput, 'URL alias is required.')
+      valid = false
+    } else if (!/^[a-z0-9][a-z0-9-]*[a-z0-9]$|^[a-z0-9]$/.test(plannedAlias)) {
+      setFieldError(plannedAliasInput, 'Only lowercase letters, numbers, and hyphens. Cannot start or end with a hyphen.')
+      valid = false
+    }
+
+    if (!plannedDesc) {
+      setFieldError(descEl, 'Description is required.')
+      valid = false
+    }
+
+    if (!valid) {
+      targetEl.querySelector('.ns-field-error')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+      return null
+    }
+
     const plannedLibrary = (targetEl.querySelector('#planned-library') as HTMLInputElement).value.trim()
-    const plannedFolder = (targetEl.querySelector('#planned-folder') as HTMLInputElement).value.trim()
-    const createTeam = !!(targetEl.querySelector<HTMLInputElement>('#ns-create-team')?.checked)
-    const typeSelect = targetEl.querySelector<HTMLSelectElement>('#ns-type-select')
-    const siteTypeId = typeSelect?.value || undefined
-    const siteTypeName = siteTypeId ? typeSelect?.options[typeSelect.selectedIndex]?.text : undefined
+    const plannedFolder  = (targetEl.querySelector('#planned-folder') as HTMLInputElement).value.trim()
+    const createTeam     = !!(targetEl.querySelector<HTMLInputElement>('#ns-create-team')?.checked)
+    const typeSelect     = targetEl.querySelector<HTMLSelectElement>('#ns-type-select')
+    const siteTypeId     = typeSelect?.value || undefined
+    const siteTypeName   = siteTypeId ? typeSelect?.options[typeSelect.selectedIndex]?.text : undefined
+
     return {
       siteTypeId,
       siteTypeName,
       displayName: plannedName,
       alias: plannedAlias,
-      description: plannedDesc || undefined,
+      description: plannedDesc,
       template: 'team',
       libraryName: plannedLibrary || undefined,
       folderPath: plannedFolder || undefined,
@@ -2075,6 +2135,9 @@ function injectMappingStyles(): void {
     .btn-clear { background: none; border: none; cursor: pointer; color: inherit; font-size: 0.9rem; }
     .searching, .no-results { padding: 8px 12px; font-size: 0.85rem; color: var(--color-text-muted); display: block; }
     .hint { font-size: 0.78rem; color: var(--color-text-muted); font-weight: 400; }
+    .form-input--error { border-color: #a4262c !important; background: #fff8f8; }
+    .ns-field-error { display: block; font-size: 0.78rem; color: #a4262c;
+      margin-top: 3px; }
 
     /* Ancestor-blocked panel */
     .ancestor-blocked-panel {
