@@ -476,12 +476,13 @@ export async function addGroupMembers(groupId: string, userIds: string[]): Promi
 /**
  * Apply a SharePoint site design to a newly created site via the SP REST API.
  */
-export async function applySiteDesign(siteUrl: string, siteDesignId: string): Promise<void> {
+export async function applySiteDesign(siteUrl: string, siteDesignId: string, maxAttempts = 5): Promise<void> {
   const { root: rootHost } = await getSharePointHosts()
-  const spToken = await getToken([`https://${rootHost}/AllSites.FullControl`])
-  const resp = await fetch(
-    `https://${rootHost}/_api/Microsoft.SharePoint.Utilities.WebTemplateExtensions.SiteScriptUtility.ApplySiteDesign`,
-    {
+  const endpoint = `https://${rootHost}/_api/Microsoft.SharePoint.Utilities.WebTemplateExtensions.SiteScriptUtility.ApplySiteDesign`
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const spToken = await getToken([`https://${rootHost}/AllSites.FullControl`])
+    const resp = await fetch(endpoint, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${spToken}`,
@@ -489,9 +490,20 @@ export async function applySiteDesign(siteUrl: string, siteDesignId: string): Pr
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({ siteDesignId, webUrl: siteUrl }),
+    })
+
+    if (resp.ok) return
+
+    // On 400/503, the site may not be fully provisioned yet — retry with backoff
+    const bodyText = await resp.text().catch(() => '')
+    if ((resp.status === 400 || resp.status === 503) && attempt < maxAttempts) {
+      console.warn(`applySiteDesign attempt ${attempt}/${maxAttempts} failed (${resp.status}): ${bodyText} — retrying in ${attempt * 10}s`)
+      await delay(attempt * 10_000)
+      continue
     }
-  )
-  if (!resp.ok) throw new Error(`applySiteDesign: ${resp.status} ${resp.statusText}`)
+
+    throw new Error(`applySiteDesign: ${resp.status} ${resp.statusText} — ${bodyText}`)
+  }
 }
 
 /**
