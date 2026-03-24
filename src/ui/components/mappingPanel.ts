@@ -1,4 +1,4 @@
-import { searchSites, getSiteDrives, saveMappingsFile, searchUsers, getUserDrive, checkUserDriveAccess, grantUserDriveAccess, getUserById } from '../../graph/graphClient'
+import { searchSites, getSiteDrives, saveMappingsFile, searchUsers, getUserDrive, checkUserDriveAccess, grantUserDriveAccess, getUserById, provisionNewSite } from '../../graph/graphClient'
 import { updateProject, getSpConfig } from '../../graph/projectService'
 import { setState, getState } from '../../state/store'
 import type { TreeNode, MigrationMapping, SharePointSite, SharePointDrive, NewSiteConfig, UserRef, SiteType, AppUser } from '../../types'
@@ -580,21 +580,6 @@ async function openTargetPanel(
             <textarea id="planned-desc" class="form-input" rows="2" placeholder="Optional description">${escHtml(existing?.plannedSite?.description ?? '')}</textarea>
           </div>
           <div class="form-group">
-            <label>Template</label>
-            <div class="ns-radio-group">
-              <label class="radio-label">
-                <input type="radio" name="planned-template" value="team"
-                  ${(existing?.plannedSite?.template ?? 'team') === 'team' ? 'checked' : ''} />
-                Team site (M365 Group)
-              </label>
-              <label class="radio-label">
-                <input type="radio" name="planned-template" value="communication"
-                  ${existing?.plannedSite?.template === 'communication' ? 'checked' : ''} />
-                Communication site
-              </label>
-            </div>
-          </div>
-          <div class="form-group" id="ns-create-team-row" style="${existing?.plannedSite?.template === 'communication' ? 'display:none' : ''}">
             <label class="checkbox-label">
               <input type="checkbox" id="ns-create-team" ${existing?.plannedSite?.createTeam ? 'checked' : ''} />
               Also create a Microsoft Teams team
@@ -627,8 +612,16 @@ async function openTargetPanel(
             </div>
           </div>
           <div class="target-action-row">
-            <button type="button" id="btn-save-planned" class="btn btn-primary">Save Mapping</button>
+            <button type="button" id="btn-save-planned" class="btn btn-secondary">Save</button>
+            <button type="button" id="btn-create-site" class="btn btn-primary">Save and Create Site</button>
             ${existing?.plannedSite ? `<button type="button" id="btn-remove-planned" class="btn btn-ghost">Remove</button>` : ''}
+          </div>
+          <div id="site-creation-log" style="display:none" class="site-creation-log">
+            <div class="creation-log-header">
+              <span class="spinner"></span>
+              <span id="creation-log-current"></span>
+            </div>
+            <ul id="creation-log-steps" class="creation-log-steps"></ul>
           </div>
         </div>
 
@@ -776,18 +769,6 @@ async function openTargetPanel(
   attachNsPeopleSearch(targetEl, '#ns-owners-search', '#ns-owners-dropdown', nsOwners, () => renderNsChips(targetEl, '#ns-owners-chips', nsOwners))
   attachNsPeopleSearch(targetEl, '#ns-members-search', '#ns-members-dropdown', nsMembers, () => renderNsChips(targetEl, '#ns-members-chips', nsMembers))
 
-  // Template radio → show/hide Teams checkbox
-  targetEl.querySelectorAll<HTMLInputElement>('input[name="planned-template"]').forEach(radio => {
-    radio.addEventListener('change', () => {
-      const teamRow = targetEl.querySelector<HTMLElement>('#ns-create-team-row')
-      if (teamRow) teamRow.style.display = radio.value === 'communication' ? 'none' : ''
-      if (radio.value === 'communication') {
-        const cb = targetEl.querySelector<HTMLInputElement>('#ns-create-team')
-        if (cb) cb.checked = false
-      }
-    })
-  })
-
   plannedNameInput?.addEventListener('input', () => {
     if (plannedAliasInput.dataset.userEdited) return
     plannedAliasInput.value = plannedNameInput.value
@@ -806,8 +787,6 @@ async function openTargetPanel(
     // Pre-fill fields from the site type
     if (st.defaultLibrary) (targetEl.querySelector('#planned-library') as HTMLInputElement).value = st.defaultLibrary
     if (st.defaultSubfolder) (targetEl.querySelector('#planned-folder') as HTMLInputElement).value = st.defaultSubfolder
-    const templateRadio = targetEl.querySelector<HTMLInputElement>(`input[name="planned-template"][value="${st.template}"]`)
-    if (templateRadio) { templateRadio.checked = true; templateRadio.dispatchEvent(new Event('change')) }
     const createTeamCb = targetEl.querySelector<HTMLInputElement>('#ns-create-team')
     if (createTeamCb) createTeamCb.checked = !!st.createTeam
 
@@ -818,40 +797,44 @@ async function openTargetPanel(
     renderNsChips(targetEl, '#ns-members-chips', nsMembers)
   })
 
-  targetEl.querySelector('#btn-save-planned')?.addEventListener('click', async () => {
+  // ── Helper: collect planned site config from form ────────────────────────────
+  function collectPlannedSiteConfig(): NewSiteConfig | null {
     const plannedName = plannedNameInput.value.trim()
+    if (!plannedName) { plannedNameInput.focus(); return null }
     const plannedAlias = plannedAliasInput.value.trim()
     const plannedDesc = (targetEl.querySelector('#planned-desc') as HTMLTextAreaElement).value.trim()
     const plannedLibrary = (targetEl.querySelector('#planned-library') as HTMLInputElement).value.trim()
     const plannedFolder = (targetEl.querySelector('#planned-folder') as HTMLInputElement).value.trim()
-    const template = (targetEl.querySelector<HTMLInputElement>('input[name="planned-template"]:checked'))?.value as 'team' | 'communication' ?? 'team'
-    const createTeam = template === 'team' && !!(targetEl.querySelector<HTMLInputElement>('#ns-create-team')?.checked)
+    const createTeam = !!(targetEl.querySelector<HTMLInputElement>('#ns-create-team')?.checked)
     const typeSelect = targetEl.querySelector<HTMLSelectElement>('#ns-type-select')
     const siteTypeId = typeSelect?.value || undefined
     const siteTypeName = siteTypeId ? typeSelect?.options[typeSelect.selectedIndex]?.text : undefined
-
-    if (!plannedName) { plannedNameInput.focus(); return }
-
-    const plannedSite: NewSiteConfig = {
+    return {
       siteTypeId,
       siteTypeName,
       displayName: plannedName,
       alias: plannedAlias,
       description: plannedDesc || undefined,
-      template,
+      template: 'team',
       libraryName: plannedLibrary || undefined,
       folderPath: plannedFolder || undefined,
       createTeam: createTeam || undefined,
       owners: [...nsOwners],
       members: [...nsMembers],
     }
+  }
+
+  // ── Save (planned) ────────────────────────────────────────────────────────────
+  targetEl.querySelector('#btn-save-planned')?.addEventListener('click', async () => {
+    const plannedSite = collectPlannedSiteConfig()
+    if (!plannedSite) return
 
     const mapping: MigrationMapping = {
       id: node.path,
       sourceNode: node,
       targetSite: null,
       targetDrive: null,
-      targetFolderPath: plannedFolder,
+      targetFolderPath: plannedSite.folderPath ?? '',
       status: 'pending',
       plannedSite,
     }
@@ -861,7 +844,7 @@ async function openTargetPanel(
       mapping,
     ]
     setState({ mappings })
-    onMappingChange(plannedName, true)
+    onMappingChange(plannedSite.displayName, true)
 
     const saveBtn = targetEl.querySelector('#btn-save-planned') as HTMLButtonElement
     saveBtn.disabled = true
@@ -873,8 +856,92 @@ async function openTargetPanel(
       saveBtn.textContent = '⚠ Save failed — retry'
     } finally {
       saveBtn.disabled = false
-      setTimeout(() => { if (saveBtn.textContent !== '⚠ Save failed — retry') saveBtn.textContent = 'Save Mapping' }, 2000)
+      setTimeout(() => { if (saveBtn.textContent !== '⚠ Save failed — retry') saveBtn.textContent = 'Save' }, 2000)
     }
+  })
+
+  // ── Save and Create Site ──────────────────────────────────────────────────────
+  targetEl.querySelector('#btn-create-site')?.addEventListener('click', async () => {
+    const plannedSite = collectPlannedSiteConfig()
+    if (!plannedSite) return
+
+    // First persist the planned config so state is consistent
+    const pendingMapping: MigrationMapping = {
+      id: node.path, sourceNode: node, targetSite: null, targetDrive: null,
+      targetFolderPath: plannedSite.folderPath ?? '', status: 'pending', plannedSite,
+    }
+    const mappingsWithPending = [
+      ...getState().mappings.filter(m => m.sourceNode.path !== node.path),
+      pendingMapping,
+    ]
+    setState({ mappings: mappingsWithPending })
+    onMappingChange(plannedSite.displayName, true)
+    await persistMappings(mappingsWithPending).catch(() => {})
+
+    // Show progress log, disable buttons
+    const logEl = targetEl.querySelector('#site-creation-log') as HTMLElement
+    const logCurrent = targetEl.querySelector('#creation-log-current') as HTMLElement
+    const logSteps = targetEl.querySelector('#creation-log-steps') as HTMLElement
+    const createBtn = targetEl.querySelector('#btn-create-site') as HTMLButtonElement
+    const saveBtn = targetEl.querySelector('#btn-save-planned') as HTMLButtonElement
+    logEl.style.display = ''
+    logSteps.innerHTML = ''
+    createBtn.disabled = true
+    saveBtn.disabled = true
+
+    const addStep = (text: string, done = false): void => {
+      const li = document.createElement('li')
+      li.className = `creation-step${done ? ' creation-step--done' : ''}`
+      li.textContent = text
+      logSteps.appendChild(li)
+    }
+
+    const onProgress = (step: string): void => {
+      logCurrent.textContent = step
+      addStep(step)
+    }
+
+    let createdSite: import('../../types').SharePointSite | null = null
+    try {
+      createdSite = await provisionNewSite(plannedSite, onProgress)
+    } catch (err) {
+      logCurrent.textContent = `⚠ Failed: ${err instanceof Error ? err.message : String(err)}`
+      createBtn.disabled = false
+      saveBtn.disabled = false
+      return
+    }
+
+    // Get the default document library for the new site
+    onProgress('Fetching site library…')
+    let createdDrive: import('../../types').SharePointDrive | null = null
+    try {
+      const drives = await getSiteDrives(createdSite.id)
+      createdDrive = drives.find(d => d.driveType === 'documentLibrary') ?? drives[0] ?? null
+    } catch { /* non-fatal */ }
+
+    onProgress('Saving mapping…')
+    const readyMapping: MigrationMapping = {
+      id: node.path,
+      sourceNode: node,
+      targetSite: createdSite,
+      targetDrive: createdDrive,
+      targetFolderPath: plannedSite.folderPath ?? '',
+      status: 'ready',
+      plannedSite: undefined,
+    }
+    const finalMappings = [
+      ...getState().mappings.filter(m => m.sourceNode.path !== node.path),
+      readyMapping,
+    ]
+    setState({ mappings: finalMappings })
+    onMappingChange(createdSite.displayName)
+    try {
+      await persistMappings(finalMappings)
+    } catch { /* non-fatal */ }
+
+    logCurrent.textContent = `✅ Site created: ${createdSite.displayName}`
+    createBtn.disabled = false
+    saveBtn.disabled = false
   })
 
   targetEl.querySelector('#btn-remove-planned')?.addEventListener('click', async () => {
@@ -2036,6 +2103,21 @@ function injectMappingStyles(): void {
       border: 1px solid #f4b8bb; border-radius: 4px; padding: 7px 12px; margin-top: 6px;
     }
     .mapping-row--cant-find .tree-col-mapped--cant-find { color: #a4262c; font-weight: 600; font-size: 0.78rem; }
+
+    /* Site creation log */
+    .site-creation-log { margin-top: 12px; background: var(--color-surface-alt);
+      border: 1px solid var(--color-border); border-radius: 6px; padding: 12px 14px; }
+    .creation-log-header { display: flex; align-items: center; gap: 8px;
+      font-size: 0.85rem; font-weight: 600; margin-bottom: 8px; }
+    .creation-log-steps { list-style: none; margin: 0; padding: 0; display: flex;
+      flex-direction: column; gap: 3px; }
+    .creation-step { font-size: 0.8rem; color: var(--color-text-muted); padding-left: 4px; }
+    .creation-step::before { content: '→ '; color: var(--color-primary); }
+    .creation-step--done::before { content: '✓ '; color: #107c10; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid currentColor;
+      border-top-color: transparent; border-radius: 50%;
+      animation: spin 0.7s linear infinite; flex-shrink: 0; vertical-align: middle; }
   `
   document.head.appendChild(style)
 }

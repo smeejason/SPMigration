@@ -45,22 +45,6 @@ function render(container: HTMLElement, editingId: string | null = null): void {
             </div>
 
             <div class="form-group">
-              <label>Template <span class="required">*</span></label>
-              <div class="st-radio-group">
-                <label class="radio-label">
-                  <input type="radio" name="st-template" value="team"
-                    ${(!editing || editing.template === 'team') ? 'checked' : ''} />
-                  Team site (M365 Group)
-                </label>
-                <label class="radio-label">
-                  <input type="radio" name="st-template" value="communication"
-                    ${editing?.template === 'communication' ? 'checked' : ''} />
-                  Communication site
-                </label>
-              </div>
-            </div>
-
-            <div class="form-group" id="st-team-row" style="${editing?.template === 'communication' ? 'display:none' : ''}">
               <label class="checkbox-label">
                 <input type="checkbox" id="st-create-team"
                   ${editing?.createTeam ? 'checked' : ''} />
@@ -145,28 +129,11 @@ function render(container: HTMLElement, editingId: string | null = null): void {
   attachPeopleSearch(container, '#st-members-search', '#st-members-dropdown', members, () =>
     renderChips(container, '#st-members-chips', members))
 
-  // ── Template radio → show/hide Teams checkbox ─────────────────────────────
-  container.querySelectorAll<HTMLInputElement>('input[name="st-template"]').forEach(radio => {
-    radio.addEventListener('change', () => {
-      const teamRow = container.querySelector<HTMLElement>('#st-team-row')!
-      teamRow.style.display = radio.value === 'communication' ? 'none' : ''
-      if (radio.value === 'communication') {
-        ;(container.querySelector('#st-create-team') as HTMLInputElement).checked = false
-      }
-      // Clear site design when switching template (different designs per type)
-      const designSelect = container.querySelector<HTMLSelectElement>('#st-design-select')!
-      designSelect.innerHTML = '<option value="">— None —</option>'
-      ;(container.querySelector('#st-design-hint') as HTMLElement).textContent =
-        'Click Load to fetch your organisation\'s published site designs.'
-    })
-  })
-
   // ── Load org site designs ─────────────────────────────────────────────────
   container.querySelector('#btn-load-designs')?.addEventListener('click', async () => {
     const btn = container.querySelector('#btn-load-designs') as HTMLButtonElement
     const hintEl = container.querySelector('#st-design-hint') as HTMLElement
     const select = container.querySelector<HTMLSelectElement>('#st-design-select')!
-    const currentTemplate = (container.querySelector<HTMLInputElement>('input[name="st-template"]:checked'))?.value ?? 'team'
 
     btn.disabled = true
     btn.textContent = 'Loading…'
@@ -174,9 +141,8 @@ function render(container: HTMLElement, editingId: string | null = null): void {
 
     try {
       const designs = await getSiteDesigns()
-      // WebTemplate 64 = Team, 68 = Communication
-      const templateCode = currentTemplate === 'team' ? '64' : '68'
-      const filtered = designs.filter(d => !d.webTemplate || d.webTemplate === templateCode)
+      // WebTemplate 64 = Team site
+      const filtered = designs.filter(d => !d.webTemplate || d.webTemplate === '64')
 
       const currentVal = select.value
       select.innerHTML = '<option value="">— None —</option>'
@@ -228,11 +194,11 @@ function render(container: HTMLElement, editingId: string | null = null): void {
     const saveBtn = container.querySelector('#btn-st-save') as HTMLButtonElement
 
     const name = (container.querySelector('#st-name') as HTMLInputElement).value.trim()
-    const template = (container.querySelector<HTMLInputElement>('input[name="st-template"]:checked'))?.value as 'team' | 'communication'
+    const template: 'team' = 'team'
     const desc = (container.querySelector('#st-desc') as HTMLTextAreaElement).value.trim()
     const library = (container.querySelector('#st-library') as HTMLInputElement).value.trim()
     const subfolder = (container.querySelector('#st-subfolder') as HTMLInputElement).value.trim()
-    const createTeam = template === 'team' && (container.querySelector('#st-create-team') as HTMLInputElement).checked
+    const createTeam = (container.querySelector('#st-create-team') as HTMLInputElement).checked
     const designSelect = container.querySelector<HTMLSelectElement>('#st-design-select')!
     const siteDesignId = designSelect.value || undefined
     const siteDesignName = siteDesignId

@@ -1,5 +1,5 @@
 import { getState, setState } from '../../state/store'
-import { checkUserDriveAccess, grantUserDriveAccess, getUserDrive, saveMappingsFile } from '../../graph/graphClient'
+import { checkUserDriveAccess, grantUserDriveAccess, getUserDrive, saveMappingsFile, provisionNewSite, getSiteDrives } from '../../graph/graphClient'
 import { getSpConfig } from '../../graph/projectService'
 import type { MigrationMapping, OneDriveAccessStatus } from '../../types'
 
@@ -473,8 +473,8 @@ function renderSharePointSummary(container: HTMLElement, mappings: MigrationMapp
   const totalSize  = ready.reduce((s, m) => s + m.sourceNode.sizeBytes, 0)
   const totalFiles = ready.reduce((s, m) => s + m.sourceNode.fileCount, 0)
   const uniqueSites = new Set(ready.map(m => m.targetSite?.id).filter(Boolean)).size
+  const hasPending = unmapped.length > 0
 
-  // Build filter pills for statuses that are actually present
   const spFilterPills = [
     ready.length   > 0 ? `<button class="filter-pill" data-filter="ready">✅ Ready (${ready.length})</button>`   : '',
     unmapped.length > 0 ? `<button class="filter-pill" data-filter="pending">⏳ Pending (${unmapped.length})</button>` : '',
@@ -502,7 +502,7 @@ function renderSharePointSummary(container: HTMLElement, mappings: MigrationMapp
         </div>
       </div>
 
-      ${unmapped.length > 0
+      ${hasPending
         ? `<div class="summary-warning">⚠ ${unmapped.length} mapping${unmapped.length !== 1 ? 's' : ''} not yet assigned to a SharePoint target.</div>`
         : ''}
 
@@ -518,11 +518,41 @@ function renderSharePointSummary(container: HTMLElement, mappings: MigrationMapp
         ${spFilterPills}
       </div>
 
+      <!-- ── Pending bulk-create toolbar (shown only when pending filter active) ── -->
+      <div id="sp-pending-toolbar" class="sp-pending-toolbar" style="display:none">
+        <div class="pending-toolbar-left">
+          <label class="checkbox-label pending-check-all-label">
+            <input type="checkbox" id="sp-check-all" />
+            Select all
+          </label>
+          <span id="sp-selected-count" class="pending-selected-count">0 selected</span>
+        </div>
+        <button id="btn-create-selected-sites" class="btn btn-primary" disabled>
+          Create Selected Sites
+        </button>
+      </div>
+
+      <!-- ── Bulk creation progress ── -->
+      <div id="sp-bulk-creation-log" class="site-creation-log" style="display:none">
+        <div class="creation-log-header">
+          <span class="spinner"></span>
+          <span id="sp-bulk-log-current">Creating sites…</span>
+        </div>
+        <div class="bulk-progress-bar-wrap">
+          <div id="sp-bulk-progress-bar" class="bulk-progress-bar" style="width:0%"></div>
+        </div>
+        <ul id="sp-bulk-log-steps" class="creation-log-steps"></ul>
+      </div>
+
       <div class="summary-table-wrap">
-        <table class="summary-table">
+        <table class="summary-table" id="sp-summary-table">
           <thead>
             <tr>
+              <th id="th-checkbox" style="display:none; width:32px;">
+                <input type="checkbox" id="sp-th-check-all" title="Select all pending" />
+              </th>
               <th>Source Path</th>
+              <th>Planned Site</th>
               <th>Size</th>
               <th>Files</th>
               <th>Target Site</th>
@@ -533,7 +563,7 @@ function renderSharePointSummary(container: HTMLElement, mappings: MigrationMapp
           </thead>
           <tbody>
             ${mappings.length === 0
-              ? `<tr><td colspan="7" class="table-empty">No mappings defined yet.</td></tr>`
+              ? `<tr><td colspan="9" class="table-empty">No mappings defined yet.</td></tr>`
               : mappings.map(spRowHtml).join('')}
           </tbody>
         </table>
@@ -542,21 +572,140 @@ function renderSharePointSummary(container: HTMLElement, mappings: MigrationMapp
 
   injectSummaryStyles()
 
-  // Track active filter for export
   let activeSpFilter = 'all'
 
-  // Wire SP filter pills
+  // ── Filter pills ────────────────────────────────────────────────────────────
   const spFilterBar = container.querySelector('#sp-filter-bar')!
+  const pendingToolbar = container.querySelector('#sp-pending-toolbar') as HTMLElement
+  const thCheckbox = container.querySelector('#th-checkbox') as HTMLElement
+
+  const applyFilter = (filter: string): void => {
+    activeSpFilter = filter
+    container.querySelectorAll<HTMLTableRowElement>('tr[data-filter-status]').forEach(row => {
+      const match = filter === 'all' || row.dataset.filterStatus === filter
+      row.style.display = match ? '' : 'none'
+    })
+    const isPending = filter === 'pending'
+    pendingToolbar.style.display = isPending ? '' : 'none'
+    thCheckbox.style.display = isPending ? '' : 'none'
+    container.querySelectorAll<HTMLElement>('.sp-check-cell').forEach(td => {
+      td.style.display = isPending ? '' : 'none'
+    })
+    updateSelectedCount()
+  }
+
   spFilterBar.querySelectorAll<HTMLElement>('.filter-pill').forEach(btn => {
     btn.addEventListener('click', () => {
       spFilterBar.querySelectorAll('.filter-pill').forEach(b => b.classList.remove('filter-pill--active'))
       btn.classList.add('filter-pill--active')
-      activeSpFilter = btn.dataset.filter!
-      container.querySelectorAll<HTMLTableRowElement>('tr[data-filter-status]').forEach(row => {
-        const match = activeSpFilter === 'all' || row.dataset.filterStatus === activeSpFilter
-        row.style.display = match ? '' : 'none'
-      })
+      applyFilter(btn.dataset.filter!)
     })
+  })
+
+  // ── Checkbox logic ──────────────────────────────────────────────────────────
+  const createBtn = container.querySelector('#btn-create-selected-sites') as HTMLButtonElement
+
+  const updateSelectedCount = (): void => {
+    const checked = container.querySelectorAll<HTMLInputElement>('input.sp-row-check:checked').length
+    ;(container.querySelector('#sp-selected-count') as HTMLElement).textContent = `${checked} selected`
+    createBtn.disabled = checked === 0
+  }
+
+  // Header check-all (toolbar)
+  const checkAllInput = container.querySelector('#sp-check-all') as HTMLInputElement
+  const thCheckAllInput = container.querySelector('#sp-th-check-all') as HTMLInputElement
+
+  const setAllChecked = (checked: boolean): void => {
+    container.querySelectorAll<HTMLInputElement>('input.sp-row-check').forEach(cb => {
+      const row = cb.closest('tr') as HTMLTableRowElement
+      if (row.style.display !== 'none') cb.checked = checked
+    })
+    checkAllInput.checked = checked
+    thCheckAllInput.checked = checked
+    updateSelectedCount()
+  }
+
+  checkAllInput.addEventListener('change', () => setAllChecked(checkAllInput.checked))
+  thCheckAllInput.addEventListener('change', () => setAllChecked(thCheckAllInput.checked))
+
+  container.querySelectorAll<HTMLInputElement>('input.sp-row-check').forEach(cb => {
+    cb.addEventListener('change', updateSelectedCount)
+  })
+
+  // ── Create Selected Sites ────────────────────────────────────────────────────
+  createBtn.addEventListener('click', async () => {
+    const selectedPaths = Array.from(container.querySelectorAll<HTMLInputElement>('input.sp-row-check:checked'))
+      .map(cb => cb.dataset.path!)
+    if (selectedPaths.length === 0) return
+
+    const selectedMappings = getState().mappings.filter(m =>
+      selectedPaths.includes(m.sourceNode.path) && m.plannedSite
+    )
+    if (selectedMappings.length === 0) return
+
+    const logEl = container.querySelector('#sp-bulk-creation-log') as HTMLElement
+    const logCurrent = container.querySelector('#sp-bulk-log-current') as HTMLElement
+    const logSteps = container.querySelector('#sp-bulk-log-steps') as HTMLElement
+    const progressBar = container.querySelector('#sp-bulk-progress-bar') as HTMLElement
+    logEl.style.display = ''
+    logSteps.innerHTML = ''
+    createBtn.disabled = true
+    checkAllInput.disabled = true
+
+    const total = selectedMappings.length
+    let completed = 0
+
+    const addStep = (text: string): void => {
+      const li = document.createElement('li')
+      li.className = 'creation-step'
+      li.textContent = text
+      logSteps.appendChild(li)
+      logSteps.scrollTop = logSteps.scrollHeight
+    }
+
+    for (const mapping of selectedMappings) {
+      const ps = mapping.plannedSite!
+      logCurrent.textContent = `Creating "${ps.displayName}" (${completed + 1}/${total})…`
+      addStep(`Starting: ${ps.displayName}`)
+
+      try {
+        const createdSite = await provisionNewSite(ps, (step) => addStep(`  ${step}`))
+
+        let createdDrive = null
+        try {
+          const drives = await getSiteDrives(createdSite.id)
+          createdDrive = drives.find(d => d.driveType === 'documentLibrary') ?? drives[0] ?? null
+        } catch { /* non-fatal */ }
+
+        const readyMapping: MigrationMapping = {
+          ...mapping,
+          targetSite: createdSite,
+          targetDrive: createdDrive,
+          targetFolderPath: ps.folderPath ?? '',
+          status: 'ready',
+          plannedSite: undefined,
+        }
+        const currentMappings = getState().mappings
+        const updatedMappings = [
+          ...currentMappings.filter(m => m.sourceNode.path !== mapping.sourceNode.path),
+          readyMapping,
+        ]
+        setState({ mappings: updatedMappings })
+        await persistSpMappings(updatedMappings).catch(() => {})
+
+        completed++
+        progressBar.style.width = `${Math.round((completed / total) * 100)}%`
+        addStep(`✓ Done: ${createdSite.displayName}`)
+      } catch (err) {
+        addStep(`⚠ Failed "${ps.displayName}": ${err instanceof Error ? err.message : String(err)}`)
+        completed++
+        progressBar.style.width = `${Math.round((completed / total) * 100)}%`
+      }
+    }
+
+    logCurrent.textContent = `✅ Completed ${completed}/${total} site(s). Reload the page to refresh the table.`
+    createBtn.disabled = false
+    checkAllInput.disabled = false
   })
 
   container.querySelector('#btn-export-csv')?.addEventListener('click',  () => {
@@ -572,9 +721,16 @@ function renderSharePointSummary(container: HTMLElement, mappings: MigrationMapp
 function spRowHtml(m: MigrationMapping): string {
   const statusClass = m.status === 'ready' ? 'status-ready' : m.status === 'error' ? 'status-error' : 'status-pending'
   const statusLabel = m.status === 'ready' ? '✅ Ready' : m.status === 'error' ? '⚠ Error' : '⏳ Pending'
+  const plannedName = m.plannedSite?.displayName ?? '—'
   return `
-    <tr data-filter-status="${m.status}">
+    <tr data-filter-status="${m.status}" data-mapping-path="${escHtml(m.sourceNode.path)}">
+      <td class="sp-check-cell" style="display:none">
+        ${m.status === 'pending' && m.plannedSite
+          ? `<input type="checkbox" class="sp-row-check" data-path="${escHtml(m.sourceNode.path)}" />`
+          : ''}
+      </td>
       <td class="path-cell" title="${escHtml(m.sourceNode.originalPath)}">${escHtml(m.sourceNode.originalPath)}</td>
+      <td class="path-cell">${m.status === 'pending' ? escHtml(plannedName) : '—'}</td>
       <td>${formatBytes(m.sourceNode.sizeBytes)}</td>
       <td>${m.sourceNode.fileCount.toLocaleString()}</td>
       <td>${m.targetSite  ? escHtml(m.targetSite.displayName)  : '—'}</td>
@@ -582,6 +738,13 @@ function spRowHtml(m: MigrationMapping): string {
       <td class="path-cell">${m.targetFolderPath ? escHtml(m.targetFolderPath) : '/'}</td>
       <td><span class="badge ${statusClass}">${statusLabel}</span></td>
     </tr>`
+}
+
+async function persistSpMappings(mappings: MigrationMapping[]): Promise<void> {
+  const project = getState().currentProject
+  if (!project) return
+  const { siteId } = getSpConfig()
+  await saveMappingsFile(siteId, project.title, project.id, mappings)
 }
 
 function exportSpCsv(mappings: MigrationMapping[]): void {
@@ -742,6 +905,34 @@ function injectSummaryStyles(): void {
 
     /* ── SharePoint export row ── */
     .summary-export-row { display: flex; gap: 10px; margin-bottom: 16px; }
+
+    /* ── Pending toolbar ── */
+    .sp-pending-toolbar { display: flex; align-items: center; justify-content: space-between;
+      padding: 8px 12px; background: var(--color-surface-alt); border: 1px solid var(--color-border);
+      border-radius: 6px; margin-bottom: 10px; gap: 12px; }
+    .pending-toolbar-left { display: flex; align-items: center; gap: 12px; }
+    .pending-check-all-label { display: flex; align-items: center; gap: 6px;
+      font-size: 0.85rem; cursor: pointer; user-select: none; }
+    .pending-selected-count { font-size: 0.82rem; color: var(--color-text-muted); }
+
+    /* ── Bulk creation log ── */
+    .site-creation-log { margin-bottom: 12px; background: var(--color-surface-alt);
+      border: 1px solid var(--color-border); border-radius: 6px; padding: 12px 14px; }
+    .creation-log-header { display: flex; align-items: center; gap: 8px;
+      font-size: 0.85rem; font-weight: 600; margin-bottom: 8px; }
+    .creation-log-steps { list-style: none; margin: 0; padding: 0; display: flex;
+      flex-direction: column; gap: 3px; max-height: 200px; overflow-y: auto; }
+    .creation-step { font-size: 0.8rem; color: var(--color-text-muted); padding-left: 4px; }
+    .creation-step::before { content: '→ '; color: var(--color-primary); }
+    .bulk-progress-bar-wrap { background: var(--color-border); border-radius: 4px;
+      height: 6px; margin: 8px 0; overflow: hidden; }
+    .bulk-progress-bar { height: 100%; background: var(--color-primary);
+      border-radius: 4px; transition: width 0.3s ease; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid currentColor;
+      border-top-color: transparent; border-radius: 50%;
+      animation: spin 0.7s linear infinite; flex-shrink: 0; vertical-align: middle; }
+    .sp-check-cell { text-align: center; }
   `
   document.head.appendChild(style)
 }

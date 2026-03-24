@@ -2,6 +2,7 @@ import { Client } from '@microsoft/microsoft-graph-client'
 import { getToken } from '../auth/authService'
 import type {
   AppUser,
+  NewSiteConfig,
   SharePointSite,
   SharePointDrive,
   SiteRequest,
@@ -444,6 +445,111 @@ export async function waitForGroupSite(groupId: string, maxWaitMs = 120_000): Pr
     }
   }
   throw new Error('Timed out waiting for site to provision')
+}
+
+/**
+ * Add users as owners of an M365 group. Silently ignores already-member errors.
+ */
+export async function addGroupOwners(groupId: string, userIds: string[]): Promise<void> {
+  for (const userId of userIds) {
+    try {
+      await client().api(`/groups/${groupId}/owners/$ref`).post({
+        '@odata.id': `https://graph.microsoft.com/v1.0/directoryObjects/${userId}`,
+      })
+    } catch { /* already owner or non-fatal */ }
+  }
+}
+
+/**
+ * Add users as members of an M365 group. Silently ignores already-member errors.
+ */
+export async function addGroupMembers(groupId: string, userIds: string[]): Promise<void> {
+  for (const userId of userIds) {
+    try {
+      await client().api(`/groups/${groupId}/members/$ref`).post({
+        '@odata.id': `https://graph.microsoft.com/v1.0/directoryObjects/${userId}`,
+      })
+    } catch { /* already member or non-fatal */ }
+  }
+}
+
+/**
+ * Apply a SharePoint site design to a newly created site via the SP REST API.
+ */
+export async function applySiteDesign(siteUrl: string, siteDesignId: string): Promise<void> {
+  const { root: rootHost } = await getSharePointHosts()
+  const spToken = await getToken([`https://${rootHost}/AllSites.FullControl`])
+  const resp = await fetch(
+    `https://${rootHost}/_api/Microsoft.SharePoint.Utilities.WebTemplateExtensions.SiteScriptUtility.ApplySiteDesign`,
+    {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${spToken}`,
+        Accept: 'application/json;odata=nometadata',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ siteDesignId, webUrl: siteUrl }),
+    }
+  )
+  if (!resp.ok) throw new Error(`applySiteDesign: ${resp.status} ${resp.statusText}`)
+}
+
+/**
+ * Provision a Microsoft Teams team from an existing M365 group.
+ */
+export async function createTeamsTeamFromGroup(groupId: string): Promise<void> {
+  try {
+    await client().api(`/groups/${groupId}/team`).put({
+      memberSettings: { allowCreateUpdateChannels: true },
+      messagingSettings: { allowUserEditMessages: true, allowUserDeleteMessages: true },
+      funSettings: { allowGiphy: true, giphyContentRating: 'strict' },
+    })
+  } catch { /* team may already exist or creation is async */ }
+}
+
+/**
+ * Full site provisioning flow from a NewSiteConfig.
+ * Calls onProgress with a status string at each step.
+ * Returns the created SharePointSite.
+ */
+export async function provisionNewSite(
+  config: NewSiteConfig,
+  onProgress: (step: string) => void
+): Promise<SharePointSite> {
+  onProgress('Creating M365 group…')
+  const groupId = await createTeamSite({
+    id: `${Date.now()}`,
+    displayName: config.displayName,
+    alias: config.alias,
+    description: config.description ?? '',
+    template: 'team',
+    status: 'pending',
+  })
+
+  onProgress('Waiting for SharePoint site to provision…')
+  const site = await waitForGroupSite(groupId)
+
+  if (config.owners.length > 0) {
+    onProgress(`Adding ${config.owners.length} owner(s)…`)
+    await addGroupOwners(groupId, config.owners.map(o => o.id))
+  }
+
+  if (config.members.length > 0) {
+    onProgress(`Adding ${config.members.length} member(s)…`)
+    await addGroupMembers(groupId, config.members.map(m => m.id))
+  }
+
+  if (config.siteDesignId) {
+    onProgress('Applying site design…')
+    await applySiteDesign(site.webUrl, config.siteDesignId)
+  }
+
+  if (config.createTeam) {
+    onProgress('Provisioning Microsoft Teams team…')
+    await createTeamsTeamFromGroup(groupId)
+  }
+
+  return site
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
