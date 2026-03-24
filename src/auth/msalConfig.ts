@@ -47,5 +47,8 @@ export const loginRequest: PopupRequest = {
     'Sites.ReadWrite.All',
     'Sites.Manage.All',
     'Files.ReadWrite.All',
+    'Group.ReadWrite.All',
+    'Directory.ReadWrite.All',
+    'Team.Create',
   ],
 }
