@@ -42,8 +42,10 @@ export function renderMappingPanel(container: HTMLElement): void {
   const stats = buildMappingStats(statNodes)
 
   const statMappedPaths = new Set(state.mappings.filter(m => m.targetSite || m.plannedSite).map(m => m.sourceNode.path))
-  const usersReady = statNodes.filter(n => statMappedPaths.has(n.path)).length
-  const usersNotMapped = statNodes.length - usersReady
+  const statCantFindPaths = new Set(state.mappings.filter(m => m.matchStatus === 'cant-find').map(m => m.sourceNode.path))
+  const usersReady     = statNodes.filter(n => statMappedPaths.has(n.path)).length
+  const usersCantFind  = statNodes.filter(n => statCantFindPaths.has(n.path)).length
+  const usersNotMapped = statNodes.length - usersReady - usersCantFind
 
   // Detect double-mapped: same target used by 2+ stat-level nodes
   {
@@ -76,6 +78,7 @@ export function renderMappingPanel(container: HTMLElement): void {
         <div class="mstat-label">USERS TO MIGRATE</div>
         <div class="mstat-value mstat-blue" id="mstat-users-ready-val">${usersReady} ready to Migrate</div>
         <div class="mstat-sub mstat-not-mapped" id="mstat-users-unmapped-val">${usersNotMapped} not Mapped</div>
+        <div class="mstat-sub mstat-cant-find-count" id="mstat-users-cantfind-val" ${usersCantFind === 0 ? 'style="display:none"' : ''}>🚫 ${usersCantFind} excluded (Can't Find)</div>
         <div class="mstat-sub mstat-double-mapped-warn" id="mstat-double-mapped-warn" ${doubleMappedUserCount === 0 ? 'style="display:none"' : ''}>⚠ ${doubleMappedUserCount} user${doubleMappedUserCount !== 1 ? 's' : ''} double mapped</div>
       </div>
       <div class="mstat-card">
@@ -1960,13 +1963,20 @@ function refreshUsersStats(container: HTMLElement, statNodes: TreeNode[]): void 
   const currentMappings = getState().mappings
 
   // User counts
-  const mappedPaths = new Set(currentMappings.filter(m => m.targetSite || m.plannedSite).map(m => m.sourceNode.path))
-  const ready = statNodes.filter(n => mappedPaths.has(n.path)).length
-  const notMapped = statNodes.length - ready
-  const readyEl = container.querySelector('#mstat-users-ready-val')
-  const unmappedEl = container.querySelector('#mstat-users-unmapped-val')
+  const mappedPaths   = new Set(currentMappings.filter(m => m.targetSite || m.plannedSite).map(m => m.sourceNode.path))
+  const cantFindPaths = new Set(currentMappings.filter(m => m.matchStatus === 'cant-find').map(m => m.sourceNode.path))
+  const ready    = statNodes.filter(n => mappedPaths.has(n.path)).length
+  const cantFind = statNodes.filter(n => cantFindPaths.has(n.path)).length
+  const notMapped = statNodes.length - ready - cantFind
+  const readyEl      = container.querySelector('#mstat-users-ready-val')
+  const unmappedEl   = container.querySelector('#mstat-users-unmapped-val')
+  const cantFindEl   = container.querySelector<HTMLElement>('#mstat-users-cantfind-val')
   if (readyEl) readyEl.textContent = `${ready} ready to Migrate`
   if (unmappedEl) unmappedEl.textContent = `${notMapped} not Mapped`
+  if (cantFindEl) {
+    cantFindEl.textContent = `🚫 ${cantFind} excluded (Can't Find)`
+    cantFindEl.style.display = cantFind === 0 ? 'none' : ''
+  }
 
   // Double-mapped detection
   const targetToNodePaths = new Map<string, string[]>()
@@ -2149,6 +2159,7 @@ function injectMappingStyles(): void {
     .mstat-value { font-size: 1.1rem; font-weight: 700; line-height: 1.15; }
     .mstat-sub { font-size: 0.65rem; color: var(--color-text-muted); margin-top: 1px; }
     .mstat-not-mapped { color: #b35c00; font-weight: 600; }
+    .mstat-cant-find-count { color: #a4262c; font-weight: 600; }
     .mstat-blue { color: var(--color-primary); }
     .mstat-green { color: #107c10; }
     .mstat-orange { color: #d83b01; }
