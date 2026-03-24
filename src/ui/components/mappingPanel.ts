@@ -616,13 +616,6 @@ async function openTargetPanel(
             <button type="button" id="btn-create-site" class="btn btn-primary">Save and Create Site</button>
             ${existing?.plannedSite ? `<button type="button" id="btn-remove-planned" class="btn btn-ghost">Remove</button>` : ''}
           </div>
-          <div id="site-creation-log" style="display:none" class="site-creation-log">
-            <div class="creation-log-header">
-              <span class="spinner"></span>
-              <span id="creation-log-current"></span>
-            </div>
-            <ul id="creation-log-steps" class="creation-log-steps"></ul>
-          </div>
         </div>
 
       </div>
@@ -865,7 +858,7 @@ async function openTargetPanel(
     const plannedSite = collectPlannedSiteConfig()
     if (!plannedSite) return
 
-    // First persist the planned config so state is consistent
+    // Persist the planned config first so values survive any re-render
     const pendingMapping: MigrationMapping = {
       id: node.path, sourceNode: node, targetSite: null, targetDrive: null,
       targetFolderPath: plannedSite.folderPath ?? '', status: 'pending', plannedSite,
@@ -878,26 +871,47 @@ async function openTargetPanel(
     onMappingChange(plannedSite.displayName, true)
     await persistMappings(mappingsWithPending).catch(() => {})
 
-    // Show progress log, disable buttons
-    const logEl = targetEl.querySelector('#site-creation-log') as HTMLElement
-    const logCurrent = targetEl.querySelector('#creation-log-current') as HTMLElement
-    const logSteps = targetEl.querySelector('#creation-log-steps') as HTMLElement
-    const createBtn = targetEl.querySelector('#btn-create-site') as HTMLButtonElement
-    const saveBtn = targetEl.querySelector('#btn-save-planned') as HTMLButtonElement
-    logEl.style.display = ''
-    logSteps.innerHTML = ''
-    createBtn.disabled = true
-    saveBtn.disabled = true
+    // Replace the New Site tab content with a full-panel overlay
+    const tabPlanned = targetEl.querySelector('#tab-planned') as HTMLElement
+    tabPlanned.innerHTML = `
+      <div class="ns-creation-overlay">
+        <div class="ns-creation-spinner-wrap">
+          <span class="spinner ns-creation-spinner"></span>
+        </div>
+        <div id="ns-overlay-title" class="ns-creation-title">Creating site…</div>
+        <div id="ns-overlay-status" class="ns-creation-status">Preparing…</div>
+        <div class="ns-creation-progress-wrap">
+          <div id="ns-overlay-bar" class="ns-creation-progress-bar" style="width:0%"></div>
+        </div>
+        <ul id="ns-overlay-steps" class="ns-creation-steps"></ul>
+      </div>
+    `
 
-    const addStep = (text: string, done = false): void => {
+    const overlayTitle  = tabPlanned.querySelector('#ns-overlay-title')  as HTMLElement
+    const overlayStatus = tabPlanned.querySelector('#ns-overlay-status') as HTMLElement
+    const overlayBar    = tabPlanned.querySelector('#ns-overlay-bar')    as HTMLElement
+    const overlaySteps  = tabPlanned.querySelector('#ns-overlay-steps')  as HTMLElement
+
+    const totalSteps = 2
+      + (plannedSite.owners.length  > 0 ? 1 : 0)
+      + (plannedSite.members.length > 0 ? 1 : 0)
+      + (plannedSite.siteDesignId   ? 1 : 0)
+      + (plannedSite.createTeam     ? 1 : 0)
+      + 2 // fetch library + save
+    let stepsDone = 0
+
+    const addStep = (text: string): void => {
+      stepsDone++
+      overlayBar.style.width = `${Math.round((stepsDone / totalSteps) * 100)}%`
       const li = document.createElement('li')
-      li.className = `creation-step${done ? ' creation-step--done' : ''}`
+      li.className = 'ns-creation-step'
       li.textContent = text
-      logSteps.appendChild(li)
+      overlaySteps.appendChild(li)
+      overlaySteps.scrollTop = overlaySteps.scrollHeight
     }
 
     const onProgress = (step: string): void => {
-      logCurrent.textContent = step
+      overlayStatus.textContent = step
       addStep(step)
     }
 
@@ -905,13 +919,20 @@ async function openTargetPanel(
     try {
       createdSite = await provisionNewSite(plannedSite, onProgress)
     } catch (err) {
-      logCurrent.textContent = `⚠ Failed: ${err instanceof Error ? err.message : String(err)}`
-      createBtn.disabled = false
-      saveBtn.disabled = false
+      overlayTitle.textContent = '⚠ Site creation failed'
+      overlayStatus.textContent = err instanceof Error ? err.message : String(err)
+      overlayBar.style.background = '#a4262c'
+      // Add dismiss button so user can get back to the form (with saved values)
+      const dismissBtn = document.createElement('button')
+      dismissBtn.type = 'button'
+      dismissBtn.className = 'btn btn-secondary'
+      dismissBtn.style.marginTop = '16px'
+      dismissBtn.textContent = 'Dismiss'
+      dismissBtn.addEventListener('click', () => openTargetPanel(targetEl, node, onMappingChange))
+      tabPlanned.querySelector('.ns-creation-overlay')!.appendChild(dismissBtn)
       return
     }
 
-    // Get the default document library for the new site
     onProgress('Fetching site library…')
     let createdDrive: import('../../types').SharePointDrive | null = null
     try {
@@ -939,9 +960,13 @@ async function openTargetPanel(
       await persistMappings(finalMappings)
     } catch { /* non-fatal */ }
 
-    logCurrent.textContent = `✅ Site created: ${createdSite.displayName}`
-    createBtn.disabled = false
-    saveBtn.disabled = false
+    overlayBar.style.width = '100%'
+    overlayTitle.textContent = `✅ ${createdSite.displayName}`
+    overlayStatus.textContent = 'Site created and mapped. Reloading panel…'
+
+    // Brief pause so the user sees the success state, then reload the panel
+    await new Promise(r => setTimeout(r, 1200))
+    openTargetPanel(targetEl, node, onMappingChange)
   })
 
   targetEl.querySelector('#btn-remove-planned')?.addEventListener('click', async () => {
@@ -2104,16 +2129,24 @@ function injectMappingStyles(): void {
     }
     .mapping-row--cant-find .tree-col-mapped--cant-find { color: #a4262c; font-weight: 600; font-size: 0.78rem; }
 
-    /* Site creation log */
-    .site-creation-log { margin-top: 12px; background: var(--color-surface-alt);
-      border: 1px solid var(--color-border); border-radius: 6px; padding: 12px 14px; }
-    .creation-log-header { display: flex; align-items: center; gap: 8px;
-      font-size: 0.85rem; font-weight: 600; margin-bottom: 8px; }
-    .creation-log-steps { list-style: none; margin: 0; padding: 0; display: flex;
-      flex-direction: column; gap: 3px; }
-    .creation-step { font-size: 0.8rem; color: var(--color-text-muted); padding-left: 4px; }
-    .creation-step::before { content: '→ '; color: var(--color-primary); }
-    .creation-step--done::before { content: '✓ '; color: #107c10; }
+    /* New-site creation overlay */
+    .ns-creation-overlay { display: flex; flex-direction: column; align-items: center;
+      justify-content: flex-start; padding: 32px 24px 24px; gap: 12px;
+      min-height: 280px; text-align: center; }
+    .ns-creation-spinner-wrap { margin-bottom: 4px; }
+    .ns-creation-spinner { width: 36px; height: 36px; border-width: 3px;
+      color: var(--color-primary); }
+    .ns-creation-title { font-size: 1rem; font-weight: 600; color: var(--color-text); }
+    .ns-creation-status { font-size: 0.85rem; color: var(--color-text-muted); min-height: 1.2em; }
+    .ns-creation-progress-wrap { width: 100%; max-width: 320px; height: 6px;
+      background: var(--color-border); border-radius: 4px; overflow: hidden; }
+    .ns-creation-progress-bar { height: 100%; background: var(--color-primary);
+      border-radius: 4px; transition: width 0.3s ease; }
+    .ns-creation-steps { list-style: none; margin: 0; padding: 0; width: 100%; max-width: 360px;
+      max-height: 160px; overflow-y: auto; display: flex; flex-direction: column; gap: 3px;
+      text-align: left; }
+    .ns-creation-step { font-size: 0.78rem; color: var(--color-text-muted); padding-left: 2px; }
+    .ns-creation-step::before { content: '✓ '; color: #107c10; }
     @keyframes spin { to { transform: rotate(360deg); } }
     .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid currentColor;
       border-top-color: transparent; border-radius: 50%;
