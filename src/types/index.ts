@@ -176,6 +176,7 @@ export interface OrgSiteDesign {
   title: string
   description?: string
   webTemplate: '64' | '68' | string  // 64 = Team, 68 = Communication
+  isOutOfBox: boolean
 }
 
 /**
@@ -210,6 +211,7 @@ export interface NewSiteConfig {
   libraryName?: string
   folderPath?: string
   siteDesignId?: string
+  siteDesignName?: string
   createTeam?: boolean
   owners: UserRef[]
   members: UserRef[]

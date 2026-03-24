@@ -1,4 +1,4 @@
-import { searchSites, getSiteDrives, saveMappingsFile, searchUsers, getUserDrive, checkUserDriveAccess, grantUserDriveAccess, getUserById, provisionNewSite } from '../../graph/graphClient'
+import { searchSites, getSiteDrives, saveMappingsFile, searchUsers, getUserDrive, checkUserDriveAccess, grantUserDriveAccess, getUserById, provisionNewSite, getSiteDesigns } from '../../graph/graphClient'
 import { updateProject, getSpConfig } from '../../graph/projectService'
 import { setState, getState } from '../../state/store'
 import type { TreeNode, MigrationMapping, SharePointSite, SharePointDrive, NewSiteConfig, UserRef, SiteType, AppUser } from '../../types'
@@ -596,6 +596,19 @@ async function openTargetPanel(
               value="${escHtml(existing?.plannedSite?.folderPath ?? '')}" />
           </div>
           <div class="form-group">
+            <label>Site Design <span class="hint">(optional)</span></label>
+            <div class="ns-type-row">
+              <select id="ns-design-select" class="form-input">
+                <option value="">— None —</option>
+                ${existing?.plannedSite?.siteDesignId
+                  ? `<option value="${escHtml(existing.plannedSite.siteDesignId)}" selected>${escHtml(existing.plannedSite.siteDesignName ?? existing.plannedSite.siteDesignId)}</option>`
+                  : ''}
+              </select>
+              <button type="button" id="btn-ns-load-designs" class="btn btn-secondary btn-sm">Load</button>
+            </div>
+            <small class="form-hint" id="ns-design-hint">Click Load to fetch your organisation's site designs.</small>
+          </div>
+          <div class="form-group">
             <label>Owners</label>
             <div class="ns-people-chips" id="ns-owners-chips"></div>
             <div class="ns-people-search-wrap">
@@ -791,11 +804,73 @@ async function openTargetPanel(
     const createTeamCb = targetEl.querySelector<HTMLInputElement>('#ns-create-team')
     if (createTeamCb) createTeamCb.checked = !!st.createTeam
 
+    // Pre-fill site design from site type — add/select the option in the dropdown
+    const designSelect = targetEl.querySelector<HTMLSelectElement>('#ns-design-select')
+    if (designSelect && st.siteDesignId) {
+      let opt = designSelect.querySelector<HTMLOptionElement>(`option[value="${CSS.escape(st.siteDesignId)}"]`)
+      if (!opt) {
+        opt = document.createElement('option')
+        opt.value = st.siteDesignId
+        opt.textContent = st.siteDesignName ?? st.siteDesignId
+        designSelect.insertBefore(opt, designSelect.options[1] ?? null)
+      }
+      designSelect.value = st.siteDesignId
+    } else if (designSelect && !st.siteDesignId) {
+      designSelect.value = ''
+    }
+
     // Replace owners / members from type (full replace)
     nsOwners.splice(0, nsOwners.length, ...st.owners)
     nsMembers.splice(0, nsMembers.length, ...st.members)
     renderNsChips(targetEl, '#ns-owners-chips', nsOwners)
     renderNsChips(targetEl, '#ns-members-chips', nsMembers)
+  })
+
+  // ── Load site designs for New Site form ───────────────────────────────────────
+  targetEl.querySelector('#btn-ns-load-designs')?.addEventListener('click', async () => {
+    const btn     = targetEl.querySelector('#btn-ns-load-designs') as HTMLButtonElement
+    const hint    = targetEl.querySelector('#ns-design-hint')      as HTMLElement
+    const select  = targetEl.querySelector('#ns-design-select')    as HTMLSelectElement
+    btn.disabled  = true
+    btn.textContent = 'Loading…'
+    hint.textContent = 'Fetching site designs…'
+    try {
+      const designs = await getSiteDesigns()
+      const filtered = designs.filter(d => !d.webTemplate || d.webTemplate === '64')
+      const custom   = filtered.filter(d => !d.isOutOfBox)
+      const oob      = filtered.filter(d =>  d.isOutOfBox)
+      const currentVal = select.value
+      select.innerHTML = '<option value="">— None —</option>'
+      const appendOpt = (d: typeof filtered[0], group: HTMLElement): void => {
+        const opt = document.createElement('option')
+        opt.value = d.id
+        opt.textContent = d.title
+        if (d.description) opt.title = d.description
+        if (d.id === currentVal) opt.selected = true
+        group.appendChild(opt)
+      }
+      if (custom.length > 0) {
+        const grp = document.createElement('optgroup')
+        grp.label = 'Custom designs'
+        custom.forEach(d => appendOpt(d, grp))
+        select.appendChild(grp)
+      }
+      if (oob.length > 0) {
+        const grp = document.createElement('optgroup')
+        grp.label = 'Microsoft built-in designs'
+        oob.forEach(d => appendOpt(d, grp))
+        select.appendChild(grp)
+      }
+      const total = filtered.length
+      hint.textContent = total === 0
+        ? 'No site designs found.'
+        : `${custom.length} custom + ${oob.length} built-in design${total !== 1 ? 's' : ''} loaded.`
+    } catch (err) {
+      hint.textContent = `Failed to load: ${(err as Error).message}`
+    } finally {
+      btn.disabled = false
+      btn.textContent = 'Load'
+    }
   })
 
   // ── Inline field error helpers ────────────────────────────────────────────────
@@ -861,6 +936,9 @@ async function openTargetPanel(
     const typeSelect     = targetEl.querySelector<HTMLSelectElement>('#ns-type-select')
     const siteTypeId     = typeSelect?.value || undefined
     const siteTypeName   = siteTypeId ? typeSelect?.options[typeSelect.selectedIndex]?.text : undefined
+    const designSelect   = targetEl.querySelector<HTMLSelectElement>('#ns-design-select')
+    const siteDesignId   = designSelect?.value || undefined
+    const siteDesignName = siteDesignId ? designSelect?.options[designSelect.selectedIndex]?.text : undefined
 
     return {
       siteTypeId,
@@ -871,6 +949,8 @@ async function openTargetPanel(
       template: 'team',
       libraryName: plannedLibrary || undefined,
       folderPath: plannedFolder || undefined,
+      siteDesignId,
+      siteDesignName,
       createTeam: createTeam || undefined,
       owners: [...nsOwners],
       members: [...nsMembers],
@@ -1022,11 +1102,18 @@ async function openTargetPanel(
 
     overlayBar.style.width = '100%'
     overlayTitle.textContent = `✅ ${createdSite.displayName}`
-    overlayStatus.textContent = 'Site created and mapped. Reloading panel…'
+    overlayStatus.textContent = 'All steps completed successfully. The site is ready.'
 
-    // Brief pause so the user sees the success state, then reload the panel
-    await new Promise(r => setTimeout(r, 1200))
-    openTargetPanel(targetEl, node, onMappingChange)
+    // Hide spinner, show reload button
+    const spinnerWrap = tabPlanned.querySelector('.ns-creation-spinner-wrap') as HTMLElement
+    spinnerWrap.style.display = 'none'
+    const reloadBtn = document.createElement('button')
+    reloadBtn.type = 'button'
+    reloadBtn.className = 'btn btn-primary'
+    reloadBtn.style.marginTop = '16px'
+    reloadBtn.textContent = 'Reload Panel'
+    reloadBtn.addEventListener('click', () => openTargetPanel(targetEl, node, onMappingChange))
+    tabPlanned.querySelector('.ns-creation-overlay')!.appendChild(reloadBtn)
   })
 
   targetEl.querySelector('#btn-remove-planned')?.addEventListener('click', async () => {

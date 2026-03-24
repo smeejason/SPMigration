@@ -89,8 +89,8 @@ export async function getSiteDesigns(): Promise<OrgSiteDesign[]> {
   if (!resp.ok) throw new Error(`getSiteDesigns: ${resp.status} ${resp.statusText}`)
   const json = await resp.json() as { value: Array<{ Id: string; Title: string; Description?: string; WebTemplate: string; IsOutOfBoxTemplate: boolean }> }
   return (json.value ?? [])
-    .filter(d => !d.IsOutOfBoxTemplate)
-    .map(d => ({ id: d.Id, title: d.Title, description: d.Description, webTemplate: d.WebTemplate }))
+    .map(d => ({ id: d.Id, title: d.Title, description: d.Description, webTemplate: d.WebTemplate, isOutOfBox: d.IsOutOfBoxTemplate }))
+    .sort((a, b) => Number(a.isOutOfBox) - Number(b.isOutOfBox) || a.title.localeCompare(b.title))
 }
 
 // ─── Drives (document libraries) ─────────────────────────────────────────────

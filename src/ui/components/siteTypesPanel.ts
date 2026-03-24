@@ -141,23 +141,41 @@ function render(container: HTMLElement, editingId: string | null = null): void {
 
     try {
       const designs = await getSiteDesigns()
-      // WebTemplate 64 = Team site
+      // Show all team-site designs (WebTemplate 64) — both custom and OOB
       const filtered = designs.filter(d => !d.webTemplate || d.webTemplate === '64')
+      const custom = filtered.filter(d => !d.isOutOfBox)
+      const oob    = filtered.filter(d =>  d.isOutOfBox)
 
       const currentVal = select.value
       select.innerHTML = '<option value="">— None —</option>'
-      filtered.forEach(d => {
+
+      const appendOpt = (d: (typeof designs)[0], group: HTMLElement): void => {
         const opt = document.createElement('option')
         opt.value = d.id
         opt.textContent = d.title
         if (d.description) opt.title = d.description
         if (d.id === currentVal) opt.selected = true
-        select.appendChild(opt)
-      })
+        group.appendChild(opt)
+      }
 
-      hintEl.textContent = filtered.length === 0
-        ? 'No custom site designs found for this template type.'
-        : `${filtered.length} design${filtered.length !== 1 ? 's' : ''} loaded.`
+      if (custom.length > 0) {
+        const grp = document.createElement('optgroup')
+        grp.label = 'Custom designs'
+        custom.forEach(d => appendOpt(d, grp))
+        select.appendChild(grp)
+      }
+
+      if (oob.length > 0) {
+        const grp = document.createElement('optgroup')
+        grp.label = 'Microsoft built-in designs'
+        oob.forEach(d => appendOpt(d, grp))
+        select.appendChild(grp)
+      }
+
+      const total = filtered.length
+      hintEl.textContent = total === 0
+        ? 'No site designs found for team sites.'
+        : `${custom.length} custom + ${oob.length} built-in design${total !== 1 ? 's' : ''} loaded.`
     } catch (err) {
       hintEl.textContent = `Failed to load designs: ${(err as Error).message}`
     } finally {
