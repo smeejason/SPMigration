@@ -476,13 +476,12 @@ export async function addGroupMembers(groupId: string, userIds: string[]): Promi
 /**
  * Apply a SharePoint site design to a newly created site via the SP REST API.
  */
-export async function applySiteDesign(siteUrl: string, siteDesignId: string, maxAttempts = 5): Promise<void> {
+export async function applySiteDesign(siteUrl: string, siteDesignId: string): Promise<void> {
   const { root: rootHost } = await getSharePointHosts()
-  const endpoint = `https://${rootHost}/_api/Microsoft.SharePoint.Utilities.WebTemplateExtensions.SiteScriptUtility.ApplySiteDesign`
-
-  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    const spToken = await getToken([`https://${rootHost}/AllSites.FullControl`])
-    const resp = await fetch(endpoint, {
+  const spToken = await getToken([`https://${rootHost}/AllSites.FullControl`])
+  const resp = await fetch(
+    `https://${rootHost}/_api/Microsoft.SharePoint.Utilities.WebTemplateExtensions.SiteScriptUtility.ApplySiteDesign`,
+    {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${spToken}`,
@@ -490,18 +489,10 @@ export async function applySiteDesign(siteUrl: string, siteDesignId: string, max
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({ siteDesignId, webUrl: siteUrl }),
-    })
-
-    if (resp.ok) return
-
-    // On 400/503, the site may not be fully provisioned yet — retry with backoff
-    const bodyText = await resp.text().catch(() => '')
-    if ((resp.status === 400 || resp.status === 503) && attempt < maxAttempts) {
-      console.warn(`applySiteDesign attempt ${attempt}/${maxAttempts} failed (${resp.status}): ${bodyText} — retrying in ${attempt * 10}s`)
-      await delay(attempt * 10_000)
-      continue
     }
-
+  )
+  if (!resp.ok) {
+    const bodyText = await resp.text().catch(() => '')
     throw new Error(`applySiteDesign: ${resp.status} ${resp.statusText} — ${bodyText}`)
   }
 }
@@ -552,8 +543,13 @@ export async function provisionNewSite(
   }
 
   if (config.siteDesignId) {
-    onProgress('Applying site design…')
-    await applySiteDesign(site.webUrl, config.siteDesignId)
+    onProgress('Applying site design (background)…')
+    // Fire-and-forget — design application runs asynchronously so it cannot
+    // block or fail the overall site creation. SP may return errors like
+    // "too many stages" for complex designs; log them but do not surface.
+    applySiteDesign(site.webUrl, config.siteDesignId).catch(err =>
+      console.warn('Site design application failed (non-blocking):', err)
+    )
   }
 
   if (config.createTeam) {
