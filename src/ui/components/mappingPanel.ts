@@ -1,4 +1,4 @@
-import { searchSites, getSiteDrives, saveMappingsFile, searchUsers, getUserDrive, checkUserDriveAccess, grantUserDriveAccess, getUserById, provisionNewSite, getSiteDesigns } from '../../graph/graphClient'
+import { searchSites, getSiteDrives, saveMappingsFile, searchUsers, getUserDrive, checkUserDriveAccess, grantUserDriveAccess, getUserById, provisionNewSite, getSiteDesigns, checkSiteAliasAvailable } from '../../graph/graphClient'
 import { updateProject, getSpConfig } from '../../graph/projectService'
 import { setState, getState } from '../../state/store'
 import type { TreeNode, MigrationMapping, SharePointSite, SharePointDrive, NewSiteConfig, UserRef, SiteType, AppUser } from '../../types'
@@ -572,8 +572,9 @@ async function openTargetPanel(
               <span class="alias-prefix">.../sites/</span>
               <input id="planned-alias" type="text" class="form-input" placeholder="engineering"
                 value="${escHtml(existing?.plannedSite?.alias ?? node.name.toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-').slice(0, 60))}" />
+              <span id="ns-alias-avail" class="ns-alias-avail"></span>
             </div>
-            <small class="form-hint">Letters, numbers, and hyphens only.</small>
+            <small class="form-hint">Letters, numbers, and hyphens only. Press Enter or leave to check availability.</small>
           </div>
           <div class="form-group">
             <label>Description <span class="required">*</span></label>
@@ -766,6 +767,40 @@ async function openTargetPanel(
   // ── New Site tab logic ────────────────────────────────────────────────────
   const plannedNameInput = targetEl.querySelector('#planned-name') as HTMLInputElement
   const plannedAliasInput = targetEl.querySelector('#planned-alias') as HTMLInputElement
+  const aliasAvailEl = targetEl.querySelector('#ns-alias-avail') as HTMLElement
+
+  // null = unchecked/dirty; true = available; false = taken
+  // Pre-set to true when re-opening a previously saved alias so user isn't forced to re-check
+  let aliasAvailState: boolean | null = existing?.plannedSite?.alias ? true : null
+
+  function setAliasAvail(state: 'checking' | 'available' | 'taken' | 'error' | null): void {
+    aliasAvailEl.className = 'ns-alias-avail' + (state ? ` ns-alias-avail--${state}` : '')
+    aliasAvailEl.textContent =
+      state === 'checking'  ? 'Checking…'  :
+      state === 'available' ? '✓ Available' :
+      state === 'taken'     ? '✗ Taken'     :
+      state === 'error'     ? '? Check failed' : ''
+  }
+
+  async function runAliasCheck(): Promise<void> {
+    const alias = plannedAliasInput.value.trim()
+    if (!alias || !/^[a-z0-9][a-z0-9-]*[a-z0-9]$|^[a-z0-9]$/.test(alias)) return
+    setAliasAvail('checking')
+    setFieldError(plannedAliasInput, null)
+    try {
+      const available = await checkSiteAliasAvailable(alias)
+      aliasAvailState = available
+      if (available) {
+        setAliasAvail('available')
+      } else {
+        setAliasAvail('taken')
+        setFieldError(plannedAliasInput, 'This URL is already in use. Please choose a different alias.')
+      }
+    } catch {
+      aliasAvailState = null
+      setAliasAvail('error')
+    }
+  }
 
   // People state — initialised from existing mapping if present
   const nsOwners: UserRef[] = existing?.plannedSite?.owners ? [...existing.plannedSite.owners] : []
@@ -780,10 +815,19 @@ async function openTargetPanel(
     if (plannedAliasInput.dataset.userEdited) return
     plannedAliasInput.value = plannedNameInput.value
       .toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-').slice(0, 60)
+    // Auto-derived alias is dirty until checked
+    aliasAvailState = null
+    setAliasAvail(null)
   })
   plannedAliasInput?.addEventListener('input', () => {
     plannedAliasInput.dataset.userEdited = '1'
     setFieldError(plannedAliasInput, null)
+    aliasAvailState = null
+    setAliasAvail(null)
+  })
+  plannedAliasInput?.addEventListener('blur', () => { runAliasCheck() })
+  plannedAliasInput?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); runAliasCheck() }
   })
   ;(targetEl.querySelector('#planned-desc') as HTMLTextAreaElement)
     ?.addEventListener('input', () => {
@@ -917,6 +961,12 @@ async function openTargetPanel(
       valid = false
     } else if (!/^[a-z0-9][a-z0-9-]*[a-z0-9]$|^[a-z0-9]$/.test(plannedAlias)) {
       setFieldError(plannedAliasInput, 'Only lowercase letters, numbers, and hyphens. Cannot start or end with a hyphen.')
+      valid = false
+    } else if (aliasAvailState === false) {
+      setFieldError(plannedAliasInput, 'This URL is already in use. Please choose a different alias.')
+      valid = false
+    } else if (aliasAvailState === null) {
+      setFieldError(plannedAliasInput, 'Please check URL availability first (press Enter or leave the field).')
       valid = false
     }
 
@@ -2225,6 +2275,11 @@ function injectMappingStyles(): void {
     .form-input--error { border-color: #a4262c !important; background: #fff8f8; }
     .ns-field-error { display: block; font-size: 0.78rem; color: #a4262c;
       margin-top: 3px; }
+    .ns-alias-avail { font-size: 0.78rem; padding: 0 8px; white-space: nowrap; }
+    .ns-alias-avail--checking  { color: var(--color-text-muted); }
+    .ns-alias-avail--available { color: #107c10; font-weight: 500; }
+    .ns-alias-avail--taken     { color: #a4262c; font-weight: 500; }
+    .ns-alias-avail--error     { color: var(--color-text-muted); }
 
     /* Ancestor-blocked panel */
     .ancestor-blocked-panel {

@@ -93,6 +93,28 @@ export async function getSiteDesigns(): Promise<OrgSiteDesign[]> {
     .sort((a, b) => Number(a.isOutOfBox) - Number(b.isOutOfBox) || a.title.localeCompare(b.title))
 }
 
+/**
+ * Returns true if no SharePoint site exists at .../sites/{alias} (i.e. the URL is free).
+ * Uses SP.Site.Exists REST endpoint — read-only, no write permissions needed.
+ */
+export async function checkSiteAliasAvailable(alias: string): Promise<boolean> {
+  const { root: rootHost } = await getSharePointHosts()
+  const spToken = await getToken([`https://${rootHost}/AllSites.FullControl`])
+  const siteUrl = `https://${rootHost}/sites/${alias}`
+  const resp = await fetch(
+    `https://${rootHost}/_api/SP.Site.Exists(url=@u)?@u='${encodeURIComponent(siteUrl)}'`,
+    {
+      headers: {
+        Authorization: `Bearer ${spToken}`,
+        Accept: 'application/json;odata=nometadata',
+      },
+    }
+  )
+  if (!resp.ok) throw new Error(`checkSiteAliasAvailable: ${resp.status}`)
+  const json = await resp.json() as { value: boolean }
+  return !json.value  // SP returns true when site EXISTS; we return true when AVAILABLE
+}
+
 // ─── Drives (document libraries) ─────────────────────────────────────────────
 
 export async function getSiteDrives(siteId: string): Promise<SharePointDrive[]> {
