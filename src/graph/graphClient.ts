@@ -476,11 +476,18 @@ export async function addGroupMembers(groupId: string, userIds: string[]): Promi
 /**
  * Apply a SharePoint site design to a newly created site via the SP REST API.
  */
+/**
+ * Queue a site design for application via SharePoint's async timer job.
+ * Uses AddSiteDesignTaskToCurrentWeb (called on the target site) instead of
+ * ApplySiteDesign (root-site, synchronous, fails on designs with >15 stages).
+ */
 export async function applySiteDesign(siteUrl: string, siteDesignId: string): Promise<void> {
   const { root: rootHost } = await getSharePointHosts()
+  // Token scoped to the root host covers all sites in the tenant
   const spToken = await getToken([`https://${rootHost}/AllSites.FullControl`])
+  // Endpoint lives on the TARGET site, not the root
   const resp = await fetch(
-    `https://${rootHost}/_api/Microsoft.SharePoint.Utilities.WebTemplateExtensions.SiteScriptUtility.ApplySiteDesign`,
+    `${siteUrl}/_api/Microsoft.SharePoint.Utilities.WebTemplateExtensions.SiteScriptUtility.AddSiteDesignTaskToCurrentWeb`,
     {
       method: 'POST',
       headers: {
@@ -488,12 +495,12 @@ export async function applySiteDesign(siteUrl: string, siteDesignId: string): Pr
         Accept: 'application/json;odata=nometadata',
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ siteDesignId, webUrl: siteUrl }),
+      body: JSON.stringify({ siteDesignId }),
     }
   )
   if (!resp.ok) {
     const bodyText = await resp.text().catch(() => '')
-    throw new Error(`applySiteDesign: ${resp.status} ${resp.statusText} — ${bodyText}`)
+    throw new Error(`applySiteDesign (queue task): ${resp.status} ${resp.statusText} — ${bodyText}`)
   }
 }
 
