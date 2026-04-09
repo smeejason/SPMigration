@@ -1,5 +1,5 @@
-import { searchSites } from '../../graph/graphClient'
-import { updateProject } from '../../graph/projectService'
+import { searchSites, saveIAFile } from '../../graph/graphClient'
+import { updateProject, loadProjectIA, getSpConfig } from '../../graph/projectService'
 import { getState, setState } from '../../state/store'
 import type { IANode, MigrationMapping, SharePointSite } from '../../types'
 
@@ -14,17 +14,20 @@ let _panelSelectedSite: SharePointSite | null = null
 
 // ─── Entry point ─────────────────────────────────────────────────────────────
 
-export function renderIADesignerPanel(container: HTMLElement): void {
+export async function renderIADesignerPanel(container: HTMLElement): Promise<void> {
   injectStyles()
   _container = container
-  _nodes = loadNodes()
+  container.innerHTML = `<div class="ia-panel"><div style="padding:1rem;color:var(--color-text-muted)">Loading IA design…</div></div>`
+  _nodes = await loadNodes()
   render()
 }
 
 // ─── Data helpers ─────────────────────────────────────────────────────────────
 
-function loadNodes(): IANode[] {
-  return [...(getState().currentProject?.projectData?.iaDesign ?? [])]
+async function loadNodes(): Promise<IANode[]> {
+  const project = getState().currentProject
+  if (!project) return []
+  return loadProjectIA(project)
 }
 
 function getChildren(parentId: string | null): IANode[] {
@@ -74,12 +77,12 @@ async function save(): Promise<void> {
     const state = getState()
     const project = state.currentProject
     if (!project) return
-    const updated = {
-      ...project,
-      projectData: { ...project.projectData, iaDesign: [..._nodes] },
-    }
-    await updateProject(updated)
-    setState({ currentProject: updated })
+    const { siteId } = getSpConfig()
+    await saveIAFile(siteId, project.title, project.id, [..._nodes])
+    // Strip iaDesign from the column — it now lives in the .ia.json file
+    const updatedProjectData = { ...project.projectData, iaDesign: undefined }
+    await updateProject(project.id, { projectData: updatedProjectData })
+    setState({ currentProject: { ...project, projectData: updatedProjectData } })
     setStatus('Saved')
     setTimeout(() => setStatus(''), 2000)
   } catch (err) {

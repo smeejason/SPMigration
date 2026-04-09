@@ -175,7 +175,7 @@ export function mountApp(root: HTMLElement): void {
       else if (view === 'project-automap') renderAutoMapPanel(panel)
       else if (view === 'project-map') renderMappingPanel(panel)
       else if (view === 'project-sites') renderSiteTypesPanel(panel)
-      else if (view === 'project-ia') renderIADesignerPanel(panel)
+      else if (view === 'project-ia') void renderIADesignerPanel(panel)
       else if (view === 'project-summary') renderSummaryPanel(panel)
       else if (view === 'project-review') void renderReviewPanel(panel)
       setActiveTab(view)

@@ -1,7 +1,7 @@
 import { Client } from '@microsoft/microsoft-graph-client'
 import { getToken } from '../auth/authService'
-import { downloadDriveItem, loadMappingsFile, loadOneDriveMappingsFile } from './graphClient'
-import type { MigrationProject, ProjectData, ProjectStatus, ProjectType, GraphListItem, SharePointUser, TreeNode, MigrationMapping } from '../types'
+import { downloadDriveItem, loadMappingsFile, loadOneDriveMappingsFile, loadIAFile } from './graphClient'
+import type { MigrationProject, ProjectData, ProjectStatus, ProjectType, GraphListItem, SharePointUser, TreeNode, MigrationMapping, IANode } from '../types'
 
 // ─── Config ───────────────────────────────────────────────────────────────────
 
@@ -218,6 +218,18 @@ export async function loadProjectMappings(project: MigrationProject): Promise<Mi
   }
 
   return inlineMappings ?? []
+}
+
+export async function loadProjectIA(project: MigrationProject): Promise<IANode[]> {
+  const { siteId } = getSpConfig()
+  try {
+    const fileNodes = await loadIAFile(siteId, project.title, project.id)
+    if (fileNodes !== null) return fileNodes
+  } catch (err) {
+    console.warn('[ProjectService] Could not load IA file, falling back to inline:', err)
+  }
+  // Backwards compat: inline data for projects saved before file-based storage
+  return project.projectData.iaDesign ?? []
 }
 
 export async function loadProjectOneDriveMappings(project: MigrationProject): Promise<import('../types').OneDriveUserMapping[]> {

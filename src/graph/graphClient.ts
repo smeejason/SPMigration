@@ -13,6 +13,7 @@ import type {
   GraphPerson,
   MigrationMapping,
   OneDriveUserMapping,
+  IANode,
 } from '../types'
 
 // ─── Graph client factory ─────────────────────────────────────────────────────
@@ -855,4 +856,49 @@ export async function loadMappingsFile(
   if (!response.ok) throw new Error(`Mappings load failed (${response.status})`)
   const text = await response.text()
   return JSON.parse(text) as MigrationMapping[]
+}
+
+// ─── IA Design file helpers ───────────────────────────────────────────────────
+//
+// IA nodes are stored as {projectId}.ia.json in the project SP folder rather
+// than inline in the list item field, avoiding the ~63 KB column limit.
+
+export async function saveIAFile(
+  siteId: string,
+  projectTitle: string,
+  projectId: string,
+  nodes: IANode[]
+): Promise<void> {
+  const token = await getToken()
+  const folderName = getProjectFolderName(projectTitle, projectId)
+  const filePath = encodeURIComponent(`SPMigration/${folderName}/${projectId}.ia.json`)
+  const response = await fetch(
+    `https://graph.microsoft.com/v1.0/sites/${siteId}/drive/root:/${filePath}:/content`,
+    {
+      method: 'PUT',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(nodes),
+    }
+  )
+  if (!response.ok) {
+    const text = await response.text().catch(() => '')
+    throw new Error(`IA save failed (${response.status}): ${text}`)
+  }
+}
+
+export async function loadIAFile(
+  siteId: string,
+  projectTitle: string,
+  projectId: string
+): Promise<IANode[] | null> {
+  const token = await getToken()
+  const folderName = getProjectFolderName(projectTitle, projectId)
+  const filePath = encodeURIComponent(`SPMigration/${folderName}/${projectId}.ia.json`)
+  const response = await fetch(
+    `https://graph.microsoft.com/v1.0/sites/${siteId}/drive/root:/${filePath}:/content`,
+    { headers: { Authorization: `Bearer ${token}` } }
+  )
+  if (response.status === 404) return null
+  if (!response.ok) throw new Error(`IA load failed (${response.status})`)
+  return JSON.parse(await response.text()) as IANode[]
 }
