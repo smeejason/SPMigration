@@ -495,6 +495,10 @@ function buildIaParentSelectHtml(nodes: IANode[], currentIaNodeId: string | unde
         <option value="">— No IA link —</option>
         ${buildOptions(null, 0)}
       </select>
+      <label class="checkbox-label" style="margin-top:4px">
+        <input type="checkbox" id="${selectId}-as-parent" />
+        Use selected node as parent (creates a new child node)
+      </label>
       <small class="form-hint">Links this site to a node in the IA Designer.</small>
     </div>`
 }
@@ -535,6 +539,41 @@ async function persistIaLink(
     iaNode.mappedSiteUrl = undefined
   }
 
+  await saveIAFile(siteId, project.title, project.id, [..._iaNodes])
+}
+
+/**
+ * Creates a new IA node as a child of parentNodeId and assigns the given site
+ * info to it, then persists the IA file.
+ */
+async function persistIaLinkAsParent(
+  parentNodeId: string,
+  newNodeTitle: string,
+  siteInfo: { type: 'existing'; site: SharePointSite } | { type: 'planned'; mappingId: string; displayName: string }
+): Promise<void> {
+  if (!_iaNodes) return
+  const project = getState().currentProject
+  if (!project) return
+  const { siteId } = getSpConfig()
+
+  const siblingCount = _iaNodes.filter(n => n.parentId === parentNodeId).length
+  const newNode: IANode = {
+    id: crypto.randomUUID(),
+    title: newNodeTitle,
+    parentId: parentNodeId,
+    order: siblingCount,
+  }
+
+  if (siteInfo.type === 'existing') {
+    newNode.mappedSiteId = siteInfo.site.id
+    newNode.mappedSiteName = siteInfo.site.displayName
+    newNode.mappedSiteUrl = siteInfo.site.webUrl
+  } else {
+    newNode.plannedMappingId = siteInfo.mappingId
+    newNode.plannedSiteDisplayName = siteInfo.displayName
+  }
+
+  _iaNodes.push(newNode)
   await saveIAFile(siteId, project.title, project.id, [..._iaNodes])
 }
 
@@ -849,10 +888,15 @@ async function openTargetPanel(
     saveBtn.textContent = 'Saving…'
     try {
       await persistMappings(mappings)
-      // Save IA link if an IA parent was selected
+      // Save IA link if an IA node was selected
       const iaParentId = (targetEl.querySelector('#ia-parent-select-existing') as HTMLSelectElement | null)?.value
+      const iaAsParent = (targetEl.querySelector('#ia-parent-select-existing-as-parent') as HTMLInputElement | null)?.checked ?? false
       if (iaParentId && selectedSite) {
-        await persistIaLink(iaParentId, { type: 'existing', site: selectedSite }).catch(() => {})
+        if (iaAsParent) {
+          await persistIaLinkAsParent(iaParentId, node.name, { type: 'existing', site: selectedSite }).catch(() => {})
+        } else {
+          await persistIaLink(iaParentId, { type: 'existing', site: selectedSite }).catch(() => {})
+        }
       }
       saveBtn.textContent = '✓ Saved'
     } catch {
@@ -1150,10 +1194,15 @@ async function openTargetPanel(
     saveBtn.textContent = 'Saving…'
     try {
       await persistMappings(mappings)
-      // Save IA link if an IA parent was selected
+      // Save IA link if an IA node was selected
       const iaParentId = (targetEl.querySelector('#ia-parent-select-planned') as HTMLSelectElement | null)?.value
+      const iaAsParent = (targetEl.querySelector('#ia-parent-select-planned-as-parent') as HTMLInputElement | null)?.checked ?? false
       if (iaParentId) {
-        await persistIaLink(iaParentId, { type: 'planned', mappingId: node.path, displayName: plannedSite.displayName }).catch(() => {})
+        if (iaAsParent) {
+          await persistIaLinkAsParent(iaParentId, node.name, { type: 'planned', mappingId: node.path, displayName: plannedSite.displayName }).catch(() => {})
+        } else {
+          await persistIaLink(iaParentId, { type: 'planned', mappingId: node.path, displayName: plannedSite.displayName }).catch(() => {})
+        }
       }
       saveBtn.textContent = '✓ Saved'
     } catch {
@@ -1171,6 +1220,7 @@ async function openTargetPanel(
 
     // Capture IA parent BEFORE the overlay replaces the tab content
     const iaParentId = (targetEl.querySelector('#ia-parent-select-planned') as HTMLSelectElement | null)?.value
+    const iaAsParent = (targetEl.querySelector('#ia-parent-select-planned-as-parent') as HTMLInputElement | null)?.checked ?? false
 
     // Persist the planned config first so values survive any re-render
     const pendingMapping: MigrationMapping = {
@@ -1276,7 +1326,11 @@ async function openTargetPanel(
 
     // Save IA link now that we have the real site ID
     if (iaParentId && createdSite) {
-      await persistIaLink(iaParentId, { type: 'existing', site: createdSite }).catch(() => {})
+      if (iaAsParent) {
+        await persistIaLinkAsParent(iaParentId, node.name, { type: 'existing', site: createdSite }).catch(() => {})
+      } else {
+        await persistIaLink(iaParentId, { type: 'existing', site: createdSite }).catch(() => {})
+      }
     }
 
     overlayBar.style.width = '100%'
