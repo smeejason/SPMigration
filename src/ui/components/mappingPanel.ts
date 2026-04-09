@@ -1,7 +1,7 @@
-import { searchSites, getSiteDrives, saveMappingsFile, searchUsers, getUserDrive, checkUserDriveAccess, grantUserDriveAccess, getUserById, provisionNewSite, getSiteDesigns, checkSiteAliasAvailable } from '../../graph/graphClient'
-import { updateProject, getSpConfig } from '../../graph/projectService'
+import { searchSites, getSiteDrives, saveMappingsFile, saveIAFile, searchUsers, getUserDrive, checkUserDriveAccess, grantUserDriveAccess, getUserById, provisionNewSite, getSiteDesigns, checkSiteAliasAvailable } from '../../graph/graphClient'
+import { updateProject, getSpConfig, loadProjectIA } from '../../graph/projectService'
 import { setState, getState } from '../../state/store'
-import type { TreeNode, MigrationMapping, SharePointSite, SharePointDrive, NewSiteConfig, UserRef, SiteType, AppUser } from '../../types'
+import type { TreeNode, MigrationMapping, SharePointSite, SharePointDrive, NewSiteConfig, UserRef, SiteType, AppUser, IANode } from '../../types'
 
 // Live references to mapping tag elements so we can update them without re-rendering
 const tagRegistry = new Map<string, HTMLSpanElement>()
@@ -13,6 +13,9 @@ let _doubleMappedPaths = new Set<string>()
 let _statsRefreshCallback: (() => void) | null = null
 // Whether the current project is OneDrive (controls which columns / stats are shown)
 let _isOneDriveProject = false
+// Cached IA nodes for IA parent selector (SharePoint projects only)
+let _iaNodes: IANode[] | null = null
+let _iaNodesProjectId: string | null = null
 
 // ─── Entry point ──────────────────────────────────────────────────────────────
 
@@ -42,8 +45,10 @@ export function renderMappingPanel(container: HTMLElement): void {
   const stats = buildMappingStats(statNodes)
 
   const statMappedPaths = new Set(state.mappings.filter(m => m.targetSite || m.plannedSite).map(m => m.sourceNode.path))
-  const usersReady = statNodes.filter(n => statMappedPaths.has(n.path)).length
-  const usersNotMapped = statNodes.length - usersReady
+  const statCantFindPaths = new Set(state.mappings.filter(m => m.matchStatus === 'cant-find').map(m => m.sourceNode.path))
+  const usersReady     = statNodes.filter(n => statMappedPaths.has(n.path)).length
+  const usersCantFind  = statNodes.filter(n => statCantFindPaths.has(n.path)).length
+  const usersNotMapped = statNodes.length - usersReady - usersCantFind
 
   // Detect double-mapped: same target used by 2+ stat-level nodes
   {
@@ -76,6 +81,7 @@ export function renderMappingPanel(container: HTMLElement): void {
         <div class="mstat-label">USERS TO MIGRATE</div>
         <div class="mstat-value mstat-blue" id="mstat-users-ready-val">${usersReady} ready to Migrate</div>
         <div class="mstat-sub mstat-not-mapped" id="mstat-users-unmapped-val">${usersNotMapped} not Mapped</div>
+        <div class="mstat-sub mstat-cant-find-count" id="mstat-users-cantfind-val" ${usersCantFind === 0 ? 'style="display:none"' : ''}>🚫 ${usersCantFind} excluded (Can't Find)</div>
         <div class="mstat-sub mstat-double-mapped-warn" id="mstat-double-mapped-warn" ${doubleMappedUserCount === 0 ? 'style="display:none"' : ''}>⚠ ${doubleMappedUserCount} user${doubleMappedUserCount !== 1 ? 's' : ''} double mapped</div>
       </div>
       <div class="mstat-card">
@@ -110,9 +116,14 @@ export function renderMappingPanel(container: HTMLElement): void {
         </div>
         ${statsHtml}
         <div class="mapping-search-bar">
-          <div class="search-input-wrap">
-            <input type="text" id="tree-search" class="form-input mapping-search-input" placeholder="Search by name or path… (press Enter)" autocomplete="off" />
-            <button type="button" id="btn-clear-search" class="btn-clear-search" style="display:none" title="Clear search">✕</button>
+          <div class="search-bar-row">
+            <div class="search-input-wrap">
+              <input type="text" id="tree-search" class="form-input mapping-search-input" placeholder="Search by name or path… (press Enter)" autocomplete="off" />
+              <button type="button" id="btn-clear-search" class="btn-clear-search" style="display:none" title="Clear search">✕</button>
+            </div>
+            <select id="tree-level-select" class="form-input search-level-select" title="Filter by path depth level">
+              <option value="">All Levels</option>
+            </select>
           </div>
         </div>
         <div class="tree-col-header" id="tree-col-header">
@@ -169,6 +180,7 @@ export function renderMappingPanel(container: HTMLElement): void {
 
   // ── Search ────────────────────────────────────────────────────────────────
   const searchInput = container.querySelector('#tree-search') as HTMLInputElement
+  const levelSelect = container.querySelector('#tree-level-select') as HTMLSelectElement
   const treeDiv = container.querySelector('#mapping-tree') as HTMLElement
   const resultsDiv = container.querySelector('#mapping-search-results') as HTMLElement
 
@@ -180,11 +192,21 @@ export function renderMappingPanel(container: HTMLElement): void {
   }
   for (const n of topNodes) collectNodes(n)
 
+  // Populate level selector with unique depths present in the tree (Level N = depth N-1)
+  const uniqueDepths = [...new Set(allNodes.map(n => n.depth))].sort((a, b) => a - b)
+  for (const d of uniqueDepths) {
+    const opt = document.createElement('option')
+    opt.value = String(d)
+    opt.textContent = `Level ${d + 1}`
+    levelSelect.appendChild(opt)
+  }
+
   const clearSearchBtn = container.querySelector('#btn-clear-search') as HTMLButtonElement
   const treeColHeader = container.querySelector('#tree-col-header') as HTMLElement | null
 
   function clearSearch(): void {
     searchInput.value = ''
+    levelSelect.value = ''
     clearSearchBtn.style.display = 'none'
     treeDiv.style.display = ''
     resultsDiv.style.display = 'none'
@@ -194,11 +216,16 @@ export function renderMappingPanel(container: HTMLElement): void {
 
   function runSearch(): void {
     const term = searchInput.value.trim().toLowerCase()
-    if (!term) { clearSearch(); return }
+    const levelVal = levelSelect.value
+    const selectedDepth = levelVal !== '' ? parseInt(levelVal, 10) : null
 
-    const matches = allNodes.filter(
-      (n) => n.name.toLowerCase().includes(term)
-    )
+    if (!term && selectedDepth === null) { clearSearch(); return }
+
+    const matches = allNodes.filter((n) => {
+      const nameMatch = !term || n.name.toLowerCase().includes(term)
+      const levelMatch = selectedDepth === null || n.depth === selectedDepth
+      return nameMatch && levelMatch
+    })
 
     treeDiv.style.display = 'none'
     resultsDiv.style.display = ''
@@ -232,6 +259,8 @@ export function renderMappingPanel(container: HTMLElement): void {
     if (e.key === 'Enter') runSearch()
     if (e.key === 'Escape') clearSearch()
   })
+
+  levelSelect.addEventListener('change', () => runSearch())
 
   clearSearchBtn.addEventListener('click', clearSearch)
 }
@@ -443,6 +472,111 @@ function createMappingNodeEl(node: TreeNode, targetEl: HTMLElement, isRoot = fal
   return li
 }
 
+// ─── IA parent selector helpers ───────────────────────────────────────────────
+
+/** Returns HTML for the IA parent <select>, or empty string if no IA nodes. */
+function buildIaParentSelectHtml(nodes: IANode[], currentIaNodeId: string | undefined, selectId: string): string {
+  if (!nodes || nodes.length === 0) return ''
+
+  function buildOptions(parentId: string | null, depth: number): string {
+    const children = nodes.filter(n => n.parentId === parentId).sort((a, b) => a.order - b.order)
+    return children.map(n => {
+      const indent = '\u00a0\u00a0'.repeat(depth)
+      const selected = n.id === currentIaNodeId ? ' selected' : ''
+      return `<option value="${escHtml(n.id)}"${selected}>${escHtml(indent + n.title)}</option>` +
+        buildOptions(n.id, depth + 1)
+    }).join('')
+  }
+
+  return `
+    <div class="form-group ia-parent-group">
+      <label>Assign to IA Node <span class="hint">(optional)</span></label>
+      <select id="${selectId}" class="form-input">
+        <option value="">— No IA link —</option>
+        ${buildOptions(null, 0)}
+      </select>
+      <label class="checkbox-label" style="margin-top:4px">
+        <input type="checkbox" id="${selectId}-as-parent" />
+        Use selected node as parent (creates a new child node)
+      </label>
+      <small class="form-hint">Links this site to a node in the IA Designer.</small>
+    </div>`
+}
+
+/** Finds the IA node currently linked to an existing or planned mapping. */
+function findCurrentIaNodeId(iaNodes: IANode[], mapping: MigrationMapping | undefined): string | undefined {
+  if (!iaNodes || !mapping) return undefined
+  const linked = iaNodes.find(n =>
+    (mapping.targetSite && n.mappedSiteId === mapping.targetSite.id) ||
+    (n.plannedMappingId === mapping.id)
+  )
+  return linked?.id
+}
+
+/** Updates an IA node with the given site info and persists the IA file. */
+async function persistIaLink(
+  iaNodeId: string,
+  siteInfo: { type: 'existing'; site: SharePointSite } | { type: 'planned'; mappingId: string; displayName: string }
+): Promise<void> {
+  if (!_iaNodes) return
+  const iaNode = _iaNodes.find(n => n.id === iaNodeId)
+  if (!iaNode) return
+  const project = getState().currentProject
+  if (!project) return
+  const { siteId } = getSpConfig()
+
+  if (siteInfo.type === 'existing') {
+    iaNode.mappedSiteId = siteInfo.site.id
+    iaNode.mappedSiteName = siteInfo.site.displayName
+    iaNode.mappedSiteUrl = siteInfo.site.webUrl
+    iaNode.plannedMappingId = undefined
+    iaNode.plannedSiteDisplayName = undefined
+  } else {
+    iaNode.plannedMappingId = siteInfo.mappingId
+    iaNode.plannedSiteDisplayName = siteInfo.displayName
+    iaNode.mappedSiteId = undefined
+    iaNode.mappedSiteName = undefined
+    iaNode.mappedSiteUrl = undefined
+  }
+
+  await saveIAFile(siteId, project.title, project.id, [..._iaNodes])
+}
+
+/**
+ * Creates a new IA node as a child of parentNodeId and assigns the given site
+ * info to it, then persists the IA file.
+ */
+async function persistIaLinkAsParent(
+  parentNodeId: string,
+  newNodeTitle: string,
+  siteInfo: { type: 'existing'; site: SharePointSite } | { type: 'planned'; mappingId: string; displayName: string }
+): Promise<void> {
+  if (!_iaNodes) return
+  const project = getState().currentProject
+  if (!project) return
+  const { siteId } = getSpConfig()
+
+  const siblingCount = _iaNodes.filter(n => n.parentId === parentNodeId).length
+  const newNode: IANode = {
+    id: crypto.randomUUID(),
+    title: newNodeTitle,
+    parentId: parentNodeId,
+    order: siblingCount,
+  }
+
+  if (siteInfo.type === 'existing') {
+    newNode.mappedSiteId = siteInfo.site.id
+    newNode.mappedSiteName = siteInfo.site.displayName
+    newNode.mappedSiteUrl = siteInfo.site.webUrl
+  } else {
+    newNode.plannedMappingId = siteInfo.mappingId
+    newNode.plannedSiteDisplayName = siteInfo.displayName
+  }
+
+  _iaNodes.push(newNode)
+  await saveIAFile(siteId, project.title, project.id, [..._iaNodes])
+}
+
 // ─── Target panel (right side) ────────────────────────────────────────────────
 
 async function openTargetPanel(
@@ -453,6 +587,16 @@ async function openTargetPanel(
   if (getState().currentProject?.type === 'OneDrive') {
     await openOneDriveTargetPanel(targetEl, node, onMappingChange)
     return
+  }
+
+  // Load IA nodes once per project (for the IA parent selector)
+  const currentProjectId = getState().currentProject?.id ?? null
+  if (_iaNodesProjectId !== currentProjectId) {
+    _iaNodes = null
+    _iaNodesProjectId = currentProjectId
+  }
+  if (_iaNodes === null && getState().currentProject) {
+    try { _iaNodes = await loadProjectIA(getState().currentProject!) } catch { _iaNodes = [] }
   }
 
   const existing = getState().mappings.find((m) => m.sourceNode.path === node.path)
@@ -470,6 +614,10 @@ async function openTargetPanel(
   const fileStr = node.fileCount > 0 ? node.fileCount.toLocaleString() : '—'
   const folderStr = node.folderCount > 0 ? node.folderCount.toLocaleString() : '—'
   const childStr = node.children.length > 0 ? node.children.length.toLocaleString() : '—'
+
+  const currentIaNodeId = findCurrentIaNodeId(_iaNodes ?? [], existing)
+  const iaSelectExistingHtml = buildIaParentSelectHtml(_iaNodes ?? [], currentIaNodeId, 'ia-parent-select-existing')
+  const iaSelectPlannedHtml  = buildIaParentSelectHtml(_iaNodes ?? [], currentIaNodeId, 'ia-parent-select-planned')
 
   targetEl.innerHTML = `
     <div class="target-panel">
@@ -535,6 +683,7 @@ async function openTargetPanel(
             <input id="folder-path" type="text" class="form-input" placeholder="e.g. /Migrations/Phase1"
               value="${escHtml(existing?.targetFolderPath ?? '')}" />
           </div>
+          ${iaSelectExistingHtml}
           <div class="target-action-row">
             <button type="button" id="btn-save-mapping" class="btn btn-primary">Save Mapping</button>
             ${existing?.targetSite ? `<button type="button" id="btn-remove-mapping" class="btn btn-ghost">Remove</button>` : ''}
@@ -625,6 +774,7 @@ async function openTargetPanel(
               <ul id="ns-members-dropdown" class="ns-people-dropdown" style="display:none"></ul>
             </div>
           </div>
+          ${iaSelectPlannedHtml}
           <div class="target-action-row">
             <button type="button" id="btn-save-planned" class="btn btn-secondary">Save</button>
             <button type="button" id="btn-create-site" class="btn btn-primary">Save and Create Site</button>
@@ -738,6 +888,16 @@ async function openTargetPanel(
     saveBtn.textContent = 'Saving…'
     try {
       await persistMappings(mappings)
+      // Save IA link if an IA node was selected
+      const iaParentId = (targetEl.querySelector('#ia-parent-select-existing') as HTMLSelectElement | null)?.value
+      const iaAsParent = (targetEl.querySelector('#ia-parent-select-existing-as-parent') as HTMLInputElement | null)?.checked ?? false
+      if (iaParentId && selectedSite) {
+        if (iaAsParent) {
+          await persistIaLinkAsParent(iaParentId, node.name, { type: 'existing', site: selectedSite }).catch(() => {})
+        } else {
+          await persistIaLink(iaParentId, { type: 'existing', site: selectedSite }).catch(() => {})
+        }
+      }
       saveBtn.textContent = '✓ Saved'
     } catch {
       saveBtn.textContent = '⚠ Save failed — retry'
@@ -1034,6 +1194,16 @@ async function openTargetPanel(
     saveBtn.textContent = 'Saving…'
     try {
       await persistMappings(mappings)
+      // Save IA link if an IA node was selected
+      const iaParentId = (targetEl.querySelector('#ia-parent-select-planned') as HTMLSelectElement | null)?.value
+      const iaAsParent = (targetEl.querySelector('#ia-parent-select-planned-as-parent') as HTMLInputElement | null)?.checked ?? false
+      if (iaParentId) {
+        if (iaAsParent) {
+          await persistIaLinkAsParent(iaParentId, node.name, { type: 'planned', mappingId: node.path, displayName: plannedSite.displayName }).catch(() => {})
+        } else {
+          await persistIaLink(iaParentId, { type: 'planned', mappingId: node.path, displayName: plannedSite.displayName }).catch(() => {})
+        }
+      }
       saveBtn.textContent = '✓ Saved'
     } catch {
       saveBtn.textContent = '⚠ Save failed — retry'
@@ -1047,6 +1217,10 @@ async function openTargetPanel(
   targetEl.querySelector('#btn-create-site')?.addEventListener('click', async () => {
     const plannedSite = collectPlannedSiteConfig()
     if (!plannedSite) return
+
+    // Capture IA parent BEFORE the overlay replaces the tab content
+    const iaParentId = (targetEl.querySelector('#ia-parent-select-planned') as HTMLSelectElement | null)?.value
+    const iaAsParent = (targetEl.querySelector('#ia-parent-select-planned-as-parent') as HTMLInputElement | null)?.checked ?? false
 
     // Persist the planned config first so values survive any re-render
     const pendingMapping: MigrationMapping = {
@@ -1149,6 +1323,15 @@ async function openTargetPanel(
     try {
       await persistMappings(finalMappings)
     } catch { /* non-fatal */ }
+
+    // Save IA link now that we have the real site ID
+    if (iaParentId && createdSite) {
+      if (iaAsParent) {
+        await persistIaLinkAsParent(iaParentId, node.name, { type: 'existing', site: createdSite }).catch(() => {})
+      } else {
+        await persistIaLink(iaParentId, { type: 'existing', site: createdSite }).catch(() => {})
+      }
+    }
 
     overlayBar.style.width = '100%'
     overlayTitle.textContent = `✅ ${createdSite.displayName}`
@@ -1960,13 +2143,20 @@ function refreshUsersStats(container: HTMLElement, statNodes: TreeNode[]): void 
   const currentMappings = getState().mappings
 
   // User counts
-  const mappedPaths = new Set(currentMappings.filter(m => m.targetSite || m.plannedSite).map(m => m.sourceNode.path))
-  const ready = statNodes.filter(n => mappedPaths.has(n.path)).length
-  const notMapped = statNodes.length - ready
-  const readyEl = container.querySelector('#mstat-users-ready-val')
-  const unmappedEl = container.querySelector('#mstat-users-unmapped-val')
+  const mappedPaths   = new Set(currentMappings.filter(m => m.targetSite || m.plannedSite).map(m => m.sourceNode.path))
+  const cantFindPaths = new Set(currentMappings.filter(m => m.matchStatus === 'cant-find').map(m => m.sourceNode.path))
+  const ready    = statNodes.filter(n => mappedPaths.has(n.path)).length
+  const cantFind = statNodes.filter(n => cantFindPaths.has(n.path)).length
+  const notMapped = statNodes.length - ready - cantFind
+  const readyEl      = container.querySelector('#mstat-users-ready-val')
+  const unmappedEl   = container.querySelector('#mstat-users-unmapped-val')
+  const cantFindEl   = container.querySelector<HTMLElement>('#mstat-users-cantfind-val')
   if (readyEl) readyEl.textContent = `${ready} ready to Migrate`
   if (unmappedEl) unmappedEl.textContent = `${notMapped} not Mapped`
+  if (cantFindEl) {
+    cantFindEl.textContent = `🚫 ${cantFind} excluded (Can't Find)`
+    cantFindEl.style.display = cantFind === 0 ? 'none' : ''
+  }
 
   // Double-mapped detection
   const targetToNodePaths = new Map<string, string[]>()
@@ -2055,8 +2245,12 @@ function injectMappingStyles(): void {
   style.textContent = `
     .mapping-empty { padding: 48px; text-align: center; color: var(--color-text-muted); }
     .mapping-search-bar { padding: 8px 12px; border-bottom: 1px solid var(--color-border); background: white; }
-    .search-input-wrap { position: relative; display: flex; align-items: center; }
+    .search-bar-row { display: flex; gap: 8px; align-items: center; }
+    .search-input-wrap { position: relative; display: flex; align-items: center; flex: 1; min-width: 0; }
     .mapping-search-input { flex: 1; box-sizing: border-box; padding: 6px 32px 6px 10px; font-size: 0.85rem; }
+    .search-level-select { flex-shrink: 0; width: auto; min-width: 110px; font-size: 0.82rem; padding: 5px 8px; height: 32px; }
+    .ia-parent-group { margin-top: 4px; }
+    .ia-parent-group label { font-size: 0.8rem; }
     .btn-clear-search {
       position: absolute; right: 6px; background: none; border: none; cursor: pointer;
       color: var(--color-text-muted); font-size: 0.85rem; line-height: 1; padding: 2px 4px;
@@ -2149,6 +2343,7 @@ function injectMappingStyles(): void {
     .mstat-value { font-size: 1.1rem; font-weight: 700; line-height: 1.15; }
     .mstat-sub { font-size: 0.65rem; color: var(--color-text-muted); margin-top: 1px; }
     .mstat-not-mapped { color: #b35c00; font-weight: 600; }
+    .mstat-cant-find-count { color: #a4262c; font-weight: 600; }
     .mstat-blue { color: var(--color-primary); }
     .mstat-green { color: #107c10; }
     .mstat-orange { color: #d83b01; }
