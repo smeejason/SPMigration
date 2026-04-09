@@ -60,11 +60,27 @@ export interface ProjectData {
   // Migration review
   resultUploads?: ResultUpload[]       // SPMT result ZIPs, ordered oldest → newest
   sharePointFeedEnabled?: boolean      // whether the SP live feed is shown on the Review tab
+  iaDesign?: IANode[]                  // IA Designer hierarchy nodes (SharePoint projects only)
 }
 
 export interface ProjectSettings {
   defaultLibrary?: string
   exportFormat?: 'csv' | 'json'
+}
+
+// ─── IA Designer ─────────────────────────────────────────────────────────────
+
+export interface IANode {
+  id: string
+  title: string
+  parentId: string | null   // null = root node
+  order: number             // sort position among siblings (0-based)
+  // Site mapping — at most one of these is set:
+  mappedSiteId?: string           // ID of an existing SharePointSite
+  mappedSiteName?: string         // display name for the mapped site
+  mappedSiteUrl?: string          // web URL for tooltip/link
+  plannedMappingId?: string       // ID of a MigrationMapping with plannedSite defined
+  plannedSiteDisplayName?: string // display name from the planned site config
 }
 
 // ─── TreeSize ────────────────────────────────────────────────────────────────
@@ -248,7 +264,7 @@ export interface AppState {
   pendingSiteCreations: SiteRequest[]
   reviewData: ReviewData | null
   ui: {
-    activeView: 'login' | 'projects' | 'project-upload' | 'project-automap' | 'project-map' | 'project-sites' | 'project-summary' | 'project-review'
+    activeView: 'login' | 'projects' | 'project-upload' | 'project-automap' | 'project-map' | 'project-sites' | 'project-ia' | 'project-summary' | 'project-review'
     loading: boolean
     error: string | null
   }

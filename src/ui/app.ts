@@ -9,6 +9,7 @@ import { renderSiteTypesPanel } from './components/siteTypesPanel'
 import { renderSummaryPanel } from './components/summaryPanel'
 import { renderAutoMapPanel } from './components/autoMapPanel'
 import { renderReviewPanel } from './components/reviewPanel'
+import { renderIADesignerPanel } from './components/iaDesignerPanel'
 import type { AppState, MigrationProject } from '../types'
 
 // ─── Waffle SVG ───────────────────────────────────────────────────────────────
@@ -78,6 +79,7 @@ function projectWorkspaceHtml(projectTitle: string, projectType: string): string
     : `
       <button class="tab-btn" data-view="project-upload">Upload</button>
       <button class="tab-btn" data-view="project-sites">Site Types</button>
+      <button class="tab-btn" data-view="project-ia">IA Designer</button>
       <button class="tab-btn" data-view="project-map">Map</button>
       <button class="tab-btn" data-view="project-summary">Summary</button>
       <button class="tab-btn" data-view="project-review">Review</button>`
@@ -173,6 +175,7 @@ export function mountApp(root: HTMLElement): void {
       else if (view === 'project-automap') renderAutoMapPanel(panel)
       else if (view === 'project-map') renderMappingPanel(panel)
       else if (view === 'project-sites') renderSiteTypesPanel(panel)
+      else if (view === 'project-ia') renderIADesignerPanel(panel)
       else if (view === 'project-summary') renderSummaryPanel(panel)
       else if (view === 'project-review') void renderReviewPanel(panel)
       setActiveTab(view)
