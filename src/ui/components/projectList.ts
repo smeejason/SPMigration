@@ -1,6 +1,5 @@
 import { getProjects, deleteProject, loadProjectTree, loadProjectMappings } from '../../graph/projectService'
 import { setState, getState } from '../../state/store'
-import { getCurrentUser } from '../../auth/authService'
 import type { MigrationProject } from '../../types'
 
 export async function renderProjectList(container: HTMLElement): Promise<void> {
@@ -13,19 +12,7 @@ async function loadProjects(container: HTMLElement): Promise<void> {
   try {
     const allProjects = await getProjects()
     setState({ projects: allProjects })
-    const currentUser = getCurrentUser()
-    const userEmail = currentUser?.mail?.toLowerCase() ?? ''
-    const userName = currentUser?.displayName?.toLowerCase() ?? ''
-    const myProjects = (userEmail || userName)
-      ? allProjects.filter((p) =>
-          p.owners.length === 0 ||
-          p.owners.some((o) =>
-            (o.email && o.email.toLowerCase() === userEmail) ||
-            (o.displayName && o.displayName.toLowerCase() === userName)
-          )
-        )
-      : allProjects
-    renderProjectCards(container, myProjects)
+    renderProjectCards(container, allProjects)
   } catch (err) {
     const isConfigMissing = !import.meta.env.VITE_SP_SITE_ID
     container.innerHTML = `
