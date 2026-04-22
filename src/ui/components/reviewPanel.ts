@@ -369,8 +369,6 @@ function renderSourceRowHtml(m: MigrationMapping, reviewData: ReviewData): strin
 // ─── Wiring ───────────────────────────────────────────────────────────────────
 
 function wireDestList(container: HTMLElement, groups: DestGroup[], migrationAccount: string): void {
-  let selectedKey: string | null = null
-
   const list = container.querySelector<HTMLElement>('#review-dest-list')!
   const rightPanel = container.querySelector<HTMLElement>('#review-mapping-right')!
 
@@ -392,13 +390,10 @@ function wireDestList(container: HTMLElement, groups: DestGroup[], migrationAcco
         toggle.textContent = isOpen ? '▶' : '▼'
       }
 
-      if (selectedKey !== key) {
-        list.querySelectorAll('.review-dest-row').forEach(r => r.classList.remove('review-dest-row--selected'))
-        row.classList.add('review-dest-row--selected')
-        selectedKey = key
-        renderRightPanel(rightPanel, group, migrationAccount, (newStatus, mappingId) =>
-          handleAccessChanged(newStatus, mappingId, list, groups))
-      }
+      list.querySelectorAll('.review-dest-row').forEach(r => r.classList.remove('review-dest-row--selected'))
+      row.classList.add('review-dest-row--selected')
+      renderRightPanel(rightPanel, group, migrationAccount, (newStatus, mappingId) =>
+        handleAccessChanged(newStatus, mappingId, list, groups))
     })
   })
 

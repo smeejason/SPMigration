@@ -67,7 +67,7 @@ export function renderPersonCard(opts: PersonCardOptions): void {
 
     renderAccessActions(container, userId, mapping.id, mapping.accessStatus, migrationAccount, onAccessChanged)
 
-    if (migrationAccount && (!access || access === 'unknown')) {
+    if (migrationAccount) {
       checkAndRefreshAccess(container, userId, mapping.id, migrationAccount, onAccessChanged)
     }
   }
