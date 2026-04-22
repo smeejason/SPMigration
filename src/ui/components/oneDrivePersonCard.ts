@@ -67,9 +67,8 @@ export function renderPersonCard(opts: PersonCardOptions): void {
 
     renderAccessActions(container, userId, mapping.id, mapping.accessStatus, migrationAccount, onAccessChanged)
 
-    if (migrationAccount) {
-      checkAndRefreshAccess(container, userId, mapping.id, migrationAccount, onAccessChanged)
-    }
+    // Always check live — migrationAccount only needed for the grant/revoke buttons, not the check itself
+    checkAndRefreshAccess(container, userId, mapping.id, migrationAccount, onAccessChanged)
   }
 }
 
