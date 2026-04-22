@@ -1,5 +1,6 @@
 import { checkUserDriveAccess, grantUserDriveAccess, revokeUserDriveAccess, getUserDrive, getUserById } from '../../graph/graphClient'
 import { getState, setState } from '../../state/store'
+import { getCurrentUser } from '../../auth/authService'
 import type { MigrationMapping, OneDriveAccessStatus } from '../../types'
 
 export interface PersonCardOptions {
@@ -23,7 +24,9 @@ export function accessStatusBadge(s: OneDriveAccessStatus | undefined): string {
 }
 
 export function renderPersonCard(opts: PersonCardOptions): void {
-  const { mapping, migrationAccount, container, onAccessChanged } = opts
+  const { mapping, container, onAccessChanged } = opts
+  // Fall back to the currently signed-in user when no explicit migration account is configured
+  const migrationAccount = opts.migrationAccount || getCurrentUser()?.userPrincipalName || ''
   const userId = mapping.targetSite?.id ?? ''
   const displayName = mapping.resolvedDisplayName ?? mapping.targetSite?.displayName ?? '—'
   const webUrl = mapping.targetSite?.webUrl ?? ''
