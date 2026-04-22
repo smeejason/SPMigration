@@ -1,7 +1,9 @@
-import { getState } from '../../state/store'
-import { persistProjectMappings } from '../../graph/projectService'
+import { getState, setState } from '../../state/store'
+import { persistProjectMappings, getSpConfig } from '../../graph/projectService'
 import { renderPersonCard, accessStatusBadge } from './oneDrivePersonCard'
-import type { MigrationMapping, MigrationPhase, OneDriveAccessStatus } from '../../types'
+import { downloadDriveItem } from '../../graph/graphClient'
+import { buildReviewTree } from '../../parsers/migrationResultParser'
+import type { MigrationMapping, MigrationPhase, OneDriveAccessStatus, MigrationResultSummary, MigrationResultItem, ReviewData } from '../../types'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -77,9 +79,7 @@ function aggregatePhase(mappings: MigrationMapping[]): MigrationPhase {
 
 // ─── SPMT result cross-reference ──────────────────────────────────────────────
 
-function spStatForMapping(m: MigrationMapping): { migrated: number; failed: number; skipped: number } | null {
-  const reviewData = getState().reviewData
-  if (!reviewData) return null
+function spStatForMapping(m: MigrationMapping, reviewData: ReviewData): { migrated: number; failed: number; skipped: number } | null {
   const sourcePath = m.sourceNode.path
   const items = reviewData.items.filter(i =>
     i.sourcePath === sourcePath || i.sourcePath.startsWith(sourcePath + '/'))
@@ -91,6 +91,40 @@ function spStatForMapping(m: MigrationMapping): { migrated: number; failed: numb
   }
 }
 
+// ─── Review data loading ──────────────────────────────────────────────────────
+
+async function ensureReviewData(): Promise<ReviewData | null> {
+  const state = getState()
+  if (state.reviewData) return state.reviewData
+
+  const project = state.currentProject
+  const resultUploads = project?.projectData.resultUploads ?? []
+  if (resultUploads.length === 0) return null
+
+  const { siteId } = getSpConfig()
+  const downloads = await Promise.all(
+    resultUploads.map(u => downloadDriveItem(siteId, u.summaryItemId))
+  ) as MigrationResultSummary[]
+
+  const combinedItems: MigrationResultItem[] = downloads.flatMap(d => d.items ?? [])
+  const tree = buildReviewTree(combinedItems)
+  const reviewData: ReviewData = {
+    tree,
+    items: combinedItems,
+    totals: {
+      migrated: downloads.reduce((s, d) => s + d.migratedCount, 0),
+      failed:   downloads.reduce((s, d) => s + d.failedCount, 0),
+      skipped:  downloads.reduce((s, d) => s + d.skippedCount, 0),
+      partial:  downloads.reduce((s, d) => s + d.partialCount, 0),
+      total:    downloads.reduce((s, d) => s + d.totalCount, 0),
+      failedRecycleBin:  combinedItems.filter(i => i.status === 'Failed'  && i.isRecycleBin).length,
+      skippedRecycleBin: combinedItems.filter(i => i.status === 'Skipped' && i.isRecycleBin).length,
+    },
+  }
+  setState({ reviewData })
+  return reviewData
+}
+
 // ─── Entry point ──────────────────────────────────────────────────────────────
 
 export async function renderReviewPanel(container: HTMLElement): Promise<void> {
@@ -99,29 +133,65 @@ export async function renderReviewPanel(container: HTMLElement): Promise<void> {
   const project = state.currentProject
   if (!project) return
 
-  const mappings = state.mappings.filter(m => m.targetSite || m.plannedSite)
-
-  if (mappings.length === 0) {
+  const resultUploads = project.projectData.resultUploads ?? []
+  if (resultUploads.length === 0) {
     container.innerHTML = `
       <div class="review-panel">
         <div class="review-empty">
-          <div class="review-empty-icon">🗂️</div>
-          <p class="review-empty-title">No mappings yet</p>
-          <p class="review-empty-desc">Map source folders to destinations on the <strong>Map</strong> tab first.</p>
+          <div class="review-empty-icon">📦</div>
+          <p class="review-empty-title">No migration results yet</p>
+          <p class="review-empty-desc">Upload SPMT result ZIP files on the <strong>Upload</strong> tab. Only destinations with matching results will appear here.</p>
         </div>
       </div>`
     return
   }
 
-  const groups = buildDestGroups(mappings)
-  const migrationAccount = project.projectData.autoMapSettings?.migrationAccount ?? ''
+  container.innerHTML = `<div class="review-panel"><div class="review-loading"><span class="spinner"></span> Loading migration results…</div></div>`
 
-  renderLayout(container, groups, migrationAccount)
+  let reviewData: ReviewData | null
+  try {
+    reviewData = await ensureReviewData()
+  } catch (err) {
+    container.innerHTML = `
+      <div class="review-panel">
+        <div class="review-empty">
+          <div class="review-empty-icon">⚠️</div>
+          <p class="review-empty-title">Failed to load results</p>
+          <p class="review-empty-desc">${escHtml((err as Error).message)}</p>
+        </div>
+      </div>`
+    return
+  }
+
+  if (!reviewData) return
+
+  const allMappings = state.mappings.filter(m => m.targetSite || m.plannedSite)
+  const allGroups = buildDestGroups(allMappings)
+
+  // Only show destinations where at least one source folder has matching SPMT results
+  const groups = allGroups.filter(g =>
+    g.mappings.some(m => spStatForMapping(m, reviewData!) !== null)
+  )
+
+  if (groups.length === 0) {
+    container.innerHTML = `
+      <div class="review-panel">
+        <div class="review-empty">
+          <div class="review-empty-icon">🔍</div>
+          <p class="review-empty-title">No results match current mappings</p>
+          <p class="review-empty-desc">Migration results were found but none match the source paths in your current mappings.</p>
+        </div>
+      </div>`
+    return
+  }
+
+  const migrationAccount = project.projectData.autoMapSettings?.migrationAccount ?? ''
+  renderLayout(container, groups, migrationAccount, reviewData!)
 }
 
 // ─── Layout ───────────────────────────────────────────────────────────────────
 
-function renderLayout(container: HTMLElement, groups: DestGroup[], migrationAccount: string): void {
+function renderLayout(container: HTMLElement, groups: DestGroup[], migrationAccount: string, reviewData: ReviewData): void {
   const totalDests = groups.length
   const withAccess = groups.filter(g =>
     g.isOneDrive && g.mappings.some(m => m.accessStatus === 'accessible' || m.accessStatus === 'granted')).length
@@ -173,7 +243,7 @@ function renderLayout(container: HTMLElement, groups: DestGroup[], migrationAcco
             <span class="rch-phase">Phase</span>
           </div>
           <ul class="review-dest-list" id="review-dest-list">
-            ${groups.map(g => renderDestItemHtml(g)).join('')}
+            ${groups.map(g => renderDestItemHtml(g, reviewData)).join('')}
           </ul>
         </div>
         <div class="review-mapping-right" id="review-mapping-right">
@@ -189,14 +259,14 @@ function renderLayout(container: HTMLElement, groups: DestGroup[], migrationAcco
   wireDestList(container, groups, migrationAccount)
 }
 
-function renderDestItemHtml(g: DestGroup): string {
+function renderDestItemHtml(g: DestGroup, reviewData: ReviewData): string {
   const initials = escHtml(g.displayName.slice(0, 2).toUpperCase())
   const phase = aggregatePhase(g.mappings)
   const accessBadge = g.isOneDrive
     ? `<span class="rev-access-mini">${accessStatusBadge(g.mappings[0]?.accessStatus)}</span>`
     : ''
 
-  const sourceRows = g.mappings.map(m => renderSourceRowHtml(m)).join('')
+  const sourceRows = g.mappings.map(m => renderSourceRowHtml(m, reviewData)).join('')
 
   return `
     <li class="review-dest-item" data-dest-key="${escHtml(g.key)}">
@@ -213,10 +283,10 @@ function renderDestItemHtml(g: DestGroup): string {
     </li>`
 }
 
-function renderSourceRowHtml(m: MigrationMapping): string {
+function renderSourceRowHtml(m: MigrationMapping, reviewData: ReviewData): string {
   const name = m.sourceNode.name || m.sourceNode.originalPath
   const size = m.sourceNode.sizeBytes > 0 ? formatBytes(m.sourceNode.sizeBytes) : ''
-  const spStat = spStatForMapping(m)
+  const spStat = spStatForMapping(m, reviewData)
   const spHtml = spStat
     ? `<span class="rev-source-spstat">
         <span class="rss-m" title="Migrated">✓${spStat.migrated}</span>
@@ -387,6 +457,14 @@ function injectReviewStyles(): void {
     .review-empty-icon { font-size: 3rem; margin-bottom: 16px; }
     .review-empty-title { font-size: 1.1rem; font-weight: 600; margin-bottom: 8px; }
     .review-empty-desc { font-size: 0.875rem; color: var(--color-text-muted); max-width: 420px; line-height: 1.5; }
+
+    /* ── Loading ── */
+    .review-loading { display: flex; align-items: center; gap: 10px; padding: 40px 24px;
+      font-size: 0.9rem; color: var(--color-text-muted); }
+    .review-panel .spinner { display: inline-block; width: 14px; height: 14px;
+      border: 2px solid currentColor; border-top-color: transparent; border-radius: 50%;
+      animation: review-spin 0.7s linear infinite; flex-shrink: 0; }
+    @keyframes review-spin { to { transform: rotate(360deg); } }
 
     /* ── Stats bar ── */
     .review-stats-bar { display: flex; border-bottom: 1px solid var(--color-border);
