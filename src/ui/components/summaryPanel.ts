@@ -249,6 +249,7 @@ function odAccessBadge(m: MigrationMapping): string {
   const s = m.accessStatus
   if (!s || s === 'unknown')              return `<span class="badge badge-neutral">— Not checked</span>`
   if (s === 'accessible' || s === 'granted') return `<span class="badge status-ready">✓ Has Access</span>`
+  if (s === 'revoked')                    return `<span class="badge badge-revoked">↩ Revoked</span>`
   if (s === 'no-drive')                   return `<span class="badge status-error">✗ No Drive</span>`
   if (s === 'no-access')                  return `<span class="badge status-error">✗ No Access</span>`
   return `<span class="badge status-error">✗ Error</span>`
@@ -884,6 +885,7 @@ function injectSummaryStyles(): void {
     .status-error   { background: #fde7e9; color: var(--color-danger, #a4262c); }
     .badge-neutral  { background: var(--color-surface-alt, #f5f5f5); color: var(--color-text-muted);
       border: 1px solid var(--color-border); }
+    .badge-revoked  { background: #f3f2f1; color: #605e5c; border: 1px solid var(--color-border); }
     .badge-manual   { background: #e8f4fd; color: #0078d4; }
     .badge-cant-find { background: #fde7e9; color: #a4262c; }
 

@@ -1,6 +1,7 @@
 import { Client } from '@microsoft/microsoft-graph-client'
 import { getToken } from '../auth/authService'
-import { downloadDriveItem, loadMappingsFile, loadOneDriveMappingsFile, loadIAFile } from './graphClient'
+import { downloadDriveItem, loadMappingsFile, loadOneDriveMappingsFile, loadIAFile, saveMappingsFile } from './graphClient'
+import { getState, setState } from '../state/store'
 import type { MigrationProject, ProjectData, ProjectStatus, ProjectType, GraphListItem, SharePointUser, TreeNode, MigrationMapping, IANode } from '../types'
 
 // ─── Config ───────────────────────────────────────────────────────────────────
@@ -242,6 +243,32 @@ export async function loadProjectOneDriveMappings(project: MigrationProject): Pr
     return result ?? []
   } catch {
     return []
+  }
+}
+
+/**
+ * Persists mappings to SharePoint — file-based for projects with uploads, inline legacy otherwise.
+ * Shared by mappingPanel, summaryPanel, and reviewPanel so the logic lives in one place.
+ */
+export async function persistProjectMappings(mappings: MigrationMapping[]): Promise<void> {
+  const project = getState().currentProject
+  if (!project) return
+
+  const hasUploadFolder = (project.projectData.uploads?.length ?? 0) > 0
+  const mappedCount = mappings.filter(m => m.targetSite || m.plannedSite).length
+
+  if (hasUploadFolder) {
+    const { siteId } = getSpConfig()
+    await saveMappingsFile(siteId, project.title, project.id, mappings)
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const { mappings: _removed, ...restData } = project.projectData
+    const updatedProjectData = { ...restData, mappingCount: mappedCount }
+    await updateProject(project.id, { projectData: updatedProjectData })
+    setState({ mappings, currentProject: { ...project, projectData: updatedProjectData } })
+  } else {
+    const updatedProjectData = { ...project.projectData, mappings, mappingCount: mappedCount }
+    await updateProject(project.id, { projectData: updatedProjectData })
+    setState({ mappings, currentProject: { ...project, projectData: updatedProjectData } })
   }
 }
 

@@ -339,6 +339,61 @@ export async function grantUserDriveAccess(userId: string, migrationAccountEmail
 }
 
 /**
+ * Removes the migration account from the site-collection admin list for the user's OneDrive.
+ * Uses the same CSOM Tenant.SetSiteAdmin path as grantUserDriveAccess, with the boolean set to false.
+ */
+export async function revokeUserDriveAccess(userId: string, migrationAccountEmail: string): Promise<void> {
+  const user = await getUserById(userId)
+  if (!user?.userPrincipalName) {
+    throw new Error('Could not retrieve UPN for user')
+  }
+
+  const { root: rootHost, admin: adminHost } = await getSharePointHosts()
+  const spToken = await getToken([`https://${rootHost}/AllSites.FullControl`])
+
+  const encodedAccount = encodeURIComponent(`i:0#.f|membership|${user.userPrincipalName}`)
+  const profileResp = await fetch(
+    `https://${adminHost}/_api/SP.UserProfiles.PeopleManager/GetPropertiesFor(accountName=@v)?@v='${encodedAccount}'`,
+    { headers: { Authorization: `Bearer ${spToken}`, Accept: 'application/json;odata=nometadata' } },
+  )
+  if (!profileResp.ok) {
+    const text = await profileResp.text().catch(() => '')
+    throw new Error(`Could not load user profile (${profileResp.status}): ${text}`)
+  }
+  const profile = await profileResp.json() as { PersonalUrl?: string }
+  const personalSiteUrl = profile.PersonalUrl?.replace(/\/$/, '')
+  if (!personalSiteUrl) {
+    throw new Error('OneDrive has not been provisioned for this user.')
+  }
+
+  const csomBody = `<Request AddExpandoFieldTypeSuffix="true" SchemaVersion="15.0.0.0" LibraryVersion="16.0.0.0" ApplicationName="JavaScript Client" xmlns="http://schemas.microsoft.com/sharepoint/clientquery/2009"><Actions><ObjectPath Id="1" ObjectPathId="0" /><ObjectPath Id="3" ObjectPathId="2" /><Method Name="SetSiteAdmin" Id="4" ObjectPathId="2"><Parameters><Parameter Type="String">${personalSiteUrl}</Parameter><Parameter Type="String">i:0#.f|membership|${migrationAccountEmail}</Parameter><Parameter Type="Boolean">false</Parameter></Parameters></Method></Actions><ObjectPaths><StaticProperty Id="0" TypeId="{3747adcd-a3c3-41b9-bfab-4a64dd2f1e0a}" Name="Current" /><Constructor Id="2" TypeId="{268004ae-ef6b-4e9b-8425-127220d84719}" /></ObjectPaths></Request>`
+
+  const csomResp = await fetch(`https://${adminHost}/_vti_bin/client.svc/ProcessQuery`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${spToken}`,
+      'Content-Type': 'text/xml',
+    },
+    body: csomBody,
+  })
+
+  if (!csomResp.ok) {
+    const text = await csomResp.text().catch(() => '')
+    throw new Error(`Failed to revoke access (${csomResp.status}): ${text}`)
+  }
+
+  const csomJson = await csomResp.json() as unknown[]
+  for (const item of csomJson) {
+    if (item && typeof item === 'object' && 'ErrorInfo' in item) {
+      const errorInfo = (item as { ErrorInfo: { ErrorMessage?: string } | null }).ErrorInfo
+      if (errorInfo?.ErrorMessage) {
+        throw new Error(`SetSiteAdmin(revoke) failed: ${errorInfo.ErrorMessage}`)
+      }
+    }
+  }
+}
+
+/**
  * Search for a user by display name using exact match first, then a broad search.
  * Returns matched user + status to distinguish single-match vs ambiguous vs not found.
  */

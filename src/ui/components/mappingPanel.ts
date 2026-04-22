@@ -1,5 +1,5 @@
-import { searchSites, getSiteDrives, saveMappingsFile, saveIAFile, searchUsers, getUserDrive, checkUserDriveAccess, grantUserDriveAccess, getUserById, provisionNewSite, getSiteDesigns, checkSiteAliasAvailable } from '../../graph/graphClient'
-import { updateProject, getSpConfig, loadProjectIA } from '../../graph/projectService'
+import { searchSites, getSiteDrives, saveIAFile, searchUsers, getUserDrive, checkUserDriveAccess, grantUserDriveAccess, revokeUserDriveAccess, getUserById, provisionNewSite, getSiteDesigns, checkSiteAliasAvailable } from '../../graph/graphClient'
+import { getSpConfig, loadProjectIA, persistProjectMappings } from '../../graph/projectService'
 import { setState, getState } from '../../state/store'
 import type { TreeNode, MigrationMapping, SharePointSite, SharePointDrive, NewSiteConfig, UserRef, SiteType, AppUser, IANode } from '../../types'
 
@@ -887,7 +887,7 @@ async function openTargetPanel(
     saveBtn.disabled = true
     saveBtn.textContent = 'Saving…'
     try {
-      await persistMappings(mappings)
+      await persistProjectMappings(mappings)
       // Save IA link if an IA node was selected
       const iaParentId = (targetEl.querySelector('#ia-parent-select-existing') as HTMLSelectElement | null)?.value
       const iaAsParent = (targetEl.querySelector('#ia-parent-select-existing-as-parent') as HTMLInputElement | null)?.checked ?? false
@@ -914,7 +914,7 @@ async function openTargetPanel(
     const mappings = getState().mappings.filter((m) => m.sourceNode.path !== node.path)
     setState({ mappings })
     try {
-      await persistMappings(mappings)
+      await persistProjectMappings(mappings)
     } catch {
       removeBtn.disabled = false
       removeBtn.textContent = 'Remove'
@@ -1193,7 +1193,7 @@ async function openTargetPanel(
     saveBtn.disabled = true
     saveBtn.textContent = 'Saving…'
     try {
-      await persistMappings(mappings)
+      await persistProjectMappings(mappings)
       // Save IA link if an IA node was selected
       const iaParentId = (targetEl.querySelector('#ia-parent-select-planned') as HTMLSelectElement | null)?.value
       const iaAsParent = (targetEl.querySelector('#ia-parent-select-planned-as-parent') as HTMLInputElement | null)?.checked ?? false
@@ -1233,7 +1233,7 @@ async function openTargetPanel(
     ]
     setState({ mappings: mappingsWithPending })
     onMappingChange(plannedSite.displayName, true)
-    await persistMappings(mappingsWithPending).catch(() => {})
+    await persistProjectMappings(mappingsWithPending).catch(() => {})
 
     // Replace the New Site tab content with a full-panel overlay
     const tabPlanned = targetEl.querySelector('#tab-planned') as HTMLElement
@@ -1321,7 +1321,7 @@ async function openTargetPanel(
     setState({ mappings: finalMappings })
     onMappingChange(createdSite.displayName)
     try {
-      await persistMappings(finalMappings)
+      await persistProjectMappings(finalMappings)
     } catch { /* non-fatal */ }
 
     // Save IA link now that we have the real site ID
@@ -1356,7 +1356,7 @@ async function openTargetPanel(
     const mappings = getState().mappings.filter((m) => m.sourceNode.path !== node.path)
     setState({ mappings })
     try {
-      await persistMappings(mappings)
+      await persistProjectMappings(mappings)
     } catch {
       removeBtn.disabled = false
       removeBtn.textContent = 'Remove'
@@ -1566,7 +1566,7 @@ async function openOneDriveTargetPanel(
       btn.disabled = true
       btn.textContent = 'Saving…'
       try {
-        await persistMappings(mappings)
+        await persistProjectMappings(mappings)
         btn.textContent = '↩ Clear Flag'
       } catch {
         btn.textContent = '↩ Clear Flag'
@@ -1588,7 +1588,7 @@ async function openOneDriveTargetPanel(
       btn.disabled = true
       btn.textContent = 'Saving…'
       try {
-        await persistMappings(mappings)
+        await persistProjectMappings(mappings)
         btn.textContent = "🚫 Can't Find"
       } catch {
         btn.textContent = "🚫 Can't Find"
@@ -1720,7 +1720,7 @@ async function openOneDriveTargetPanel(
     saveBtn.disabled = true
     saveBtn.textContent = 'Saving…'
     try {
-      await persistMappings(mappings)
+      await persistProjectMappings(mappings)
       saveBtn.textContent = '✓ Saved'
     } catch {
       saveBtn.textContent = '⚠ Save failed — retry'
@@ -1738,7 +1738,7 @@ async function openOneDriveTargetPanel(
     const mappings = getState().mappings.filter(m => m.sourceNode.path !== node.path)
     setState({ mappings })
     try {
-      await persistMappings(mappings)
+      await persistProjectMappings(mappings)
     } catch {
       removeBtn.disabled = false
       removeBtn.textContent = 'Remove'
@@ -1783,8 +1783,26 @@ async function checkAndShowAccess(targetEl: HTMLElement, userId: string, migrati
     }
 
     if (access === 'accessible') {
-      statusEl.textContent = '✓ Accessible'
       statusEl.style.color = 'var(--color-success, #107c10)'
+      if (migrationAccount) {
+        statusEl.innerHTML = `✓ Accessible &nbsp;<button type="button" id="btn-revoke-access" class="btn btn-sm btn-ghost" style="font-size:0.75rem;padding:2px 8px;margin-left:4px;">Revoke Access</button>`
+        statusEl.querySelector('#btn-revoke-access')?.addEventListener('click', async () => {
+          const btn = statusEl.querySelector('#btn-revoke-access') as HTMLButtonElement
+          btn.disabled = true
+          btn.textContent = 'Revoking…'
+          try {
+            await revokeUserDriveAccess(userId, migrationAccount)
+            await checkAndShowAccess(targetEl, userId, migrationAccount)
+            await persistProjectMappings(getState().mappings)
+          } catch (err) {
+            btn.disabled = false
+            btn.textContent = '⚠ Failed — retry'
+            btn.title = (err as Error)?.message ?? String(err)
+          }
+        })
+      } else {
+        statusEl.textContent = '✓ Accessible'
+      }
     } else if (access === 'no-access') {
       statusEl.style.color = 'var(--color-danger, #a4262c)'
       if (migrationAccount) {
@@ -1796,14 +1814,12 @@ async function checkAndShowAccess(targetEl: HTMLElement, userId: string, migrati
           try {
             await grantUserDriveAccess(userId, migrationAccount)
             await checkAndShowAccess(targetEl, userId, migrationAccount)
-            // Persist the updated access status
-            await persistMappings(getState().mappings)
+            await persistProjectMappings(getState().mappings)
           } catch (err) {
             btn.disabled = false
             const msg = (err as Error)?.message ?? String(err)
             btn.textContent = '⚠ Failed — retry'
             btn.title = msg
-            // Also show the error inline so it's visible without hovering
             const errEl = document.createElement('div')
             errEl.style.cssText = 'color:var(--color-danger,#a4262c);font-size:0.75rem;margin-top:4px;word-break:break-word;'
             errEl.textContent = msg
@@ -1842,36 +1858,6 @@ async function loadLibraries(
       .join('')
   } catch {
     libSelect.innerHTML = '<option>Failed to load libraries</option>'
-  }
-}
-
-async function persistMappings(mappings: MigrationMapping[]): Promise<void> {
-  const project = getState().currentProject
-  if (!project) return
-
-  const hasUploadFolder = (project.projectData.uploads?.length ?? 0) > 0
-
-  if (hasUploadFolder) {
-    // New model: store mappings as a separate file to avoid SP column size limits.
-    // sourceNode.children are stripped by saveMappingsFile — they are already in .tree.json.
-    const { siteId } = getSpConfig()
-    await saveMappingsFile(siteId, project.title, project.id, mappings)
-
-    // Remove any inline mappings from ProjectData but keep a denormalized count
-    // so the project list scorecard can display the correct number without loading the file.
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    const { mappings: _removed, ...restData } = project.projectData
-    // Count only entries with actual targets (not Phase 1 not-found/ambiguous entries)
-    const mappedCount = mappings.filter(m => m.targetSite || m.plannedSite).length
-    const updatedProjectData = { ...restData, mappingCount: mappedCount }
-    await updateProject(project.id, { projectData: updatedProjectData })
-    setState({ mappings, currentProject: { ...project, projectData: updatedProjectData } })
-  } else {
-    // Legacy model (no upload folder yet): store inline as before; keep count in sync too.
-    const mappedCount = mappings.filter(m => m.targetSite || m.plannedSite).length
-    const updatedProjectData = { ...project.projectData, mappings, mappingCount: mappedCount }
-    await updateProject(project.id, { projectData: updatedProjectData })
-    setState({ mappings, currentProject: { ...project, projectData: updatedProjectData } })
   }
 }
 

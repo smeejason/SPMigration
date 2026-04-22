@@ -114,7 +114,7 @@ export interface ParsedTreeSizeRow {
 // ─── OneDrive Auto Map ────────────────────────────────────────────────────────
 
 export type OneDriveMatchStatus = 'pending' | 'matched' | 'not-found' | 'ambiguous' | 'error' | 'cant-find'
-export type OneDriveAccessStatus = 'unknown' | 'accessible' | 'granted' | 'no-access' | 'no-drive' | 'error'
+export type OneDriveAccessStatus = 'unknown' | 'accessible' | 'granted' | 'no-access' | 'no-drive' | 'error' | 'revoked'
 
 export interface OneDriveUserMapping {
   id: string                       // = sourceNode.path (unique key)
@@ -156,6 +156,7 @@ export interface SharePointDrive {
 // ─── Mappings ────────────────────────────────────────────────────────────────
 
 export type MappingStatus = 'pending' | 'ready' | 'error'
+export type MigrationPhase = 'planning' | 'migrated' | 'testing' | 'live'
 
 /** @deprecated Use NewSiteConfig. Kept as alias so legacy persisted data still deserialises. */
 export type PlannedSiteTarget = NewSiteConfig
@@ -173,6 +174,7 @@ export interface MigrationMapping {
   matchStatus?: OneDriveMatchStatus
   accessStatus?: OneDriveAccessStatus
   resolvedDisplayName?: string
+  phase?: MigrationPhase
 }
 
 // ─── Site Types ──────────────────────────────────────────────────────────────
