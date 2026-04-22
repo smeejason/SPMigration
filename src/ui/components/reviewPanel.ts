@@ -278,6 +278,43 @@ function renderDestItemHtml(g: DestGroup, reviewData: ReviewData): string {
     ? `<span class="rev-access-mini">${accessStatusBadge(g.mappings[0]?.accessStatus)}</span>`
     : ''
 
+  // Single mapping — merge into one flat row
+  if (g.mappings.length === 1) {
+    const m = g.mappings[0]
+    const spStat = spStatForMapping(m, reviewData)
+    const size = m.sourceNode.sizeBytes > 0 ? formatBytes(m.sourceNode.sizeBytes) : ''
+    const spHtml = spStat
+      ? `<span class="rev-source-spstat">
+          <span class="rss-m" title="Migrated">✓${spStat.migrated}</span>
+          ${spStat.failed > 0 ? `<span class="rss-f" title="Failed">✗${spStat.failed}</span>` : ''}
+          ${spStat.skipped > 0 ? `<span class="rss-s" title="Skipped">⊘${spStat.skipped}</span>` : ''}
+        </span>`
+      : ''
+    const viewBtn = spStat
+      ? `<button class="rev-view-results-btn" data-mapping-id="${escHtml(m.id)}" title="Open full results tree">View →</button>`
+      : ''
+    const phaseSelect = `
+      <select class="rev-phase-select" data-mapping-id="${escHtml(m.id)}" title="Migration phase">
+        ${PHASES.map(p =>
+          `<option value="${p}" ${(m.phase ?? 'planning') === p ? 'selected' : ''}>${p.charAt(0).toUpperCase() + p.slice(1)}</option>`
+        ).join('')}
+      </select>`
+
+    return `
+      <li class="review-dest-item review-dest-item--flat" data-dest-key="${escHtml(g.key)}">
+        <div class="review-dest-row" tabindex="0" role="button">
+          <span class="review-dest-avatar">${initials}</span>
+          <span class="review-dest-name">${escHtml(g.displayName)}</span>
+          ${size ? `<span class="review-source-size">${escHtml(size)}</span>` : ''}
+          ${spHtml}
+          ${viewBtn}
+          ${accessBadge}
+          <span class="rev-dest-phase" data-dest-phase="${escHtml(g.key)}">${phaseSelect}</span>
+        </div>
+      </li>`
+  }
+
+  // Multiple mappings — keep expandable list
   const sourceRows = g.mappings.map(m => renderSourceRowHtml(m, reviewData)).join('')
 
   return `
@@ -341,13 +378,19 @@ function wireDestList(container: HTMLElement, groups: DestGroup[], migrationAcco
     const item = row.closest<HTMLElement>('.review-dest-item')!
     const key = item.dataset.destKey!
     const group = groups.find(g => g.key === key)!
+    const isFlat = item.classList.contains('review-dest-item--flat')
 
-    row.addEventListener('click', () => {
-      const sources = item.querySelector<HTMLElement>('.review-dest-sources')!
-      const toggle = row.querySelector<HTMLElement>('.review-dest-toggle')!
-      const isOpen = sources.style.display !== 'none'
-      sources.style.display = isOpen ? 'none' : ''
-      toggle.textContent = isOpen ? '▶' : '▼'
+    row.addEventListener('click', (e) => {
+      // Don't trigger row selection when interacting with controls inside the row
+      if ((e.target as HTMLElement).closest('select, button')) return
+
+      if (!isFlat) {
+        const sources = item.querySelector<HTMLElement>('.review-dest-sources')!
+        const toggle = row.querySelector<HTMLElement>('.review-dest-toggle')!
+        const isOpen = sources.style.display !== 'none'
+        sources.style.display = isOpen ? 'none' : ''
+        toggle.textContent = isOpen ? '▶' : '▼'
+      }
 
       if (selectedKey !== key) {
         list.querySelectorAll('.review-dest-row').forEach(r => r.classList.remove('review-dest-row--selected'))
@@ -387,9 +430,9 @@ function wireDestList(container: HTMLElement, groups: DestGroup[], migrationAcco
       console.warn('[Review] Failed to persist phase change:', err)
     }
 
-    // Update aggregate phase badge on the parent destination row
-    const destItem = (sel.closest<HTMLElement>('.review-source-row'))?.closest<HTMLElement>('.review-dest-item')
-    if (destItem) {
+    // Update aggregate phase badge on the parent destination row (multi-source only)
+    const destItem = sel.closest<HTMLElement>('.review-dest-item')
+    if (destItem && !destItem.classList.contains('review-dest-item--flat')) {
       const destKey = destItem.dataset.destKey!
       const latestMappings = getState().mappings.filter(m =>
         groups.find(g => g.key === destKey)?.mappings.some(gm => gm.id === m.id))
@@ -969,6 +1012,9 @@ function injectReviewStyles(): void {
     .review-dest-row:hover { background: #f0f6ff; }
     .review-dest-row--selected { background: var(--color-primary-light, #deecf9) !important; }
     .review-dest-toggle { font-size: 0.6rem; color: var(--color-text-muted); width: 10px; flex-shrink: 0; }
+    .review-dest-item--flat .review-dest-row { padding-left: 12px; }
+    .review-dest-item--flat .review-dest-name { max-width: 180px; }
+    .review-dest-item--flat .rev-dest-phase { display: contents; }
     .review-dest-avatar { width: 28px; height: 28px; border-radius: 50%;
       background: var(--color-primary, #0078d4); color: white; font-size: 0.72rem; font-weight: 700;
       display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
