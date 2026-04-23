@@ -710,22 +710,21 @@ async function runValidation(panel: HTMLElement, mapping: MigrationMapping, filt
   }
 
   try {
-    // Step 1: find the migrated files & folders (skip recycle bin)
+    // Step 1: find the migrated files (skip recycle bin)
     const migratedItems = filteredItems.filter(i => i.status === 'Migrated' && !i.isRecycleBin && i.destination)
-    const migratedFiles   = migratedItems.filter(i => i.itemType === 'File')
-    const migratedFolders = migratedItems.filter(i => i.itemType === 'Folder')
+    const migratedFiles  = migratedItems.filter(i => i.itemType === 'File')
 
     if (migratedFiles.length === 0) {
       wrap.innerHTML = `<div class="rev-val-empty"><div class="rev-val-empty-title">No migrated files</div><div class="rev-val-empty-desc">No files with status "Migrated" were found in the SPMT results for this source.</div></div>`
       return
     }
 
-    // Step 2: find the root destination — shortest destination URL among folders (or parent of shortest file URL)
-    const candidates = migratedFolders.length > 0 ? migratedFolders : migratedFiles
-    const rootRaw = candidates.slice().sort((a, b) => a.destination.length - b.destination.length)[0].destination
-    const rootDestUrl = migratedFolders.length > 0
-      ? rootRaw
-      : rootRaw.split('/').slice(0, -1).join('/')  // parent dir of shortest file
+    // Step 2: derive the enumeration root — parent directory of the shallowest destination.
+    // We never try to resolve a migrated item itself (it may be a folder listed by SPMT but
+    // whose name was changed or which we don't need to look up directly). Instead we resolve
+    // the container that holds all migrated content and enumerate everything under it.
+    const shallowest = migratedItems.slice().sort((a, b) => a.destination.length - b.destination.length)[0]
+    const rootDestUrl = shallowest.destination.split('/').slice(0, -1).join('/')
 
     setStatus('Resolving destination folder…')
     let ref: { driveId: string; itemId: string } | null = null
