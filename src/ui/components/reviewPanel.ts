@@ -739,8 +739,12 @@ async function runValidation(panel: HTMLElement, mapping: MigrationMapping, filt
     if (isPersonalOneDrive && oneDriveUserId) {
       try {
         const urlParsed = new URL(rootDestUrl)
-        // pathname = /personal/{username}/Documents/…  — path from segment [3] onward is drive-relative
-        const drivePath = urlParsed.pathname.split('/').slice(3).map(decodeURIComponent).join('/')
+        // pathname = /personal/{username}/Documents/subfolder/…
+        // The Graph drive root for a personal OneDrive IS the Documents library root,
+        // so we skip the first 4 segments: ['', 'personal', username, 'Documents']
+        // giving a drive-relative path like 'subfolder/…' or '' (= root of Documents).
+        const parts = urlParsed.pathname.split('/').slice(4).map(decodeURIComponent).filter(Boolean)
+        const drivePath = parts.join('/')
         ref = await resolveOneDriveFolderByPath(oneDriveUserId, drivePath)
       } catch (e) {
         throw new Error(`Could not resolve OneDrive folder.\nPath: ${rootDestUrl}\nDetail: ${(e as Error)?.message ?? e}`)

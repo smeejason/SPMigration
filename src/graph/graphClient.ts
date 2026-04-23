@@ -1005,7 +1005,12 @@ export async function resolveOneDriveFolderByPath(
   userId: string,
   drivePath: string,
 ): Promise<{ driveId: string; itemId: string }> {
-  const drive = await client().api(`/users/${userId}/drive`).select('id').get() as { id: string }
+  const drive = await client().api(`/users/${userId}/drive`).select('id,root').get() as { id: string; root?: { id?: string } }
+  if (!drivePath) {
+    // Empty path = root of Documents (the drive root itself)
+    const root = await client().api(`/drives/${drive.id}/root`).select('id').get() as { id: string }
+    return { driveId: drive.id, itemId: root.id }
+  }
   const encoded = drivePath.split('/').map(encodeURIComponent).join('/')
   const folder = await client()
     .api(`/drives/${drive.id}/root:/${encoded}:`)
