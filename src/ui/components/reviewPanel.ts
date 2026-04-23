@@ -873,6 +873,7 @@ function renderValidationTable(wrap: HTMLElement, rows: ValidationRow[], rootUrl
       <span class="rev-val-stat rev-val-stat--err">${missing > 0 ? `✗ ${missing.toLocaleString()} missing` : '✓ None missing'}</span>
       <span class="rev-val-stat rev-val-stat--warn">${extra > 0 ? `⚠ ${extra.toLocaleString()} extra` : '✓ None extra'}</span>
       <span class="rev-val-root" title="${escHtml(rootUrl)}">Root: <code>${escHtml(rootUrl.split('/').slice(-2).join('/'))}</code></span>
+      <button class="btn btn-ghost btn-sm rev-val-download-btn" style="margin-left:auto">⬇ Download CSV</button>
       <button class="btn btn-ghost btn-sm rev-val-recheck-btn">Re-check</button>
     </div>
     <div class="rev-val-filter-bar">
@@ -886,8 +887,16 @@ function renderValidationTable(wrap: HTMLElement, rows: ValidationRow[], rootUrl
       <table class="rev-val-table" id="rev-val-table">
         <thead>
           <tr>
-            <th>Status</th><th>Name</th><th>Source</th><th>Destination</th><th>Title</th>
-            <th>Created</th><th>Modified</th><th>Owner</th><th>Modified By</th><th>Version</th>
+            <th style="width:90px">Status</th>
+            <th style="width:140px">Name</th>
+            <th style="width:200px">Source</th>
+            <th style="width:200px">Destination</th>
+            <th style="width:140px">Title</th>
+            <th style="width:110px">Created</th>
+            <th style="width:110px">Modified</th>
+            <th style="width:130px">Owner</th>
+            <th style="width:130px">Modified By</th>
+            <th style="width:70px">Version</th>
           </tr>
         </thead>
         <tbody id="rev-val-tbody">
@@ -912,6 +921,23 @@ function renderValidationTable(wrap: HTMLElement, rows: ValidationRow[], rootUrl
       </table>
     </div>`
 
+  // Column resize handles
+  const table = wrap.querySelector<HTMLElement>('#rev-val-table')!
+  table.querySelectorAll<HTMLElement>('th').forEach(th => {
+    const handle = document.createElement('div')
+    handle.className = 'rev-col-resize-handle'
+    th.appendChild(handle)
+    handle.addEventListener('mousedown', (e) => {
+      const startX = e.clientX
+      const startW = th.offsetWidth
+      const onMove = (ev: MouseEvent) => { th.style.width = Math.max(50, startW + ev.clientX - startX) + 'px' }
+      const onUp   = () => { document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp) }
+      document.addEventListener('mousemove', onMove)
+      document.addEventListener('mouseup', onUp)
+      e.preventDefault()
+    })
+  })
+
   // URL cell expand on click
   wrap.querySelectorAll<HTMLElement>('.rev-val-url').forEach(cell => {
     cell.addEventListener('click', () => {
@@ -922,6 +948,11 @@ function renderValidationTable(wrap: HTMLElement, rows: ValidationRow[], rootUrl
       cell.querySelector('.rev-val-url-short')!.textContent = isExpanded ? truncateUrl(full) : full
       cell.title = isExpanded ? 'Click to expand' : 'Click to collapse'
     })
+  })
+
+  // CSV download
+  wrap.querySelector('.rev-val-download-btn')?.addEventListener('click', () => {
+    downloadValidationCsv(rows)
   })
 
   // Filter pills
@@ -950,6 +981,33 @@ function renderValidationTable(wrap: HTMLElement, rows: ValidationRow[], rootUrl
       if (ctx) void runValidation(panel, ctx.mapping, ctx.items)
     }
   })
+}
+
+function downloadValidationCsv(rows: ValidationRow[]): void {
+  const csvCell = (v: string | undefined) => {
+    const s = v ?? ''
+    return s.includes(',') || s.includes('"') || s.includes('\n') ? `"${s.replace(/"/g, '""')}"` : s
+  }
+  const headers = ['Status', 'Name', 'Source', 'Destination', 'Title', 'Created', 'Modified', 'Owner', 'Modified By', 'Version']
+  const fmtDate = (s?: string) => {
+    if (!s) return ''
+    try { return new Date(s).toLocaleDateString(undefined, { year: 'numeric', month: '2-digit', day: '2-digit' }) } catch { return s }
+  }
+  const lines = [
+    headers.join(','),
+    ...rows.map(r => [
+      r.status, r.name, r.sourceUrl ?? '', r.destUrl ?? '',
+      r.title ?? '', fmtDate(r.createdDateTime), fmtDate(r.lastModifiedDateTime),
+      r.createdBy ?? '', r.lastModifiedBy ?? '', r.versionLabel ?? '',
+    ].map(csvCell).join(',')),
+  ]
+  const blob = new Blob([lines.join('\r\n')], { type: 'text/csv;charset=utf-8;' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `file-validation-${new Date().toISOString().slice(0, 10)}.csv`
+  a.click()
+  URL.revokeObjectURL(url)
 }
 
 function applyValidationFilter(wrap: HTMLElement, status: string, search: string): void {
@@ -1470,12 +1528,19 @@ function injectReviewStyles(): void {
     .rev-val-pill--active { background: var(--color-primary, #0078d4); color: white; border-color: var(--color-primary); }
     .rev-val-search { font-size: 0.8rem !important; padding: 3px 8px !important; width: 200px; margin-left: auto; }
     .rev-val-table-wrap { flex: 1; overflow-y: auto; min-height: 0; }
-    .rev-val-table { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
-    .rev-val-table th { text-align: left; padding: 6px 10px; background: var(--color-surface-alt);
+    .rev-val-table { width: 100%; border-collapse: collapse; font-size: 0.8rem; table-layout: fixed; }
+    .rev-val-table th { text-align: left; padding: 6px 22px 6px 10px; background: var(--color-surface-alt);
       font-weight: 700; text-transform: uppercase; font-size: 0.65rem; letter-spacing: 0.04em;
-      position: sticky; top: 0; border-bottom: 1px solid var(--color-border); white-space: nowrap; }
+      position: sticky; top: 0; border-bottom: 1px solid var(--color-border); white-space: nowrap;
+      overflow: hidden; position: relative; user-select: none; }
     .rev-val-table td { padding: 6px 10px; border-bottom: 1px solid var(--color-border);
-      vertical-align: middle; white-space: nowrap; }
+      vertical-align: middle; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .rev-val-row:nth-child(odd) td  { background: #fff; }
+    .rev-val-row:nth-child(even) td { background: #f8f7f6; }
+    .rev-val-row:hover td { background: #eef4fb !important; }
+    .rev-col-resize-handle { position: absolute; right: 0; top: 0; bottom: 0; width: 5px;
+      cursor: col-resize; z-index: 1; }
+    .rev-col-resize-handle:hover, .rev-col-resize-handle:active { background: var(--color-primary, #0078d4); opacity: 0.5; }
     .rev-val-name { max-width: 180px; overflow: hidden; text-overflow: ellipsis;
       font-family: 'Consolas', monospace; font-size: 0.76rem; }
     .rev-val-s { font-size: 0.75rem; font-weight: 600; white-space: nowrap; }
