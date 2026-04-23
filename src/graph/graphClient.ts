@@ -994,6 +994,27 @@ export async function resolveDriveItemRef(url: string): Promise<{ driveId: strin
 }
 
 /**
+ * Resolve an OneDrive personal-site folder by navigating the user's drive directly.
+ * More reliable than /shares when the caller has site-collection-admin access rather
+ * than standard file-level permissions (which /shares requires).
+ *
+ * @param userId    AAD object ID of the OneDrive owner
+ * @param drivePath Drive-relative path, e.g. 'Documents/Migration/NationalAthlete'
+ */
+export async function resolveOneDriveFolderByPath(
+  userId: string,
+  drivePath: string,
+): Promise<{ driveId: string; itemId: string }> {
+  const drive = await client().api(`/users/${userId}/drive`).select('id').get() as { id: string }
+  const encoded = drivePath.split('/').map(encodeURIComponent).join('/')
+  const folder = await client()
+    .api(`/drives/${drive.id}/root:/${encoded}:`)
+    .select('id')
+    .get() as { id: string }
+  return { driveId: drive.id, itemId: folder.id }
+}
+
+/**
  * List every file and folder under a given drive folder, recursively.
  * Uses a BFS level-by-level approach: all folders at the same depth are
  * enumerated in parallel, keeping API calls low while remaining readable.

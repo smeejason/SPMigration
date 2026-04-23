@@ -1,7 +1,7 @@
 import { getState, setState } from '../../state/store'
 import { persistProjectMappings, getSpConfig, updateProject } from '../../graph/projectService'
 import { renderPersonCard, accessStatusBadge } from './oneDrivePersonCard'
-import { downloadDriveItem, resolveSharePointItemByUrl, resolveDriveItemRef, listDriveItemsRecursive } from '../../graph/graphClient'
+import { downloadDriveItem, resolveSharePointItemByUrl, resolveDriveItemRef, resolveOneDriveFolderByPath, listDriveItemsRecursive } from '../../graph/graphClient'
 import { buildReviewTree } from '../../parsers/migrationResultParser'
 import type { MigrationMapping, MigrationPhase, OneDriveAccessStatus, MigrationResultSummary, MigrationResultItem, ReviewData, ReviewNode } from '../../types'
 import type { SpDriveItemDetails, DriveItemFlat } from '../../graph/graphClient'
@@ -728,10 +728,29 @@ async function runValidation(panel: HTMLElement, mapping: MigrationMapping, filt
       : rootRaw.split('/').slice(0, -1).join('/')  // parent dir of shortest file
 
     setStatus('Resolving destination folder…')
-    const ref = await resolveDriveItemRef(rootDestUrl)
+    let ref: { driveId: string; itemId: string } | null = null
+
+    // For OneDrive personal sites, navigate via the user's drive (site-collection-admin
+    // access works here; /shares requires standard file-level read permissions which
+    // may not be present).
+    const isPersonalOneDrive = /\/personal\//i.test(rootDestUrl)
+    const oneDriveUserId = isPersonalOneDrive ? (mapping.targetSite?.id ?? '') : ''
+
+    if (isPersonalOneDrive && oneDriveUserId) {
+      try {
+        const urlParsed = new URL(rootDestUrl)
+        // pathname = /personal/{username}/Documents/…  — path from segment [3] onward is drive-relative
+        const drivePath = urlParsed.pathname.split('/').slice(3).map(decodeURIComponent).join('/')
+        ref = await resolveOneDriveFolderByPath(oneDriveUserId, drivePath)
+      } catch (e) {
+        throw new Error(`Could not resolve OneDrive folder.\nPath: ${rootDestUrl}\nDetail: ${(e as Error)?.message ?? e}`)
+      }
+    } else {
+      ref = await resolveDriveItemRef(rootDestUrl)
+    }
+
     if (!ref) {
-      wrap.innerHTML = `<div class="rev-val-empty"><div class="rev-val-empty-title">Could not resolve destination</div><div class="rev-val-empty-desc">Failed to look up the destination folder in SharePoint/OneDrive. Check that you have access to:<br><code>${escHtml(rootDestUrl)}</code></div></div>`
-      return
+      throw new Error(`Could not look up destination folder:\n${rootDestUrl}`)
     }
 
     // Step 3: enumerate all items from the destination
