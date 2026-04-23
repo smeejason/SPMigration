@@ -685,8 +685,10 @@ interface ValidationRow {
   name: string
   relPath: string
   // Source (SPMT)
+  sourceUrl?: string   // raw UNC/HTTP source path from SPMT
   sourceSize?: number
-  // Destination (Graph)
+  // Destination (Graph / SPMT destination URL)
+  destUrl?: string
   title?: string
   createdDateTime?: string
   lastModifiedDateTime?: string
@@ -698,6 +700,19 @@ interface ValidationRow {
 
 function normalizeDestUrl(url: string): string {
   try { return decodeURIComponent(url).toLowerCase().replace(/\/+$/, '') } catch { return url.toLowerCase().replace(/\/+$/, '') }
+}
+
+function truncateUrl(url: string, maxLen = 55): string {
+  if (url.length <= maxLen) return url
+  // Show the last meaningful segments (most specific part of path)
+  const parts = url.split('/')
+  let result = parts[parts.length - 1]
+  let i = parts.length - 2
+  while (i >= 0 && result.length + parts[i].length + 1 < maxLen - 3) {
+    result = parts[i] + '/' + result
+    i--
+  }
+  return '…/' + result
 }
 
 async function runValidation(panel: HTMLElement, mapping: MigrationMapping, filteredItems: MigrationResultItem[]): Promise<void> {
@@ -783,6 +798,7 @@ async function runValidation(panel: HTMLElement, mapping: MigrationMapping, filt
         matchedKeys.add(destItem.relativePath.toLowerCase())
         rows.push({
           status: 'matched', name: src.itemName, relPath: rel,
+          sourceUrl: src.source, destUrl: src.destination,
           sourceSize: src.fileSizeBytes,
           title: destItem.title, createdDateTime: destItem.createdDateTime,
           lastModifiedDateTime: destItem.lastModifiedDateTime,
@@ -790,7 +806,7 @@ async function runValidation(panel: HTMLElement, mapping: MigrationMapping, filt
           versionLabel: destItem.versionLabel, destSize: destItem.size,
         })
       } else {
-        rows.push({ status: 'missing', name: src.itemName, relPath: rel, sourceSize: src.fileSizeBytes })
+        rows.push({ status: 'missing', name: src.itemName, relPath: rel, sourceUrl: src.source, destUrl: src.destination, sourceSize: src.fileSizeBytes })
       }
     }
 
@@ -799,6 +815,7 @@ async function runValidation(panel: HTMLElement, mapping: MigrationMapping, filt
       if (!matchedKeys.has(d.relativePath.toLowerCase())) {
         rows.push({
           status: 'extra', name: d.name, relPath: d.relativePath,
+          destUrl: `${rootDestUrl}/${d.relativePath}`,
           title: d.title, createdDateTime: d.createdDateTime,
           lastModifiedDateTime: d.lastModifiedDateTime,
           createdBy: d.createdBy, lastModifiedBy: d.lastModifiedBy,
@@ -850,8 +867,8 @@ function renderValidationTable(wrap: HTMLElement, rows: ValidationRow[], rootUrl
       <table class="rev-val-table" id="rev-val-table">
         <thead>
           <tr>
-            <th>Status</th><th>Name</th><th>Title</th><th>Created</th>
-            <th>Modified</th><th>Owner</th><th>Modified By</th><th>Version</th>
+            <th>Status</th><th>Name</th><th>Source</th><th>Destination</th><th>Title</th>
+            <th>Created</th><th>Modified</th><th>Owner</th><th>Modified By</th><th>Version</th>
           </tr>
         </thead>
         <tbody id="rev-val-tbody">
@@ -859,6 +876,12 @@ function renderValidationTable(wrap: HTMLElement, rows: ValidationRow[], rootUrl
             <tr class="rev-val-row" data-vstatus="${r.status}">
               <td>${statusIcon(r.status)}</td>
               <td class="rev-val-name" title="${escHtml(r.relPath)}">${escHtml(r.name)}</td>
+              <td class="rev-val-url rev-val-url--src" data-fullurl="${escHtml(r.sourceUrl ?? '')}" title="Click to expand">
+                <span class="rev-val-url-short">${escHtml(r.sourceUrl ? truncateUrl(r.sourceUrl) : '—')}</span>
+              </td>
+              <td class="rev-val-url rev-val-url--dest" data-fullurl="${escHtml(r.destUrl ?? '')}" title="Click to expand">
+                <span class="rev-val-url-short">${escHtml(r.destUrl ? truncateUrl(r.destUrl) : '—')}</span>
+              </td>
               <td>${escHtml(r.title ?? '—')}</td>
               <td>${fmtDate(r.createdDateTime)}</td>
               <td>${fmtDate(r.lastModifiedDateTime)}</td>
@@ -869,6 +892,18 @@ function renderValidationTable(wrap: HTMLElement, rows: ValidationRow[], rootUrl
         </tbody>
       </table>
     </div>`
+
+  // URL cell expand on click
+  wrap.querySelectorAll<HTMLElement>('.rev-val-url').forEach(cell => {
+    cell.addEventListener('click', () => {
+      const full = cell.dataset.fullurl ?? ''
+      if (!full || full === '—') return
+      const isExpanded = cell.classList.contains('rev-val-url--expanded')
+      cell.classList.toggle('rev-val-url--expanded', !isExpanded)
+      cell.querySelector('.rev-val-url-short')!.textContent = isExpanded ? truncateUrl(full) : full
+      cell.title = isExpanded ? 'Click to expand' : 'Click to collapse'
+    })
+  })
 
   // Filter pills
   wrap.querySelectorAll<HTMLElement>('.rev-val-pill').forEach(pill => {
@@ -1401,13 +1436,21 @@ function injectReviewStyles(): void {
       position: sticky; top: 0; border-bottom: 1px solid var(--color-border); white-space: nowrap; }
     .rev-val-table td { padding: 6px 10px; border-bottom: 1px solid var(--color-border);
       vertical-align: middle; white-space: nowrap; }
-    .rev-val-name { max-width: 220px; overflow: hidden; text-overflow: ellipsis;
+    .rev-val-name { max-width: 180px; overflow: hidden; text-overflow: ellipsis;
       font-family: 'Consolas', monospace; font-size: 0.76rem; }
     .rev-val-s { font-size: 0.75rem; font-weight: 600; white-space: nowrap; }
     .rev-val-s--matched { color: #107c10; }
     .rev-val-s--missing { color: #a4262c; }
     .rev-val-s--extra   { color: #7d4200; }
     .rev-val-row:hover td { background: #f9f8f7; }
+    .rev-val-url { min-width: 180px; max-width: 260px; cursor: pointer; }
+    .rev-val-url .rev-val-url-short { display: block; font-family: 'Consolas', monospace;
+      font-size: 0.73rem; color: var(--color-primary, #0078d4);
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .rev-val-url--expanded { max-width: 420px; }
+    .rev-val-url--expanded .rev-val-url-short { white-space: normal; overflow: visible;
+      word-break: break-all; text-overflow: unset; }
+    .rev-val-url:hover .rev-val-url-short { text-decoration: underline; }
 
     /* ── Back bar (results tree view) ── */
     .rev-results-back-bar { display: flex; align-items: center; gap: 12px; padding: 8px 16px;
