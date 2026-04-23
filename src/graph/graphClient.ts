@@ -1024,8 +1024,13 @@ export async function resolveOneDriveFolderByPath(
  * Uses a BFS level-by-level approach: all folders at the same depth are
  * enumerated in parallel, keeping API calls low while remaining readable.
  */
-export async function listDriveItemsRecursive(driveId: string, folderId: string): Promise<DriveItemFlat[]> {
+export async function listDriveItemsRecursive(
+  driveId: string,
+  folderId: string,
+  onProgress?: (filesFound: number, foldersScanned: number) => void,
+): Promise<DriveItemFlat[]> {
   const results: DriveItemFlat[] = []
+  let foldersScanned = 0
 
   // Queue entries: folders still to be enumerated
   let pending: Array<{ id: string; relPath: string }> = [{ id: folderId, relPath: '' }]
@@ -1072,8 +1077,11 @@ export async function listDriveItemsRecursive(driveId: string, folderId: string)
           })
           if (isFolder) pending.push({ id: item.id, relPath: itemPath })
         }
+        onProgress?.(results.filter(r => !r.isFolder).length, foldersScanned)
         url = (page as Record<string, unknown>)['@odata.nextLink'] as string ?? ''
       }
+      foldersScanned++
+      onProgress?.(results.filter(r => !r.isFolder).length, foldersScanned)
     }))
   }
 

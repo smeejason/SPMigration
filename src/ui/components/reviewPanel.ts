@@ -717,17 +717,45 @@ function truncateUrl(url: string, maxLen = 60): string {
   return '…' + sep + result
 }
 
+const VALIDATION_STEPS = ['Analysing results', 'Resolving destination', 'Enumerating files', 'Comparing']
+
 async function runValidation(panel: HTMLElement, mapping: MigrationMapping, filteredItems: MigrationResultItem[]): Promise<void> {
   // Store context so Re-check button can re-invoke
   ;(panel as HTMLElement & { _valCtx?: unknown })._valCtx = { mapping, items: filteredItems }
   const wrap = panel.querySelector<HTMLElement>('#rev-val-wrap')!
 
-  const setStatus = (msg: string) => {
-    wrap.innerHTML = `<div class="rev-val-loading"><span class="spinner"></span><span>${escHtml(msg)}</span></div>`
+  const renderProgress = (stepIdx: number, pct: number, detail: string) => {
+    wrap.innerHTML = `
+      <div class="rev-val-progress">
+        <div class="rev-val-progress-steps">
+          ${VALIDATION_STEPS.map((s, i) => `
+            <div class="rev-val-pstep ${i < stepIdx ? 'rev-val-pstep--done' : i === stepIdx ? 'rev-val-pstep--active' : ''}">
+              <span class="rev-val-pstep-dot">${i < stepIdx ? '✓' : i === stepIdx ? '●' : '○'}</span>
+              <span class="rev-val-pstep-label">${escHtml(s)}</span>
+            </div>`).join('')}
+        </div>
+        <div class="rev-val-progress-bar-wrap">
+          <div class="rev-val-progress-bar" style="width:${pct}%"></div>
+        </div>
+        <div class="rev-val-progress-detail">${escHtml(detail)}</div>
+      </div>`
+  }
+
+  // Lightweight updater for enumeration step — only updates the bar and detail, not the whole DOM
+  const updateEnumProgress = (filesFound: number, foldersScanned: number) => {
+    const bar = wrap.querySelector<HTMLElement>('.rev-val-progress-bar')
+    const detail = wrap.querySelector<HTMLElement>('.rev-val-progress-detail')
+    if (bar) {
+      // bar grows from 30% → 80% as folders are scanned (unbounded, so we use log scale)
+      const grow = Math.min(50, Math.log10(foldersScanned + 1) * 22)
+      bar.style.width = `${30 + grow}%`
+    }
+    if (detail) detail.textContent = `Found ${filesFound.toLocaleString()} file${filesFound !== 1 ? 's' : ''} across ${foldersScanned.toLocaleString()} folder${foldersScanned !== 1 ? 's' : ''} scanned…`
   }
 
   try {
     // Step 1: find the migrated files (skip recycle bin)
+    renderProgress(0, 5, `Analysing SPMT results…`)
     const migratedItems = filteredItems.filter(i => i.status === 'Migrated' && !i.isRecycleBin && i.destination)
     const migratedFiles  = migratedItems.filter(i => i.itemType === 'File')
 
@@ -737,28 +765,18 @@ async function runValidation(panel: HTMLElement, mapping: MigrationMapping, filt
     }
 
     // Step 2: derive the enumeration root — parent directory of the shallowest destination.
-    // We never try to resolve a migrated item itself (it may be a folder listed by SPMT but
-    // whose name was changed or which we don't need to look up directly). Instead we resolve
-    // the container that holds all migrated content and enumerate everything under it.
     const shallowest = migratedItems.slice().sort((a, b) => a.destination.length - b.destination.length)[0]
     const rootDestUrl = shallowest.destination.split('/').slice(0, -1).join('/')
 
-    setStatus('Resolving destination folder…')
+    renderProgress(1, 15, `Resolving destination folder…`)
     let ref: { driveId: string; itemId: string } | null = null
 
-    // For OneDrive personal sites, navigate via the user's drive (site-collection-admin
-    // access works here; /shares requires standard file-level read permissions which
-    // may not be present).
     const isPersonalOneDrive = /\/personal\//i.test(rootDestUrl)
     const oneDriveUserId = isPersonalOneDrive ? (mapping.targetSite?.id ?? '') : ''
 
     if (isPersonalOneDrive && oneDriveUserId) {
       try {
         const urlParsed = new URL(rootDestUrl)
-        // pathname = /personal/{username}/Documents/subfolder/…
-        // The Graph drive root for a personal OneDrive IS the Documents library root,
-        // so we skip the first 4 segments: ['', 'personal', username, 'Documents']
-        // giving a drive-relative path like 'subfolder/…' or '' (= root of Documents).
         const parts = urlParsed.pathname.split('/').slice(4).map(decodeURIComponent).filter(Boolean)
         const drivePath = parts.join('/')
         ref = await resolveOneDriveFolderByPath(oneDriveUserId, drivePath)
@@ -774,8 +792,8 @@ async function runValidation(panel: HTMLElement, mapping: MigrationMapping, filt
     }
 
     // Step 3: enumerate all items from the destination
-    setStatus('Enumerating destination files (this may take a moment for large libraries)…')
-    const destItems = await listDriveItemsRecursive(ref.driveId, ref.itemId)
+    renderProgress(2, 30, `Enumerating destination files — scanning folders…`)
+    const destItems = await listDriveItemsRecursive(ref.driveId, ref.itemId, updateEnumProgress)
     const destFiles = destItems.filter(d => !d.isFolder)
 
     // Build lookup: normalized relative path → DriveItemFlat
@@ -784,9 +802,8 @@ async function runValidation(panel: HTMLElement, mapping: MigrationMapping, filt
       destMap.set(d.relativePath.toLowerCase(), d)
     }
 
-    // Step 4: build source lookup from SPMT migrated files
-    // Relative path = destination URL minus the root URL prefix
-    setStatus('Comparing datasets…')
+    // Step 4: compare datasets
+    renderProgress(3, 82, `Comparing ${migratedFiles.length.toLocaleString()} source files against ${destFiles.length.toLocaleString()} destination files…`)
     const rootNorm = normalizeDestUrl(rootDestUrl)
     const rows: ValidationRow[] = []
     const matchedKeys = new Set<string>()
@@ -1410,6 +1427,27 @@ function injectReviewStyles(): void {
     .rev-val-wrap { flex: 1; display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
     .rev-val-loading { display: flex; align-items: center; gap: 10px; padding: 40px 24px;
       font-size: 0.9rem; color: var(--color-text-muted); }
+    .rev-val-progress { padding: 40px 48px; display: flex; flex-direction: column; gap: 20px; max-width: 600px; }
+    .rev-val-progress-steps { display: flex; gap: 0; }
+    .rev-val-pstep { display: flex; flex-direction: column; align-items: center; flex: 1; gap: 6px; position: relative; }
+    .rev-val-pstep + .rev-val-pstep::before { content: ''; position: absolute; left: calc(-50%); top: 10px;
+      width: 100%; height: 2px; background: var(--color-border); z-index: 0; }
+    .rev-val-pstep--done + .rev-val-pstep::before { background: var(--color-primary, #0078d4); }
+    .rev-val-pstep-dot { width: 22px; height: 22px; border-radius: 50%; border: 2px solid var(--color-border);
+      background: white; display: flex; align-items: center; justify-content: center;
+      font-size: 0.7rem; font-weight: 700; z-index: 1; position: relative; }
+    .rev-val-pstep--done .rev-val-pstep-dot { background: var(--color-primary, #0078d4);
+      border-color: var(--color-primary, #0078d4); color: white; }
+    .rev-val-pstep--active .rev-val-pstep-dot { border-color: var(--color-primary, #0078d4);
+      color: var(--color-primary, #0078d4); animation: rev-pulse 1.2s ease-in-out infinite; }
+    @keyframes rev-pulse { 0%,100% { box-shadow: 0 0 0 0 rgba(0,120,212,0.35); } 50% { box-shadow: 0 0 0 6px rgba(0,120,212,0); } }
+    .rev-val-pstep-label { font-size: 0.72rem; color: var(--color-text-muted); text-align: center; white-space: nowrap; }
+    .rev-val-pstep--done .rev-val-pstep-label,
+    .rev-val-pstep--active .rev-val-pstep-label { color: var(--color-text); font-weight: 500; }
+    .rev-val-progress-bar-wrap { height: 6px; background: var(--color-border); border-radius: 3px; overflow: hidden; }
+    .rev-val-progress-bar { height: 100%; background: var(--color-primary, #0078d4); border-radius: 3px;
+      transition: width 0.4s ease; }
+    .rev-val-progress-detail { font-size: 0.82rem; color: var(--color-text-muted); }
     .rev-val-empty { display: flex; flex-direction: column; align-items: center; justify-content: center;
       padding: 60px 24px; text-align: center; gap: 12px; flex: 1; }
     .rev-val-empty-icon { font-size: 2.5rem; }
