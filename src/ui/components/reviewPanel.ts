@@ -891,7 +891,6 @@ function renderValidationTable(wrap: HTMLElement, rows: ValidationRow[], rootUrl
             <th style="width:140px">Name</th>
             <th style="width:200px">Source</th>
             <th style="width:200px">Destination</th>
-            <th style="width:140px">Title</th>
             <th style="width:110px">Created</th>
             <th style="width:110px">Modified</th>
             <th style="width:130px">Owner</th>
@@ -910,7 +909,6 @@ function renderValidationTable(wrap: HTMLElement, rows: ValidationRow[], rootUrl
               <td class="rev-val-url rev-val-url--dest" data-fullurl="${escHtml(r.destUrl ?? '')}" title="Click to expand">
                 <span class="rev-val-url-short">${escHtml(r.destUrl ? truncateUrl(r.destUrl) : '—')}</span>
               </td>
-              <td>${escHtml(r.title ?? '—')}</td>
               <td>${fmtDate(r.createdDateTime)}</td>
               <td>${fmtDate(r.lastModifiedDateTime)}</td>
               <td>${escHtml(r.createdBy ?? '—')}</td>
@@ -988,7 +986,7 @@ function downloadValidationCsv(rows: ValidationRow[]): void {
     const s = v ?? ''
     return s.includes(',') || s.includes('"') || s.includes('\n') ? `"${s.replace(/"/g, '""')}"` : s
   }
-  const headers = ['Status', 'Name', 'Source', 'Destination', 'Title', 'Created', 'Modified', 'Owner', 'Modified By', 'Version']
+  const headers = ['Status', 'Name', 'Source', 'Destination', 'Created', 'Modified', 'Owner', 'Modified By', 'Version']
   const fmtDate = (s?: string) => {
     if (!s) return ''
     try { return new Date(s).toLocaleDateString(undefined, { year: 'numeric', month: '2-digit', day: '2-digit' }) } catch { return s }
@@ -997,7 +995,7 @@ function downloadValidationCsv(rows: ValidationRow[]): void {
     headers.join(','),
     ...rows.map(r => [
       r.status, r.name, r.sourceUrl ?? '', r.destUrl ?? '',
-      r.title ?? '', fmtDate(r.createdDateTime), fmtDate(r.lastModifiedDateTime),
+      fmtDate(r.createdDateTime), fmtDate(r.lastModifiedDateTime),
       r.createdBy ?? '', r.lastModifiedBy ?? '', r.versionLabel ?? '',
     ].map(csvCell).join(',')),
   ]
