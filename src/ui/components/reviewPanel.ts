@@ -1,10 +1,10 @@
 import { getState, setState } from '../../state/store'
 import { persistProjectMappings, getSpConfig, updateProject } from '../../graph/projectService'
 import { renderPersonCard, accessStatusBadge } from './oneDrivePersonCard'
-import { downloadDriveItem, resolveSharePointItemByUrl } from '../../graph/graphClient'
+import { downloadDriveItem, resolveSharePointItemByUrl, resolveDriveItemRef, listDriveItemsRecursive } from '../../graph/graphClient'
 import { buildReviewTree } from '../../parsers/migrationResultParser'
 import type { MigrationMapping, MigrationPhase, OneDriveAccessStatus, MigrationResultSummary, MigrationResultItem, ReviewData, ReviewNode } from '../../types'
-import type { SpDriveItemDetails } from '../../graph/graphClient'
+import type { SpDriveItemDetails, DriveItemFlat } from '../../graph/graphClient'
 
 // ─── Tree view module-level state (scoped per-open) ──────────────────────────
 
@@ -550,78 +550,99 @@ function openResultsView(container: HTMLElement, mapping: MigrationMapping, revi
         <span class="rev-results-breadcrumb">Results for <strong>${escHtml(sourceName)}</strong></span>
       </div>
 
-      <div class="review-layout">
-        <div class="review-left">
-          <div class="review-stats-bar">
-            <div class="rstat-card">
-              <div class="rstat-label">TOTAL ITEMS</div>
-              <div class="rstat-value rstat-blue">${totals.total.toLocaleString()}</div>
+      <div class="rev-tabs-bar">
+        <button class="rev-tab-btn rev-tab-btn--active" data-tab="tree">Tree View</button>
+        <button class="rev-tab-btn" data-tab="validation">File Validation</button>
+      </div>
+
+      <div id="rev-tab-tree" class="rev-tab-pane">
+        <div class="review-layout">
+          <div class="review-left">
+            <div class="review-stats-bar">
+              <div class="rstat-card">
+                <div class="rstat-label">TOTAL ITEMS</div>
+                <div class="rstat-value rstat-blue">${totals.total.toLocaleString()}</div>
+              </div>
+              <div class="rstat-card">
+                <div class="rstat-label">MIGRATED</div>
+                <div class="rstat-value rstat-green">${totals.migrated.toLocaleString()}${pct(totals.migrated)}</div>
+              </div>
+              <div class="rstat-card rstat-card--danger">
+                <div class="rstat-label">FAILED</div>
+                <div class="rstat-value rstat-red">${totals.failed.toLocaleString()}</div>
+                <div class="rstat-sub">${(totals.failed - totals.failedRecycleBin).toLocaleString()} excl. recycle bin</div>
+              </div>
+              <div class="rstat-card rstat-card--skipped">
+                <div class="rstat-label">SKIPPED</div>
+                <div class="rstat-value rstat-amber">${totals.skipped.toLocaleString()}</div>
+                <div class="rstat-sub">${(totals.skipped - totals.skippedRecycleBin).toLocaleString()} excl. recycle bin</div>
+              </div>
+              ${totals.partial > 0 ? `<div class="rstat-card">
+                <div class="rstat-label">PARTIAL</div>
+                <div class="rstat-value rstat-amber">${totals.partial.toLocaleString()}</div>
+              </div>` : ''}
             </div>
-            <div class="rstat-card">
-              <div class="rstat-label">MIGRATED</div>
-              <div class="rstat-value rstat-green">${totals.migrated.toLocaleString()}${pct(totals.migrated)}</div>
+
+            <div class="review-filter-bar">
+              <div class="review-search-wrap">
+                <input type="text" id="review-search" class="form-input review-search-input" placeholder="Search by path or name…" />
+              </div>
+              <div class="review-pill-group">
+                <button class="review-pill review-pill--active" data-filter="all">All</button>
+                <button class="review-pill" data-filter="Migrated">✓ Migrated</button>
+                <button class="review-pill" data-filter="Failed">✗ Failed</button>
+                <button class="review-pill" data-filter="Skipped">⊘ Skipped</button>
+                ${totals.partial > 0 ? '<button class="review-pill" data-filter="Partial">◐ Partial</button>' : ''}
+              </div>
+              <label class="review-rb-label">
+                <input type="checkbox" id="review-hide-rb" /> Hide Recycle Bin
+              </label>
             </div>
-            <div class="rstat-card rstat-card--danger">
-              <div class="rstat-label">FAILED</div>
-              <div class="rstat-value rstat-red">${totals.failed.toLocaleString()}</div>
-              <div class="rstat-sub">${(totals.failed - totals.failedRecycleBin).toLocaleString()} excl. recycle bin</div>
+
+            <div class="review-col-header">
+              <span class="rch-name">PATH</span>
+              <span class="rch-stat rch-migrated">MIGRATED</span>
+              <span class="rch-stat rch-failed">FAILED</span>
+              <span class="rch-stat rch-skipped">SKIPPED</span>
+              <span class="rch-stat">TOTAL</span>
             </div>
-            <div class="rstat-card rstat-card--skipped">
-              <div class="rstat-label">SKIPPED</div>
-              <div class="rstat-value rstat-amber">${totals.skipped.toLocaleString()}</div>
-              <div class="rstat-sub">${(totals.skipped - totals.skippedRecycleBin).toLocaleString()} excl. recycle bin</div>
-            </div>
-            ${totals.partial > 0 ? `<div class="rstat-card">
-              <div class="rstat-label">PARTIAL</div>
-              <div class="rstat-value rstat-amber">${totals.partial.toLocaleString()}</div>
-            </div>` : ''}
+
+            <ul class="review-tree" id="review-tree"></ul>
           </div>
 
-          <div class="review-filter-bar">
-            <div class="review-search-wrap">
-              <input type="text" id="review-search" class="form-input review-search-input" placeholder="Search by path or name…" />
+          <div class="review-right" id="review-right">
+            <div class="review-right-header">
+              <label class="review-feed-toggle-label">
+                <input type="checkbox" id="review-sp-feed-toggle" ${_spFeedEnabled ? 'checked' : ''} />
+                <span>SharePoint Feed Enabled</span>
+              </label>
             </div>
-            <div class="review-pill-group">
-              <button class="review-pill review-pill--active" data-filter="all">All</button>
-              <button class="review-pill" data-filter="Migrated">✓ Migrated</button>
-              <button class="review-pill" data-filter="Failed">✗ Failed</button>
-              <button class="review-pill" data-filter="Skipped">⊘ Skipped</button>
-              ${totals.partial > 0 ? '<button class="review-pill" data-filter="Partial">◐ Partial</button>' : ''}
+            <div class="review-item-panel" id="review-item-panel">
+              <div class="review-item-placeholder">
+                <span class="review-placeholder-arrow">←</span>
+                <p>Select a file or folder</p>
+              </div>
             </div>
-            <label class="review-rb-label">
-              <input type="checkbox" id="review-hide-rb" /> Hide Recycle Bin
-            </label>
+            <div class="review-sp-section" id="review-sp-section" style="${_spFeedEnabled ? '' : 'display:none'}">
+              <div class="review-sp-header">SharePoint Details</div>
+              <div id="review-sp-content" class="review-sp-content">
+                <div class="review-sp-placeholder">Select an item to load SharePoint details</div>
+              </div>
+            </div>
           </div>
-
-          <div class="review-col-header">
-            <span class="rch-name">PATH</span>
-            <span class="rch-stat rch-migrated">MIGRATED</span>
-            <span class="rch-stat rch-failed">FAILED</span>
-            <span class="rch-stat rch-skipped">SKIPPED</span>
-            <span class="rch-stat">TOTAL</span>
-          </div>
-
-          <ul class="review-tree" id="review-tree"></ul>
         </div>
+      </div>
 
-        <div class="review-right" id="review-right">
-          <div class="review-right-header">
-            <label class="review-feed-toggle-label">
-              <input type="checkbox" id="review-sp-feed-toggle" ${_spFeedEnabled ? 'checked' : ''} />
-              <span>SharePoint Feed Enabled</span>
-            </label>
-          </div>
-          <div class="review-item-panel" id="review-item-panel">
-            <div class="review-item-placeholder">
-              <span class="review-placeholder-arrow">←</span>
-              <p>Select a file or folder</p>
+      <div id="rev-tab-validation" class="rev-tab-pane" style="display:none">
+        <div class="rev-val-wrap" id="rev-val-wrap">
+          <div class="rev-val-empty" id="rev-val-empty">
+            <div class="rev-val-empty-icon">🔍</div>
+            <div class="rev-val-empty-title">File Validation</div>
+            <div class="rev-val-empty-desc">
+              Finds the highest-level migrated folder, queries the destination for all files
+              and folders under that path, then compares them against your SPMT migration results.
             </div>
-          </div>
-          <div class="review-sp-section" id="review-sp-section" style="${_spFeedEnabled ? '' : 'display:none'}">
-            <div class="review-sp-header">SharePoint Details</div>
-            <div id="review-sp-content" class="review-sp-content">
-              <div class="review-sp-placeholder">Select an item to load SharePoint details</div>
-            </div>
+            <button class="btn btn-primary rev-check-files-btn" id="rev-check-files-btn">Check Files</button>
           </div>
         </div>
       </div>
@@ -636,8 +657,232 @@ function openResultsView(container: HTMLElement, mapping: MigrationMapping, revi
   setupResultsFilters(panel, rootNodes)
   setupSpFeedToggle(panel)
 
+  // Tab switching
+  panel.querySelectorAll<HTMLButtonElement>('.rev-tab-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      panel.querySelectorAll('.rev-tab-btn').forEach(b => b.classList.remove('rev-tab-btn--active'))
+      btn.classList.add('rev-tab-btn--active')
+      const tab = btn.dataset.tab!
+      panel.querySelectorAll<HTMLElement>('.rev-tab-pane').forEach(p => { p.style.display = 'none' })
+      panel.querySelector<HTMLElement>(`#rev-tab-${tab}`)!.style.display = ''
+    })
+  })
+
+  // Check Files button
+  panel.querySelector('#rev-check-files-btn')!.addEventListener('click', () => {
+    void runValidation(panel, mapping, filteredItems)
+  })
+
   panel.querySelector('#rev-back-btn')!.addEventListener('click', () => {
     void renderReviewPanel(container)
+  })
+}
+
+// ─── File Validation ─────────────────────────────────────────────────────────
+
+interface ValidationRow {
+  status: 'matched' | 'missing' | 'extra'
+  name: string
+  relPath: string
+  // Source (SPMT)
+  sourceSize?: number
+  // Destination (Graph)
+  title?: string
+  createdDateTime?: string
+  lastModifiedDateTime?: string
+  createdBy?: string
+  lastModifiedBy?: string
+  versionLabel?: string
+  destSize?: number
+}
+
+function normalizeDestUrl(url: string): string {
+  try { return decodeURIComponent(url).toLowerCase().replace(/\/+$/, '') } catch { return url.toLowerCase().replace(/\/+$/, '') }
+}
+
+async function runValidation(panel: HTMLElement, mapping: MigrationMapping, filteredItems: MigrationResultItem[]): Promise<void> {
+  // Store context so Re-check button can re-invoke
+  ;(panel as HTMLElement & { _valCtx?: unknown })._valCtx = { mapping, items: filteredItems }
+  const wrap = panel.querySelector<HTMLElement>('#rev-val-wrap')!
+
+  const setStatus = (msg: string) => {
+    wrap.innerHTML = `<div class="rev-val-loading"><span class="spinner"></span><span>${escHtml(msg)}</span></div>`
+  }
+
+  try {
+    // Step 1: find the migrated files & folders (skip recycle bin)
+    const migratedItems = filteredItems.filter(i => i.status === 'Migrated' && !i.isRecycleBin && i.destination)
+    const migratedFiles   = migratedItems.filter(i => i.itemType === 'File')
+    const migratedFolders = migratedItems.filter(i => i.itemType === 'Folder')
+
+    if (migratedFiles.length === 0) {
+      wrap.innerHTML = `<div class="rev-val-empty"><div class="rev-val-empty-title">No migrated files</div><div class="rev-val-empty-desc">No files with status "Migrated" were found in the SPMT results for this source.</div></div>`
+      return
+    }
+
+    // Step 2: find the root destination — shortest destination URL among folders (or parent of shortest file URL)
+    const candidates = migratedFolders.length > 0 ? migratedFolders : migratedFiles
+    const rootRaw = candidates.slice().sort((a, b) => a.destination.length - b.destination.length)[0].destination
+    const rootDestUrl = migratedFolders.length > 0
+      ? rootRaw
+      : rootRaw.split('/').slice(0, -1).join('/')  // parent dir of shortest file
+
+    setStatus('Resolving destination folder…')
+    const ref = await resolveDriveItemRef(rootDestUrl)
+    if (!ref) {
+      wrap.innerHTML = `<div class="rev-val-empty"><div class="rev-val-empty-title">Could not resolve destination</div><div class="rev-val-empty-desc">Failed to look up the destination folder in SharePoint/OneDrive. Check that you have access to:<br><code>${escHtml(rootDestUrl)}</code></div></div>`
+      return
+    }
+
+    // Step 3: enumerate all items from the destination
+    setStatus('Enumerating destination files (this may take a moment for large libraries)…')
+    const destItems = await listDriveItemsRecursive(ref.driveId, ref.itemId)
+    const destFiles = destItems.filter(d => !d.isFolder)
+
+    // Build lookup: normalized relative path → DriveItemFlat
+    const destMap = new Map<string, DriveItemFlat>()
+    for (const d of destFiles) {
+      destMap.set(d.relativePath.toLowerCase(), d)
+    }
+
+    // Step 4: build source lookup from SPMT migrated files
+    // Relative path = destination URL minus the root URL prefix
+    setStatus('Comparing datasets…')
+    const rootNorm = normalizeDestUrl(rootDestUrl)
+    const rows: ValidationRow[] = []
+    const matchedKeys = new Set<string>()
+
+    for (const src of migratedFiles) {
+      const srcNorm = normalizeDestUrl(src.destination)
+      let rel = srcNorm.startsWith(rootNorm + '/') ? srcNorm.slice(rootNorm.length + 1) : src.itemName
+      // Try exact match first, then case-insensitive
+      const destItem = destMap.get(rel) ?? destMap.get(rel.toLowerCase())
+      if (destItem) {
+        matchedKeys.add(destItem.relativePath.toLowerCase())
+        rows.push({
+          status: 'matched', name: src.itemName, relPath: rel,
+          sourceSize: src.fileSizeBytes,
+          title: destItem.title, createdDateTime: destItem.createdDateTime,
+          lastModifiedDateTime: destItem.lastModifiedDateTime,
+          createdBy: destItem.createdBy, lastModifiedBy: destItem.lastModifiedBy,
+          versionLabel: destItem.versionLabel, destSize: destItem.size,
+        })
+      } else {
+        rows.push({ status: 'missing', name: src.itemName, relPath: rel, sourceSize: src.fileSizeBytes })
+      }
+    }
+
+    // Extra files in destination not in source
+    for (const d of destFiles) {
+      if (!matchedKeys.has(d.relativePath.toLowerCase())) {
+        rows.push({
+          status: 'extra', name: d.name, relPath: d.relativePath,
+          title: d.title, createdDateTime: d.createdDateTime,
+          lastModifiedDateTime: d.lastModifiedDateTime,
+          createdBy: d.createdBy, lastModifiedBy: d.lastModifiedBy,
+          versionLabel: d.versionLabel, destSize: d.size,
+        })
+      }
+    }
+
+    renderValidationTable(wrap, rows, rootDestUrl)
+  } catch (err) {
+    wrap.innerHTML = `<div class="rev-val-empty"><div class="rev-val-empty-title">Validation failed</div><div class="rev-val-empty-desc">${escHtml((err as Error)?.message ?? String(err))}</div><button class="btn btn-ghost rev-check-files-btn" id="rev-check-files-btn-retry" style="margin-top:12px">Retry</button></div>`
+    wrap.querySelector('#rev-check-files-btn-retry')?.addEventListener('click', () => {
+      void runValidation(panel, mapping, filteredItems)
+    })
+  }
+}
+
+function renderValidationTable(wrap: HTMLElement, rows: ValidationRow[], rootUrl: string): void {
+  const matched = rows.filter(r => r.status === 'matched').length
+  const missing = rows.filter(r => r.status === 'missing').length
+  const extra   = rows.filter(r => r.status === 'extra').length
+
+  const fmtDate = (s?: string) => {
+    if (!s) return '—'
+    try { return new Date(s).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }) } catch { return s }
+  }
+
+  const statusIcon = (s: ValidationRow['status']) =>
+    s === 'matched' ? '<span class="rev-val-s rev-val-s--matched">✓ Matched</span>'
+    : s === 'missing' ? '<span class="rev-val-s rev-val-s--missing">✗ Missing</span>'
+    : '<span class="rev-val-s rev-val-s--extra">⚠ Extra</span>'
+
+  wrap.innerHTML = `
+    <div class="rev-val-summary">
+      <span class="rev-val-stat rev-val-stat--ok">✓ ${matched.toLocaleString()} matched</span>
+      <span class="rev-val-stat rev-val-stat--err">${missing > 0 ? `✗ ${missing.toLocaleString()} missing` : '✓ None missing'}</span>
+      <span class="rev-val-stat rev-val-stat--warn">${extra > 0 ? `⚠ ${extra.toLocaleString()} extra` : '✓ None extra'}</span>
+      <span class="rev-val-root" title="${escHtml(rootUrl)}">Root: <code>${escHtml(rootUrl.split('/').slice(-2).join('/'))}</code></span>
+      <button class="btn btn-ghost btn-sm rev-val-recheck-btn">Re-check</button>
+    </div>
+    <div class="rev-val-filter-bar">
+      <button class="rev-val-pill rev-val-pill--active" data-vfilter="all">All (${rows.length})</button>
+      <button class="rev-val-pill" data-vfilter="matched">✓ Matched (${matched})</button>
+      <button class="rev-val-pill" data-vfilter="missing">✗ Missing (${missing})</button>
+      <button class="rev-val-pill" data-vfilter="extra">⚠ Extra (${extra})</button>
+      <input type="text" class="rev-val-search form-input" placeholder="Filter by name or path…" />
+    </div>
+    <div class="rev-val-table-wrap">
+      <table class="rev-val-table" id="rev-val-table">
+        <thead>
+          <tr>
+            <th>Status</th><th>Name</th><th>Title</th><th>Created</th>
+            <th>Modified</th><th>Owner</th><th>Modified By</th><th>Version</th>
+          </tr>
+        </thead>
+        <tbody id="rev-val-tbody">
+          ${rows.map(r => `
+            <tr class="rev-val-row" data-vstatus="${r.status}">
+              <td>${statusIcon(r.status)}</td>
+              <td class="rev-val-name" title="${escHtml(r.relPath)}">${escHtml(r.name)}</td>
+              <td>${escHtml(r.title ?? '—')}</td>
+              <td>${fmtDate(r.createdDateTime)}</td>
+              <td>${fmtDate(r.lastModifiedDateTime)}</td>
+              <td>${escHtml(r.createdBy ?? '—')}</td>
+              <td>${escHtml(r.lastModifiedBy ?? '—')}</td>
+              <td>${escHtml(r.versionLabel || '—')}</td>
+            </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>`
+
+  // Filter pills
+  wrap.querySelectorAll<HTMLElement>('.rev-val-pill').forEach(pill => {
+    pill.addEventListener('click', () => {
+      wrap.querySelectorAll('.rev-val-pill').forEach(p => p.classList.remove('rev-val-pill--active'))
+      pill.classList.add('rev-val-pill--active')
+      const f = pill.dataset.vfilter!
+      const search = (wrap.querySelector<HTMLInputElement>('.rev-val-search')?.value ?? '').toLowerCase()
+      applyValidationFilter(wrap, f, search)
+    })
+  })
+
+  // Search
+  wrap.querySelector<HTMLInputElement>('.rev-val-search')?.addEventListener('input', (e) => {
+    const search = (e.target as HTMLInputElement).value.toLowerCase()
+    const f = wrap.querySelector<HTMLElement>('.rev-val-pill--active')?.dataset.vfilter ?? 'all'
+    applyValidationFilter(wrap, f, search)
+  })
+
+  // Re-check — re-run via closure
+  wrap.querySelector('.rev-val-recheck-btn')?.addEventListener('click', () => {
+    const panel = wrap.closest<HTMLElement>('.review-panel')
+    if (panel) {
+      const ctx = (panel as HTMLElement & { _valCtx?: { mapping: MigrationMapping; items: MigrationResultItem[] } })._valCtx
+      if (ctx) void runValidation(panel, ctx.mapping, ctx.items)
+    }
+  })
+}
+
+function applyValidationFilter(wrap: HTMLElement, status: string, search: string): void {
+  wrap.querySelectorAll<HTMLElement>('.rev-val-row').forEach(row => {
+    const matchStatus = status === 'all' || row.dataset.vstatus === status
+    const nameCell = row.querySelector<HTMLElement>('.rev-val-name')
+    const matchSearch = !search || (nameCell?.textContent ?? '').toLowerCase().includes(search)
+      || (nameCell?.title ?? '').toLowerCase().includes(search)
+    row.style.display = matchStatus && matchSearch ? '' : 'none'
   })
 }
 
@@ -1091,6 +1336,56 @@ function injectReviewStyles(): void {
       border: 1px solid var(--color-border); background: white; cursor: pointer; font-family: inherit;
       color: var(--color-primary, #0078d4); }
     .rev-view-results-btn:hover { background: var(--color-primary-light, #deecf9); }
+
+    /* ── Tabs ── */
+    .rev-tabs-bar { display: flex; border-bottom: 2px solid var(--color-border);
+      background: var(--color-surface); flex-shrink: 0; padding: 0 16px; gap: 4px; }
+    .rev-tab-btn { background: none; border: none; border-bottom: 2px solid transparent;
+      padding: 9px 16px; cursor: pointer; font-size: 0.875rem; font-weight: 500;
+      color: var(--color-text-muted); margin-bottom: -2px; font-family: inherit; }
+    .rev-tab-btn:hover { color: var(--color-text); }
+    .rev-tab-btn--active { color: var(--color-primary, #0078d4); border-bottom-color: var(--color-primary, #0078d4); }
+    .rev-tab-pane { flex: 1; overflow: hidden; display: flex; flex-direction: column; min-height: 0; }
+
+    /* ── Validation tab ── */
+    .rev-val-wrap { flex: 1; display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+    .rev-val-loading { display: flex; align-items: center; gap: 10px; padding: 40px 24px;
+      font-size: 0.9rem; color: var(--color-text-muted); }
+    .rev-val-empty { display: flex; flex-direction: column; align-items: center; justify-content: center;
+      padding: 60px 24px; text-align: center; gap: 12px; flex: 1; }
+    .rev-val-empty-icon { font-size: 2.5rem; }
+    .rev-val-empty-title { font-size: 1rem; font-weight: 600; }
+    .rev-val-empty-desc { font-size: 0.85rem; color: var(--color-text-muted); max-width: 480px; line-height: 1.5; }
+    .rev-check-files-btn { margin-top: 4px; }
+    .rev-val-summary { display: flex; align-items: center; gap: 16px; padding: 10px 16px;
+      background: var(--color-surface-alt); border-bottom: 1px solid var(--color-border);
+      flex-shrink: 0; flex-wrap: wrap; }
+    .rev-val-stat { font-size: 0.82rem; font-weight: 600; }
+    .rev-val-stat--ok   { color: #107c10; }
+    .rev-val-stat--err  { color: #a4262c; }
+    .rev-val-stat--warn { color: #7d4200; }
+    .rev-val-root { font-size: 0.78rem; color: var(--color-text-muted); margin-left: auto; }
+    .rev-val-root code { font-size: 0.78rem; background: #f3f2f1; padding: 1px 4px; border-radius: 3px; }
+    .rev-val-filter-bar { display: flex; align-items: center; gap: 6px; padding: 8px 16px;
+      border-bottom: 1px solid var(--color-border); flex-shrink: 0; flex-wrap: wrap; }
+    .rev-val-pill { border: 1px solid var(--color-border); background: white; border-radius: 20px;
+      padding: 3px 12px; font-size: 0.75rem; cursor: pointer; font-family: inherit; }
+    .rev-val-pill--active { background: var(--color-primary, #0078d4); color: white; border-color: var(--color-primary); }
+    .rev-val-search { font-size: 0.8rem !important; padding: 3px 8px !important; width: 200px; margin-left: auto; }
+    .rev-val-table-wrap { flex: 1; overflow-y: auto; min-height: 0; }
+    .rev-val-table { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
+    .rev-val-table th { text-align: left; padding: 6px 10px; background: var(--color-surface-alt);
+      font-weight: 700; text-transform: uppercase; font-size: 0.65rem; letter-spacing: 0.04em;
+      position: sticky; top: 0; border-bottom: 1px solid var(--color-border); white-space: nowrap; }
+    .rev-val-table td { padding: 6px 10px; border-bottom: 1px solid var(--color-border);
+      vertical-align: middle; white-space: nowrap; }
+    .rev-val-name { max-width: 220px; overflow: hidden; text-overflow: ellipsis;
+      font-family: 'Consolas', monospace; font-size: 0.76rem; }
+    .rev-val-s { font-size: 0.75rem; font-weight: 600; white-space: nowrap; }
+    .rev-val-s--matched { color: #107c10; }
+    .rev-val-s--missing { color: #a4262c; }
+    .rev-val-s--extra   { color: #7d4200; }
+    .rev-val-row:hover td { background: #f9f8f7; }
 
     /* ── Back bar (results tree view) ── */
     .rev-results-back-bar { display: flex; align-items: center; gap: 12px; padding: 8px 16px;

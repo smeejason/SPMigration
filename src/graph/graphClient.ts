@@ -957,3 +957,99 @@ export async function loadIAFile(
   if (!response.ok) throw new Error(`IA load failed (${response.status})`)
   return JSON.parse(await response.text()) as IANode[]
 }
+
+// ─── Drive enumeration for validation ─────────────────────────────────────────
+
+export interface DriveItemFlat {
+  id: string
+  name: string
+  driveId: string
+  relativePath: string         // path relative to root folder, e.g. 'subfolder/file.docx'
+  isFolder: boolean
+  size: number
+  createdDateTime: string
+  lastModifiedDateTime: string
+  createdBy: string
+  lastModifiedBy: string
+  title: string                // SharePoint Title field
+  versionLabel: string         // _UIVersionString field (e.g. '2.0')
+}
+
+/**
+ * Resolve any SharePoint/OneDrive URL to a {driveId, itemId} pair suitable
+ * for passing to listDriveItemsRecursive.
+ */
+export async function resolveDriveItemRef(url: string): Promise<{ driveId: string; itemId: string } | null> {
+  try {
+    const encoded = 'u!' + btoa(url).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_')
+    const item = await client()
+      .api(`/shares/${encoded}/driveItem`)
+      .select('id,parentReference')
+      .get() as { id: string; parentReference?: { driveId?: string } }
+    const driveId = item.parentReference?.driveId ?? ''
+    return driveId && item.id ? { driveId, itemId: item.id } : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * List every file and folder under a given drive folder, recursively.
+ * Uses a BFS level-by-level approach: all folders at the same depth are
+ * enumerated in parallel, keeping API calls low while remaining readable.
+ */
+export async function listDriveItemsRecursive(driveId: string, folderId: string): Promise<DriveItemFlat[]> {
+  const results: DriveItemFlat[] = []
+
+  // Queue entries: folders still to be enumerated
+  let pending: Array<{ id: string; relPath: string }> = [{ id: folderId, relPath: '' }]
+
+  while (pending.length > 0) {
+    const level = pending
+    pending = []
+
+    await Promise.all(level.map(async ({ id, relPath }) => {
+      let url: string =
+        `/drives/${driveId}/items/${id}/children` +
+        `?$select=id,name,file,folder,size,createdDateTime,lastModifiedDateTime,createdBy,lastModifiedBy` +
+        `&$expand=listItem($expand=fields($select=Title,_UIVersionString))` +
+        `&$top=500`
+
+      while (url) {
+        const page = await client().api(url).get() as {
+          value: Array<{
+            id: string; name: string; file?: unknown; folder?: unknown; size?: number
+            createdDateTime?: string; lastModifiedDateTime?: string
+            createdBy?: { user?: { displayName?: string } }
+            lastModifiedBy?: { user?: { displayName?: string } }
+            listItem?: { fields?: { Title?: string; _UIVersionString?: string } }
+          }>
+          '@odata.nextLink'?: string
+        }
+
+        for (const item of page.value ?? []) {
+          const isFolder = !!item.folder
+          const itemPath = relPath ? `${relPath}/${item.name}` : item.name
+          results.push({
+            id: item.id,
+            name: item.name,
+            driveId,
+            relativePath: itemPath,
+            isFolder,
+            size: item.size ?? 0,
+            createdDateTime: item.createdDateTime ?? '',
+            lastModifiedDateTime: item.lastModifiedDateTime ?? '',
+            createdBy: item.createdBy?.user?.displayName ?? '',
+            lastModifiedBy: item.lastModifiedBy?.user?.displayName ?? '',
+            title: item.listItem?.fields?.Title ?? '',
+            versionLabel: item.listItem?.fields?._UIVersionString ?? '',
+          })
+          if (isFolder) pending.push({ id: item.id, relPath: itemPath })
+        }
+        url = (page as Record<string, unknown>)['@odata.nextLink'] as string ?? ''
+      }
+    }))
+  }
+
+  return results
+}
