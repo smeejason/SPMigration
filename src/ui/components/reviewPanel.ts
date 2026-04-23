@@ -702,17 +702,19 @@ function normalizeDestUrl(url: string): string {
   try { return decodeURIComponent(url).toLowerCase().replace(/\/+$/, '') } catch { return url.toLowerCase().replace(/\/+$/, '') }
 }
 
-function truncateUrl(url: string, maxLen = 55): string {
+function truncateUrl(url: string, maxLen = 60): string {
   if (url.length <= maxLen) return url
-  // Show the last meaningful segments (most specific part of path)
-  const parts = url.split('/')
+  // Detect separator (UNC paths use \, URLs use /)
+  const sep = url.includes('\\') ? '\\' : '/'
+  const parts = url.split(sep).filter(Boolean)
+  // Build from the end so the most specific part is always visible
   let result = parts[parts.length - 1]
   let i = parts.length - 2
-  while (i >= 0 && result.length + parts[i].length + 1 < maxLen - 3) {
-    result = parts[i] + '/' + result
+  while (i >= 0 && result.length + parts[i].length + 1 < maxLen - 1) {
+    result = parts[i] + sep + result
     i--
   }
-  return '…/' + result
+  return '…' + sep + result
 }
 
 async function runValidation(panel: HTMLElement, mapping: MigrationMapping, filteredItems: MigrationResultItem[]): Promise<void> {
@@ -1445,11 +1447,9 @@ function injectReviewStyles(): void {
     .rev-val-row:hover td { background: #f9f8f7; }
     .rev-val-url { min-width: 180px; max-width: 260px; cursor: pointer; }
     .rev-val-url .rev-val-url-short { display: block; font-family: 'Consolas', monospace;
-      font-size: 0.73rem; color: var(--color-primary, #0078d4);
-      white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      font-size: 0.73rem; color: var(--color-primary, #0078d4); white-space: nowrap; }
     .rev-val-url--expanded { max-width: 420px; }
-    .rev-val-url--expanded .rev-val-url-short { white-space: normal; overflow: visible;
-      word-break: break-all; text-overflow: unset; }
+    .rev-val-url--expanded .rev-val-url-short { white-space: normal; word-break: break-all; }
     .rev-val-url:hover .rev-val-url-short { text-decoration: underline; }
 
     /* ── Back bar (results tree view) ── */
