@@ -1,10 +1,12 @@
 import { searchSites, getSiteDrives, saveIAFile, searchUsers, getUserDrive, checkUserDriveAccess, grantUserDriveAccess, revokeUserDriveAccess, getUserById, provisionNewSite, getSiteDesigns, checkSiteAliasAvailable } from '../../graph/graphClient'
 import { getSpConfig, loadProjectIA, persistProjectMappings } from '../../graph/projectService'
 import { setState, getState } from '../../state/store'
-import type { TreeNode, MigrationMapping, SharePointSite, SharePointDrive, NewSiteConfig, UserRef, SiteType, AppUser, IANode } from '../../types'
+import type { TreeNode, MigrationMapping, SharePointSite, SharePointDrive, NewSiteConfig, UserRef, SiteType, AppUser, IANode, MigrationWave } from '../../types'
 
 // Live references to mapping tag elements so we can update them without re-rendering
 const tagRegistry = new Map<string, HTMLSpanElement>()
+// Live references to wave tag elements so we can update them without re-rendering
+const waveTagRegistry = new Map<string, HTMLSpanElement>()
 // Live references to double-mapped warning icons on each row
 const warnRegistry = new Map<string, HTMLSpanElement>()
 // Paths (at stat level) that share a target with another path
@@ -129,6 +131,7 @@ export function renderMappingPanel(container: HTMLElement): void {
         <div class="tree-col-header" id="tree-col-header">
           <span class="tch-name">FOLDER</span>
           <span class="tch-col tch-col-mapped">MAPPED TO</span>
+          ${_isOneDriveProject ? '<span class="tch-col tch-col-wave">WAVE</span>' : ''}
           <span class="tch-col">TOTAL SIZE</span>
           ${_isOneDriveProject ? '<span class="tch-col">RECYCLE BIN</span>' : ''}
           <span class="tch-col">FILES</span>
@@ -147,6 +150,7 @@ export function renderMappingPanel(container: HTMLElement): void {
   injectMappingStyles()
 
   tagRegistry.clear()
+  waveTagRegistry.clear()
   warnRegistry.clear()
   _statsRefreshCallback = () => refreshUsersStats(container, statNodes)
 
@@ -386,6 +390,17 @@ function createMappingNodeEl(node: TreeNode, targetEl: HTMLElement, isRoot = fal
   row.appendChild(accessDeniedEl)
   row.appendChild(warnEl)
   row.appendChild(tagEl)
+
+  if (_isOneDriveProject) {
+    const waveEl = document.createElement('span')
+    waveEl.className = 'tree-col tree-col-wave'
+    const waves = getState().currentProject?.projectData.waves ?? []
+    const currentWave = waves.find(w => w.id === existingMapping?.waveId)
+    waveEl.textContent = currentWave?.name ?? '—'
+    waveTagRegistry.set(node.path, waveEl)
+    row.appendChild(waveEl)
+  }
+
   row.appendChild(colTotal)
 
   if (_isOneDriveProject) {
@@ -1481,6 +1496,16 @@ async function openOneDriveTargetPanel(
               ${projectDefaultSubfolder && isUsingProjectDefault ? 'style="display:none"' : ''} />
           </div>
 
+          <div class="form-group od-wave-group">
+            <label>Migration Wave <span class="form-hint-inline">(optional)</span></label>
+            <select id="od-wave-select" class="form-input od-wave-select">
+              <option value="">— No wave —</option>
+              ${(getState().currentProject?.projectData.waves ?? []).map((w: MigrationWave) =>
+                `<option value="${escHtml(w.id)}"${existing?.waveId === w.id ? ' selected' : ''}>${escHtml(w.name)}</option>`
+              ).join('')}
+            </select>
+          </div>
+
           <div class="target-action-row">
             <button type="button" id="btn-save-od-mapping" class="btn btn-primary">Save Mapping</button>
             ${existing?.targetSite ? `<button type="button" id="btn-remove-od-mapping" class="btn btn-ghost">Remove</button>` : ''}
@@ -1702,6 +1727,7 @@ async function openOneDriveTargetPanel(
   targetEl.querySelector('#btn-save-od-mapping')?.addEventListener('click', async () => {
     if (!selectedUser) { alert('Select a user first.'); return }
     const folderPath = (targetEl.querySelector('#od-folder-path') as HTMLInputElement).value.trim()
+    const selectedWaveId = (targetEl.querySelector('#od-wave-select') as HTMLSelectElement)?.value || undefined
 
     const mapping: MigrationMapping = {
       id: node.path,
@@ -1710,10 +1736,20 @@ async function openOneDriveTargetPanel(
       targetDrive: selectedDriveId ? { id: selectedDriveId, name: 'OneDrive', webUrl: selectedDriveWebUrl, driveType: 'personal' } : null,
       targetFolderPath: folderPath,
       status: 'ready',
+      waveId: selectedWaveId,
     }
 
     const mappings = [...getState().mappings.filter(m => m.sourceNode.path !== node.path), mapping]
     setState({ mappings })
+
+    // Update wave column cell live
+    const waveEl = waveTagRegistry.get(node.path)
+    if (waveEl) {
+      const waves = getState().currentProject?.projectData.waves ?? []
+      const wave = waves.find(w => w.id === selectedWaveId)
+      waveEl.textContent = wave?.name ?? '—'
+    }
+
     onMappingChange(selectedUser.displayName, false)
 
     const saveBtn = targetEl.querySelector('#btn-save-od-mapping') as HTMLButtonElement
@@ -2304,6 +2340,12 @@ function injectMappingStyles(): void {
     .tree-col-mapped--planned { color: #6040a0; }
     .tree-col-mapped--empty { color: var(--color-text-muted); font-weight: 400; }
     .tch-col-mapped { width: 140px; }
+    .tree-col-wave { width: 100px; text-align: right; font-size: 0.78rem; color: var(--color-text-muted);
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex-shrink: 0; }
+    .tch-col-wave { width: 100px; }
+    .od-wave-group { margin-top: 4px; }
+    .form-hint-inline { font-size: 0.8rem; color: var(--color-text-muted); font-weight: 400; margin-left: 4px; }
+    .od-wave-select { font-size: 0.875rem; }
     /* Access-denied row highlight and icon */
     .mapping-row--access-denied { background: rgba(168, 0, 0, 0.06); }
     .mapping-row--access-denied:hover { background: rgba(168, 0, 0, 0.12); }

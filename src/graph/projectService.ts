@@ -2,7 +2,7 @@ import { Client } from '@microsoft/microsoft-graph-client'
 import { getToken } from '../auth/authService'
 import { downloadDriveItem, loadMappingsFile, loadOneDriveMappingsFile, loadIAFile, saveMappingsFile } from './graphClient'
 import { getState, setState } from '../state/store'
-import type { MigrationProject, ProjectData, ProjectStatus, ProjectType, GraphListItem, SharePointUser, TreeNode, MigrationMapping, IANode } from '../types'
+import type { MigrationProject, ProjectData, ProjectStatus, ProjectType, GraphListItem, SharePointUser, TreeNode, MigrationMapping, IANode, MigrationWave } from '../types'
 
 // ─── Config ───────────────────────────────────────────────────────────────────
 
@@ -270,6 +270,14 @@ export async function persistProjectMappings(mappings: MigrationMapping[]): Prom
     await updateProject(project.id, { projectData: updatedProjectData })
     setState({ mappings, currentProject: { ...project, projectData: updatedProjectData } })
   }
+}
+
+export async function persistWaves(waves: MigrationWave[]): Promise<void> {
+  const project = getState().currentProject
+  if (!project) return
+  const updatedProjectData: ProjectData = { ...project.projectData, waves }
+  await updateProject(project.id, { projectData: updatedProjectData })
+  setState({ currentProject: { ...project, projectData: updatedProjectData } })
 }
 
 // ─── Mapping ──────────────────────────────────────────────────────────────────
