@@ -1737,6 +1737,13 @@ async function openOneDriveTargetPanel(
       targetFolderPath: folderPath,
       status: 'ready',
       waveId: selectedWaveId,
+      // Preserve auto-map fields when the user account itself hasn't changed — only switching
+      // to a different user account should demote a mapping from auto → manual.
+      ...(selectedUser.id === existing?.targetSite?.id && existing ? {
+        matchStatus:         existing.matchStatus,
+        accessStatus:        existing.accessStatus,
+        resolvedDisplayName: existing.resolvedDisplayName,
+      } : {}),
     }
 
     const mappings = [...getState().mappings.filter(m => m.sourceNode.path !== node.path), mapping]
