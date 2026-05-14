@@ -33,8 +33,8 @@ Write-Host ""
 
 # ── 2. Find matching files ───────────────────────────────────────────────────
 
-$files = Get-ChildItem -LiteralPath $startFolder -Recurse -Filter 'ItemReport_R*.csv' |
-         Sort-Object FullName
+$files = @(Get-ChildItem -LiteralPath $startFolder -Recurse -Filter 'ItemReport_R*.csv' |
+           Sort-Object FullName)
 
 if ($files.Count -eq 0) {
     Write-Host "No ItemReport_R*.csv files found under that folder." -ForegroundColor Red
