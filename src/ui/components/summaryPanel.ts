@@ -261,7 +261,7 @@ function odRowHtml(m: MigrationMapping, waves: MigrationWave[] = []): string {
   const filterStatus = m.matchStatus ?? 'manual'
   const wave         = waves.find(w => w.id === m.waveId)
   return `
-    <tr data-filter-status="${filterStatus}" data-wave-id="${escHtml(m.waveId ?? '')}">
+    <tr data-filter-status="${filterStatus}" data-wave-id="${escHtml(m.waveId ?? '')}" data-mapping-id="${escHtml(m.id)}">
       <td class="path-cell path-cell--wrap">${escHtml(m.sourceNode.originalPath)}</td>
       <td class="od-user-cell">${escHtml(user)}</td>
       <td class="path-cell path-cell--wrap">${siteUrl
@@ -296,8 +296,17 @@ function odAccessBadge(m: MigrationMapping): string {
 
 // ─── Check Permissions ────────────────────────────────────────────────────────
 
+function visibleMappingIds(container: HTMLElement): Set<string> {
+  return new Set(
+    [...container.querySelectorAll<HTMLTableRowElement>('tr[data-mapping-id]')]
+      .filter(row => row.style.display !== 'none')
+      .map(row => row.dataset.mappingId!)
+  )
+}
+
 async function runCheckPermissions(container: HTMLElement): Promise<void> {
-  const matchedMappings = getState().mappings.filter(m => m.targetSite?.id)
+  const ids = visibleMappingIds(container)
+  const matchedMappings = getState().mappings.filter(m => m.targetSite?.id && ids.has(m.id))
   if (matchedMappings.length === 0) return
 
   const btnCheck = container.querySelector<HTMLButtonElement>('#btn-check-perms')!
@@ -385,7 +394,8 @@ async function runGrantAccess(container: HTMLElement): Promise<void> {
     return
   }
 
-  const matchedMappings = state.mappings.filter(m => m.targetSite?.id)
+  const ids = visibleMappingIds(container)
+  const matchedMappings = state.mappings.filter(m => m.targetSite?.id && ids.has(m.id))
   if (matchedMappings.length === 0) return
 
   const btnCheck = container.querySelector<HTMLButtonElement>('#btn-check-perms')!
