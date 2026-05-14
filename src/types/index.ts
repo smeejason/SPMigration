@@ -53,6 +53,7 @@ export interface ProjectData {
   mappingCount?: number         // denormalized count kept in sync with the mappings file
   siteTypes?: SiteType[]        // reusable site type presets defined on the Site Types tab
   settings?: ProjectSettings
+  waves?: MigrationWave[]       // migration wave definitions (stable id + editable name)
   lastSaved?: string            // ISO date string
   // OneDrive-specific
   autoMapSettings?: AutoMapSettings    // persisted level + account settings from Auto Map tab
@@ -66,6 +67,11 @@ export interface ProjectData {
 export interface ProjectSettings {
   defaultLibrary?: string
   exportFormat?: 'csv' | 'json'
+}
+
+export interface MigrationWave {
+  id: string    // stable UUID — never changes even if name is edited
+  name: string  // editable display name
 }
 
 // ─── IA Designer ─────────────────────────────────────────────────────────────
@@ -114,7 +120,7 @@ export interface ParsedTreeSizeRow {
 // ─── OneDrive Auto Map ────────────────────────────────────────────────────────
 
 export type OneDriveMatchStatus = 'pending' | 'matched' | 'not-found' | 'ambiguous' | 'error' | 'cant-find'
-export type OneDriveAccessStatus = 'unknown' | 'accessible' | 'granted' | 'no-access' | 'no-drive' | 'error'
+export type OneDriveAccessStatus = 'unknown' | 'accessible' | 'granted' | 'no-access' | 'no-drive' | 'error' | 'revoked'
 
 export interface OneDriveUserMapping {
   id: string                       // = sourceNode.path (unique key)
@@ -156,6 +162,7 @@ export interface SharePointDrive {
 // ─── Mappings ────────────────────────────────────────────────────────────────
 
 export type MappingStatus = 'pending' | 'ready' | 'error'
+export type MigrationPhase = 'planning' | 'migrated' | 'testing' | 'live'
 
 /** @deprecated Use NewSiteConfig. Kept as alias so legacy persisted data still deserialises. */
 export type PlannedSiteTarget = NewSiteConfig
@@ -173,6 +180,8 @@ export interface MigrationMapping {
   matchStatus?: OneDriveMatchStatus
   accessStatus?: OneDriveAccessStatus
   resolvedDisplayName?: string
+  phase?: MigrationPhase
+  waveId?: string               // references MigrationWave.id in ProjectData.waves
 }
 
 // ─── Site Types ──────────────────────────────────────────────────────────────

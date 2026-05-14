@@ -1,10 +1,12 @@
-import { searchSites, getSiteDrives, saveMappingsFile, saveIAFile, searchUsers, getUserDrive, checkUserDriveAccess, grantUserDriveAccess, getUserById, provisionNewSite, getSiteDesigns, checkSiteAliasAvailable } from '../../graph/graphClient'
-import { updateProject, getSpConfig, loadProjectIA } from '../../graph/projectService'
+import { searchSites, getSiteDrives, saveIAFile, searchUsers, getUserDrive, checkUserDriveAccess, grantUserDriveAccess, revokeUserDriveAccess, getUserById, provisionNewSite, getSiteDesigns, checkSiteAliasAvailable } from '../../graph/graphClient'
+import { getSpConfig, loadProjectIA, persistProjectMappings } from '../../graph/projectService'
 import { setState, getState } from '../../state/store'
-import type { TreeNode, MigrationMapping, SharePointSite, SharePointDrive, NewSiteConfig, UserRef, SiteType, AppUser, IANode } from '../../types'
+import type { TreeNode, MigrationMapping, SharePointSite, SharePointDrive, NewSiteConfig, UserRef, SiteType, AppUser, IANode, MigrationWave } from '../../types'
 
 // Live references to mapping tag elements so we can update them without re-rendering
 const tagRegistry = new Map<string, HTMLSpanElement>()
+// Live references to wave tag elements so we can update them without re-rendering
+const waveTagRegistry = new Map<string, HTMLSpanElement>()
 // Live references to double-mapped warning icons on each row
 const warnRegistry = new Map<string, HTMLSpanElement>()
 // Paths (at stat level) that share a target with another path
@@ -129,6 +131,7 @@ export function renderMappingPanel(container: HTMLElement): void {
         <div class="tree-col-header" id="tree-col-header">
           <span class="tch-name">FOLDER</span>
           <span class="tch-col tch-col-mapped">MAPPED TO</span>
+          ${_isOneDriveProject ? '<span class="tch-col tch-col-wave">WAVE</span>' : ''}
           <span class="tch-col">TOTAL SIZE</span>
           ${_isOneDriveProject ? '<span class="tch-col">RECYCLE BIN</span>' : ''}
           <span class="tch-col">FILES</span>
@@ -147,6 +150,7 @@ export function renderMappingPanel(container: HTMLElement): void {
   injectMappingStyles()
 
   tagRegistry.clear()
+  waveTagRegistry.clear()
   warnRegistry.clear()
   _statsRefreshCallback = () => refreshUsersStats(container, statNodes)
 
@@ -386,6 +390,17 @@ function createMappingNodeEl(node: TreeNode, targetEl: HTMLElement, isRoot = fal
   row.appendChild(accessDeniedEl)
   row.appendChild(warnEl)
   row.appendChild(tagEl)
+
+  if (_isOneDriveProject) {
+    const waveEl = document.createElement('span')
+    waveEl.className = 'tree-col tree-col-wave'
+    const waves = getState().currentProject?.projectData.waves ?? []
+    const currentWave = waves.find(w => w.id === existingMapping?.waveId)
+    waveEl.textContent = currentWave?.name ?? '—'
+    waveTagRegistry.set(node.path, waveEl)
+    row.appendChild(waveEl)
+  }
+
   row.appendChild(colTotal)
 
   if (_isOneDriveProject) {
@@ -887,7 +902,7 @@ async function openTargetPanel(
     saveBtn.disabled = true
     saveBtn.textContent = 'Saving…'
     try {
-      await persistMappings(mappings)
+      await persistProjectMappings(mappings)
       // Save IA link if an IA node was selected
       const iaParentId = (targetEl.querySelector('#ia-parent-select-existing') as HTMLSelectElement | null)?.value
       const iaAsParent = (targetEl.querySelector('#ia-parent-select-existing-as-parent') as HTMLInputElement | null)?.checked ?? false
@@ -914,7 +929,7 @@ async function openTargetPanel(
     const mappings = getState().mappings.filter((m) => m.sourceNode.path !== node.path)
     setState({ mappings })
     try {
-      await persistMappings(mappings)
+      await persistProjectMappings(mappings)
     } catch {
       removeBtn.disabled = false
       removeBtn.textContent = 'Remove'
@@ -1193,7 +1208,7 @@ async function openTargetPanel(
     saveBtn.disabled = true
     saveBtn.textContent = 'Saving…'
     try {
-      await persistMappings(mappings)
+      await persistProjectMappings(mappings)
       // Save IA link if an IA node was selected
       const iaParentId = (targetEl.querySelector('#ia-parent-select-planned') as HTMLSelectElement | null)?.value
       const iaAsParent = (targetEl.querySelector('#ia-parent-select-planned-as-parent') as HTMLInputElement | null)?.checked ?? false
@@ -1233,7 +1248,7 @@ async function openTargetPanel(
     ]
     setState({ mappings: mappingsWithPending })
     onMappingChange(plannedSite.displayName, true)
-    await persistMappings(mappingsWithPending).catch(() => {})
+    await persistProjectMappings(mappingsWithPending).catch(() => {})
 
     // Replace the New Site tab content with a full-panel overlay
     const tabPlanned = targetEl.querySelector('#tab-planned') as HTMLElement
@@ -1321,7 +1336,7 @@ async function openTargetPanel(
     setState({ mappings: finalMappings })
     onMappingChange(createdSite.displayName)
     try {
-      await persistMappings(finalMappings)
+      await persistProjectMappings(finalMappings)
     } catch { /* non-fatal */ }
 
     // Save IA link now that we have the real site ID
@@ -1356,7 +1371,7 @@ async function openTargetPanel(
     const mappings = getState().mappings.filter((m) => m.sourceNode.path !== node.path)
     setState({ mappings })
     try {
-      await persistMappings(mappings)
+      await persistProjectMappings(mappings)
     } catch {
       removeBtn.disabled = false
       removeBtn.textContent = 'Remove'
@@ -1481,6 +1496,16 @@ async function openOneDriveTargetPanel(
               ${projectDefaultSubfolder && isUsingProjectDefault ? 'style="display:none"' : ''} />
           </div>
 
+          <div class="form-group od-wave-group">
+            <label>Migration Wave <span class="form-hint-inline">(optional)</span></label>
+            <select id="od-wave-select" class="form-input od-wave-select">
+              <option value="">— No wave —</option>
+              ${(getState().currentProject?.projectData.waves ?? []).map((w: MigrationWave) =>
+                `<option value="${escHtml(w.id)}"${existing?.waveId === w.id ? ' selected' : ''}>${escHtml(w.name)}</option>`
+              ).join('')}
+            </select>
+          </div>
+
           <div class="target-action-row">
             <button type="button" id="btn-save-od-mapping" class="btn btn-primary">Save Mapping</button>
             ${existing?.targetSite ? `<button type="button" id="btn-remove-od-mapping" class="btn btn-ghost">Remove</button>` : ''}
@@ -1566,7 +1591,7 @@ async function openOneDriveTargetPanel(
       btn.disabled = true
       btn.textContent = 'Saving…'
       try {
-        await persistMappings(mappings)
+        await persistProjectMappings(mappings)
         btn.textContent = '↩ Clear Flag'
       } catch {
         btn.textContent = '↩ Clear Flag'
@@ -1588,7 +1613,7 @@ async function openOneDriveTargetPanel(
       btn.disabled = true
       btn.textContent = 'Saving…'
       try {
-        await persistMappings(mappings)
+        await persistProjectMappings(mappings)
         btn.textContent = "🚫 Can't Find"
       } catch {
         btn.textContent = "🚫 Can't Find"
@@ -1702,6 +1727,7 @@ async function openOneDriveTargetPanel(
   targetEl.querySelector('#btn-save-od-mapping')?.addEventListener('click', async () => {
     if (!selectedUser) { alert('Select a user first.'); return }
     const folderPath = (targetEl.querySelector('#od-folder-path') as HTMLInputElement).value.trim()
+    const selectedWaveId = (targetEl.querySelector('#od-wave-select') as HTMLSelectElement)?.value || undefined
 
     const mapping: MigrationMapping = {
       id: node.path,
@@ -1710,17 +1736,34 @@ async function openOneDriveTargetPanel(
       targetDrive: selectedDriveId ? { id: selectedDriveId, name: 'OneDrive', webUrl: selectedDriveWebUrl, driveType: 'personal' } : null,
       targetFolderPath: folderPath,
       status: 'ready',
+      waveId: selectedWaveId,
+      // Preserve auto-map fields when the user account itself hasn't changed — only switching
+      // to a different user account should demote a mapping from auto → manual.
+      ...(selectedUser.id === existing?.targetSite?.id && existing ? {
+        matchStatus:         existing.matchStatus,
+        accessStatus:        existing.accessStatus,
+        resolvedDisplayName: existing.resolvedDisplayName,
+      } : {}),
     }
 
     const mappings = [...getState().mappings.filter(m => m.sourceNode.path !== node.path), mapping]
     setState({ mappings })
+
+    // Update wave column cell live
+    const waveEl = waveTagRegistry.get(node.path)
+    if (waveEl) {
+      const waves = getState().currentProject?.projectData.waves ?? []
+      const wave = waves.find(w => w.id === selectedWaveId)
+      waveEl.textContent = wave?.name ?? '—'
+    }
+
     onMappingChange(selectedUser.displayName, false)
 
     const saveBtn = targetEl.querySelector('#btn-save-od-mapping') as HTMLButtonElement
     saveBtn.disabled = true
     saveBtn.textContent = 'Saving…'
     try {
-      await persistMappings(mappings)
+      await persistProjectMappings(mappings)
       saveBtn.textContent = '✓ Saved'
     } catch {
       saveBtn.textContent = '⚠ Save failed — retry'
@@ -1738,7 +1781,7 @@ async function openOneDriveTargetPanel(
     const mappings = getState().mappings.filter(m => m.sourceNode.path !== node.path)
     setState({ mappings })
     try {
-      await persistMappings(mappings)
+      await persistProjectMappings(mappings)
     } catch {
       removeBtn.disabled = false
       removeBtn.textContent = 'Remove'
@@ -1783,8 +1826,26 @@ async function checkAndShowAccess(targetEl: HTMLElement, userId: string, migrati
     }
 
     if (access === 'accessible') {
-      statusEl.textContent = '✓ Accessible'
       statusEl.style.color = 'var(--color-success, #107c10)'
+      if (migrationAccount) {
+        statusEl.innerHTML = `✓ Accessible &nbsp;<button type="button" id="btn-revoke-access" class="btn btn-sm btn-ghost" style="font-size:0.75rem;padding:2px 8px;margin-left:4px;">Revoke Access</button>`
+        statusEl.querySelector('#btn-revoke-access')?.addEventListener('click', async () => {
+          const btn = statusEl.querySelector('#btn-revoke-access') as HTMLButtonElement
+          btn.disabled = true
+          btn.textContent = 'Revoking…'
+          try {
+            await revokeUserDriveAccess(userId, migrationAccount)
+            await checkAndShowAccess(targetEl, userId, migrationAccount)
+            await persistProjectMappings(getState().mappings)
+          } catch (err) {
+            btn.disabled = false
+            btn.textContent = '⚠ Failed — retry'
+            btn.title = (err as Error)?.message ?? String(err)
+          }
+        })
+      } else {
+        statusEl.textContent = '✓ Accessible'
+      }
     } else if (access === 'no-access') {
       statusEl.style.color = 'var(--color-danger, #a4262c)'
       if (migrationAccount) {
@@ -1796,14 +1857,12 @@ async function checkAndShowAccess(targetEl: HTMLElement, userId: string, migrati
           try {
             await grantUserDriveAccess(userId, migrationAccount)
             await checkAndShowAccess(targetEl, userId, migrationAccount)
-            // Persist the updated access status
-            await persistMappings(getState().mappings)
+            await persistProjectMappings(getState().mappings)
           } catch (err) {
             btn.disabled = false
             const msg = (err as Error)?.message ?? String(err)
             btn.textContent = '⚠ Failed — retry'
             btn.title = msg
-            // Also show the error inline so it's visible without hovering
             const errEl = document.createElement('div')
             errEl.style.cssText = 'color:var(--color-danger,#a4262c);font-size:0.75rem;margin-top:4px;word-break:break-word;'
             errEl.textContent = msg
@@ -1842,36 +1901,6 @@ async function loadLibraries(
       .join('')
   } catch {
     libSelect.innerHTML = '<option>Failed to load libraries</option>'
-  }
-}
-
-async function persistMappings(mappings: MigrationMapping[]): Promise<void> {
-  const project = getState().currentProject
-  if (!project) return
-
-  const hasUploadFolder = (project.projectData.uploads?.length ?? 0) > 0
-
-  if (hasUploadFolder) {
-    // New model: store mappings as a separate file to avoid SP column size limits.
-    // sourceNode.children are stripped by saveMappingsFile — they are already in .tree.json.
-    const { siteId } = getSpConfig()
-    await saveMappingsFile(siteId, project.title, project.id, mappings)
-
-    // Remove any inline mappings from ProjectData but keep a denormalized count
-    // so the project list scorecard can display the correct number without loading the file.
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    const { mappings: _removed, ...restData } = project.projectData
-    // Count only entries with actual targets (not Phase 1 not-found/ambiguous entries)
-    const mappedCount = mappings.filter(m => m.targetSite || m.plannedSite).length
-    const updatedProjectData = { ...restData, mappingCount: mappedCount }
-    await updateProject(project.id, { projectData: updatedProjectData })
-    setState({ mappings, currentProject: { ...project, projectData: updatedProjectData } })
-  } else {
-    // Legacy model (no upload folder yet): store inline as before; keep count in sync too.
-    const mappedCount = mappings.filter(m => m.targetSite || m.plannedSite).length
-    const updatedProjectData = { ...project.projectData, mappings, mappingCount: mappedCount }
-    await updateProject(project.id, { projectData: updatedProjectData })
-    setState({ mappings, currentProject: { ...project, projectData: updatedProjectData } })
   }
 }
 
@@ -2318,6 +2347,12 @@ function injectMappingStyles(): void {
     .tree-col-mapped--planned { color: #6040a0; }
     .tree-col-mapped--empty { color: var(--color-text-muted); font-weight: 400; }
     .tch-col-mapped { width: 140px; }
+    .tree-col-wave { width: 100px; text-align: right; font-size: 0.78rem; color: var(--color-text-muted);
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex-shrink: 0; }
+    .tch-col-wave { width: 100px; }
+    .od-wave-group { margin-top: 4px; }
+    .form-hint-inline { font-size: 0.8rem; color: var(--color-text-muted); font-weight: 400; margin-left: 4px; }
+    .od-wave-select { font-size: 0.875rem; }
     /* Access-denied row highlight and icon */
     .mapping-row--access-denied { background: rgba(168, 0, 0, 0.06); }
     .mapping-row--access-denied:hover { background: rgba(168, 0, 0, 0.12); }

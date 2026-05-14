@@ -339,6 +339,61 @@ export async function grantUserDriveAccess(userId: string, migrationAccountEmail
 }
 
 /**
+ * Removes the migration account from the site-collection admin list for the user's OneDrive.
+ * Uses the same CSOM Tenant.SetSiteAdmin path as grantUserDriveAccess, with the boolean set to false.
+ */
+export async function revokeUserDriveAccess(userId: string, migrationAccountEmail: string): Promise<void> {
+  const user = await getUserById(userId)
+  if (!user?.userPrincipalName) {
+    throw new Error('Could not retrieve UPN for user')
+  }
+
+  const { root: rootHost, admin: adminHost } = await getSharePointHosts()
+  const spToken = await getToken([`https://${rootHost}/AllSites.FullControl`])
+
+  const encodedAccount = encodeURIComponent(`i:0#.f|membership|${user.userPrincipalName}`)
+  const profileResp = await fetch(
+    `https://${adminHost}/_api/SP.UserProfiles.PeopleManager/GetPropertiesFor(accountName=@v)?@v='${encodedAccount}'`,
+    { headers: { Authorization: `Bearer ${spToken}`, Accept: 'application/json;odata=nometadata' } },
+  )
+  if (!profileResp.ok) {
+    const text = await profileResp.text().catch(() => '')
+    throw new Error(`Could not load user profile (${profileResp.status}): ${text}`)
+  }
+  const profile = await profileResp.json() as { PersonalUrl?: string }
+  const personalSiteUrl = profile.PersonalUrl?.replace(/\/$/, '')
+  if (!personalSiteUrl) {
+    throw new Error('OneDrive has not been provisioned for this user.')
+  }
+
+  const csomBody = `<Request AddExpandoFieldTypeSuffix="true" SchemaVersion="15.0.0.0" LibraryVersion="16.0.0.0" ApplicationName="JavaScript Client" xmlns="http://schemas.microsoft.com/sharepoint/clientquery/2009"><Actions><ObjectPath Id="1" ObjectPathId="0" /><ObjectPath Id="3" ObjectPathId="2" /><Method Name="SetSiteAdmin" Id="4" ObjectPathId="2"><Parameters><Parameter Type="String">${personalSiteUrl}</Parameter><Parameter Type="String">i:0#.f|membership|${migrationAccountEmail}</Parameter><Parameter Type="Boolean">false</Parameter></Parameters></Method></Actions><ObjectPaths><StaticProperty Id="0" TypeId="{3747adcd-a3c3-41b9-bfab-4a64dd2f1e0a}" Name="Current" /><Constructor Id="2" TypeId="{268004ae-ef6b-4e9b-8425-127220d84719}" /></ObjectPaths></Request>`
+
+  const csomResp = await fetch(`https://${adminHost}/_vti_bin/client.svc/ProcessQuery`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${spToken}`,
+      'Content-Type': 'text/xml',
+    },
+    body: csomBody,
+  })
+
+  if (!csomResp.ok) {
+    const text = await csomResp.text().catch(() => '')
+    throw new Error(`Failed to revoke access (${csomResp.status}): ${text}`)
+  }
+
+  const csomJson = await csomResp.json() as unknown[]
+  for (const item of csomJson) {
+    if (item && typeof item === 'object' && 'ErrorInfo' in item) {
+      const errorInfo = (item as { ErrorInfo: { ErrorMessage?: string } | null }).ErrorInfo
+      if (errorInfo?.ErrorMessage) {
+        throw new Error(`SetSiteAdmin(revoke) failed: ${errorInfo.ErrorMessage}`)
+      }
+    }
+  }
+}
+
+/**
  * Search for a user by display name using exact match first, then a broad search.
  * Returns matched user + status to distinguish single-match vs ambiguous vs not found.
  */
@@ -901,4 +956,134 @@ export async function loadIAFile(
   if (response.status === 404) return null
   if (!response.ok) throw new Error(`IA load failed (${response.status})`)
   return JSON.parse(await response.text()) as IANode[]
+}
+
+// ─── Drive enumeration for validation ─────────────────────────────────────────
+
+export interface DriveItemFlat {
+  id: string
+  name: string
+  driveId: string
+  relativePath: string         // path relative to root folder, e.g. 'subfolder/file.docx'
+  isFolder: boolean
+  size: number
+  createdDateTime: string
+  lastModifiedDateTime: string
+  createdBy: string
+  lastModifiedBy: string
+  title: string                // SharePoint Title field
+  versionLabel: string         // _UIVersionString field (e.g. '2.0')
+}
+
+/**
+ * Resolve any SharePoint/OneDrive URL to a {driveId, itemId} pair suitable
+ * for passing to listDriveItemsRecursive.
+ */
+export async function resolveDriveItemRef(url: string): Promise<{ driveId: string; itemId: string } | null> {
+  try {
+    const encoded = 'u!' + btoa(url).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_')
+    const item = await client()
+      .api(`/shares/${encoded}/driveItem`)
+      .select('id,parentReference')
+      .get() as { id: string; parentReference?: { driveId?: string } }
+    const driveId = item.parentReference?.driveId ?? ''
+    return driveId && item.id ? { driveId, itemId: item.id } : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Resolve an OneDrive personal-site folder by navigating the user's drive directly.
+ * More reliable than /shares when the caller has site-collection-admin access rather
+ * than standard file-level permissions (which /shares requires).
+ *
+ * @param userId    AAD object ID of the OneDrive owner
+ * @param drivePath Drive-relative path, e.g. 'Documents/Migration/NationalAthlete'
+ */
+export async function resolveOneDriveFolderByPath(
+  userId: string,
+  drivePath: string,
+): Promise<{ driveId: string; itemId: string }> {
+  const drive = await client().api(`/users/${userId}/drive`).select('id,root').get() as { id: string; root?: { id?: string } }
+  if (!drivePath) {
+    // Empty path = root of Documents (the drive root itself)
+    const root = await client().api(`/drives/${drive.id}/root`).select('id').get() as { id: string }
+    return { driveId: drive.id, itemId: root.id }
+  }
+  const encoded = drivePath.split('/').map(encodeURIComponent).join('/')
+  const folder = await client()
+    .api(`/drives/${drive.id}/root:/${encoded}:`)
+    .select('id')
+    .get() as { id: string }
+  return { driveId: drive.id, itemId: folder.id }
+}
+
+/**
+ * List every file and folder under a given drive folder, recursively.
+ * Uses a BFS level-by-level approach: all folders at the same depth are
+ * enumerated in parallel, keeping API calls low while remaining readable.
+ */
+export async function listDriveItemsRecursive(
+  driveId: string,
+  folderId: string,
+  onProgress?: (filesFound: number, foldersScanned: number) => void,
+): Promise<DriveItemFlat[]> {
+  const results: DriveItemFlat[] = []
+  let foldersScanned = 0
+
+  // Queue entries: folders still to be enumerated
+  let pending: Array<{ id: string; relPath: string }> = [{ id: folderId, relPath: '' }]
+
+  while (pending.length > 0) {
+    const level = pending
+    pending = []
+
+    await Promise.all(level.map(async ({ id, relPath }) => {
+      let url: string =
+        `/drives/${driveId}/items/${id}/children` +
+        `?$select=id,name,file,folder,size,createdDateTime,lastModifiedDateTime,createdBy,lastModifiedBy` +
+        `&$expand=listItem($expand=fields($select=Title,_UIVersionString))` +
+        `&$top=500`
+
+      while (url) {
+        const page = await client().api(url).get() as {
+          value: Array<{
+            id: string; name: string; file?: unknown; folder?: unknown; size?: number
+            createdDateTime?: string; lastModifiedDateTime?: string
+            createdBy?: { user?: { displayName?: string } }
+            lastModifiedBy?: { user?: { displayName?: string } }
+            listItem?: { fields?: { Title?: string; _UIVersionString?: string } }
+          }>
+          '@odata.nextLink'?: string
+        }
+
+        for (const item of page.value ?? []) {
+          const isFolder = !!item.folder
+          const itemPath = relPath ? `${relPath}/${item.name}` : item.name
+          results.push({
+            id: item.id,
+            name: item.name,
+            driveId,
+            relativePath: itemPath,
+            isFolder,
+            size: item.size ?? 0,
+            createdDateTime: item.createdDateTime ?? '',
+            lastModifiedDateTime: item.lastModifiedDateTime ?? '',
+            createdBy: item.createdBy?.user?.displayName ?? '',
+            lastModifiedBy: item.lastModifiedBy?.user?.displayName ?? '',
+            title: item.listItem?.fields?.Title ?? '',
+            versionLabel: item.listItem?.fields?._UIVersionString ?? '',
+          })
+          if (isFolder) pending.push({ id: item.id, relPath: itemPath })
+        }
+        onProgress?.(results.filter(r => !r.isFolder).length, foldersScanned)
+        url = (page as Record<string, unknown>)['@odata.nextLink'] as string ?? ''
+      }
+      foldersScanned++
+      onProgress?.(results.filter(r => !r.isFolder).length, foldersScanned)
+    }))
+  }
+
+  return results
 }

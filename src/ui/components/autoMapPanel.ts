@@ -4,9 +4,9 @@ import {
   saveMappingsFile,
   searchUsers,
 } from '../../graph/graphClient'
-import { updateProject, getSpConfig } from '../../graph/projectService'
+import { updateProject, getSpConfig, persistWaves } from '../../graph/projectService'
 import { setState, getState } from '../../state/store'
-import type { TreeNode, MigrationMapping, OneDriveMatchStatus, AppUser } from '../../types'
+import type { TreeNode, MigrationMapping, OneDriveMatchStatus, AppUser, MigrationWave } from '../../types'
 
 // ─── Entry point ──────────────────────────────────────────────────────────────
 
@@ -95,7 +95,15 @@ export function renderAutoMapPanel(container: HTMLElement): void {
             </div>
           </div>
 
-
+          <!-- ── Migration Waves ────────────────────────────────────── -->
+          <div class="automap-waves-section">
+            <div class="waves-header">
+              <span class="waves-title">Migration Waves</span>
+              <button type="button" id="btn-add-wave" class="btn btn-sm btn-ghost">+ Add Wave</button>
+            </div>
+            <p class="waves-hint">Create named waves to group users for phased migration. Assign users on the Map tab.</p>
+            <ul id="waves-list" class="waves-list"></ul>
+          </div>
 
         </div>
       </div>
@@ -207,6 +215,50 @@ export function renderAutoMapPanel(container: HTMLElement): void {
 
     phase1Btn.textContent = 'Re-run Phase 1'
     phase1Btn.disabled = false
+  })
+
+  // ── Migration Waves ───────────────────────────────────────────────────────
+  const wavesList = container.querySelector('#waves-list') as HTMLElement
+  let waves: MigrationWave[] = [...(getState().currentProject?.projectData.waves ?? [])]
+
+  function renderWavesList(): void {
+    wavesList.innerHTML = waves.length === 0
+      ? `<li class="waves-empty">No waves yet. Click "+ Add Wave" to create one.</li>`
+      : waves.map((w, i) => `
+          <li class="wave-item" data-wave-index="${i}">
+            <input type="text" class="form-input wave-name-input" value="${escHtml(w.name)}" placeholder="Wave name…" />
+            <button type="button" class="btn btn-sm btn-ghost wave-remove-btn" data-wave-index="${i}" title="Remove wave">✕</button>
+          </li>`).join('')
+
+    wavesList.querySelectorAll<HTMLInputElement>('.wave-name-input').forEach((input, i) => {
+      let saveTimer: ReturnType<typeof setTimeout>
+      input.addEventListener('input', () => {
+        waves[i] = { ...waves[i], name: input.value }
+        clearTimeout(saveTimer)
+        saveTimer = setTimeout(() => persistWaves(waves).catch(() => {}), 600)
+      })
+    })
+
+    wavesList.querySelectorAll<HTMLButtonElement>('.wave-remove-btn').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const idx = Number(btn.dataset.waveIndex)
+        waves.splice(idx, 1)
+        renderWavesList()
+        await persistWaves(waves).catch(() => {})
+      })
+    })
+  }
+
+  renderWavesList()
+
+  container.querySelector('#btn-add-wave')?.addEventListener('click', async () => {
+    const newWave: MigrationWave = { id: crypto.randomUUID(), name: `Wave ${waves.length + 1}` }
+    waves = [...waves, newWave]
+    renderWavesList()
+    // Focus the new input
+    const inputs = wavesList.querySelectorAll<HTMLInputElement>('.wave-name-input')
+    inputs[inputs.length - 1]?.select()
+    await persistWaves(waves).catch(() => {})
   })
 }
 
@@ -650,6 +702,25 @@ function injectAutoMapStyles(): void {
     .people-picker-item:hover { background: var(--color-primary-light); }
     .pp-name { font-size: 0.875rem; font-weight: 500; color: var(--color-text); }
     .pp-upn { font-size: 0.75rem; color: var(--color-text-muted); }
+
+    /* Migration Waves */
+    .automap-waves-section { border: 1px solid var(--color-border); border-radius: 6px;
+      overflow: hidden; }
+    .waves-header { display: flex; align-items: center; justify-content: space-between;
+      padding: 10px 14px; background: var(--color-surface-alt);
+      border-bottom: 1px solid var(--color-border); }
+    .waves-title { font-size: 0.875rem; font-weight: 600; color: var(--color-text); }
+    .waves-hint { font-size: 0.8rem; color: var(--color-text-muted); margin: 10px 14px 6px;
+      line-height: 1.45; }
+    .waves-list { list-style: none; margin: 0; padding: 0; }
+    .waves-empty { padding: 12px 14px; font-size: 0.85rem; color: var(--color-text-muted);
+      font-style: italic; }
+    .wave-item { display: flex; align-items: center; gap: 8px;
+      padding: 6px 14px; border-top: 1px solid var(--color-border); }
+    .wave-item:first-child { border-top: none; }
+    .wave-name-input { flex: 1; padding: 5px 10px; font-size: 0.875rem; }
+    .wave-remove-btn { flex-shrink: 0; color: var(--color-text-muted); }
+    .wave-remove-btn:hover { color: var(--color-danger); border-color: var(--color-danger); }
   `
   document.head.appendChild(style)
 }

@@ -1,7 +1,7 @@
 import { getState, setState } from '../../state/store'
 import { checkUserDriveAccess, grantUserDriveAccess, getUserDrive, saveMappingsFile, provisionNewSite, getSiteDrives } from '../../graph/graphClient'
 import { getSpConfig } from '../../graph/projectService'
-import type { MigrationMapping, OneDriveAccessStatus } from '../../types'
+import type { MigrationMapping, OneDriveAccessStatus, MigrationWave } from '../../types'
 
 export function renderSummaryPanel(container: HTMLElement): void {
   const state = getState()
@@ -17,6 +17,7 @@ export function renderSummaryPanel(container: HTMLElement): void {
 function renderOneDriveSummary(container: HTMLElement, mappings: MigrationMapping[]): void {
   // Include auto-matched, manually assigned, AND cant-find flagged rows
   const odMappings = mappings.filter(m => m.targetSite !== null || m.matchStatus === 'cant-find')
+  const waves: MigrationWave[] = getState().currentProject?.projectData.waves ?? []
 
   if (odMappings.length === 0) {
     container.innerHTML = `
@@ -156,6 +157,15 @@ function renderOneDriveSummary(container: HTMLElement, mappings: MigrationMappin
         ${filterPills}
       </div>
 
+      ${waves.length > 0 ? `
+      <!-- ── Wave Filter Bar ── -->
+      <div class="summary-filter-bar summary-wave-filter-bar" id="od-wave-filter-bar">
+        <span class="filter-label">Wave:</span>
+        <button class="filter-pill filter-pill--active" data-wave="all">All Waves</button>
+        ${waves.map(w => `<button class="filter-pill" data-wave="${escHtml(w.id)}">${escHtml(w.name)}</button>`).join('')}
+        <button class="filter-pill" data-wave="none">No Wave</button>
+      </div>` : ''}
+
       <!-- ── Table ── -->
       <div class="summary-table-wrap">
         <table class="summary-table">
@@ -167,10 +177,11 @@ function renderOneDriveSummary(container: HTMLElement, mappings: MigrationMappin
               <th>Folder Path</th>
               <th>Match</th>
               <th>Has Access</th>
+              ${waves.length > 0 ? '<th>Wave</th>' : ''}
             </tr>
           </thead>
           <tbody>
-            ${odMappings.map(odRowHtml).join('')}
+            ${odMappings.map(m => odRowHtml(m, waves)).join('')}
           </tbody>
         </table>
       </div>
@@ -179,30 +190,50 @@ function renderOneDriveSummary(container: HTMLElement, mappings: MigrationMappin
 
   injectSummaryStyles()
 
-  // Track active filter for export
+  // Track active filters for export
   let activeOdFilter = 'all'
+  let activeWaveFilter = 'all'
 
-  // Wire filter pills
+  function applyBothFilters(): void {
+    container.querySelectorAll<HTMLTableRowElement>('tr[data-filter-status]').forEach(row => {
+      const statusMatch = activeOdFilter === 'all' || row.dataset.filterStatus === activeOdFilter
+      const waveVal = row.dataset.waveId ?? ''
+      const waveMatch = activeWaveFilter === 'all'
+        || (activeWaveFilter === 'none' && !waveVal)
+        || row.dataset.waveId === activeWaveFilter
+      row.style.display = statusMatch && waveMatch ? '' : 'none'
+    })
+  }
+
+  // Wire status filter pills
   const filterBar = container.querySelector('#od-filter-bar')!
   filterBar.querySelectorAll<HTMLElement>('.filter-pill').forEach(btn => {
     btn.addEventListener('click', () => {
       filterBar.querySelectorAll('.filter-pill').forEach(b => b.classList.remove('filter-pill--active'))
       btn.classList.add('filter-pill--active')
       activeOdFilter = btn.dataset.filter!
-      container.querySelectorAll<HTMLTableRowElement>('tr[data-filter-status]').forEach(row => {
-        const match = activeOdFilter === 'all' || row.dataset.filterStatus === activeOdFilter
-        row.style.display = match ? '' : 'none'
-      })
+      applyBothFilters()
+    })
+  })
+
+  // Wire wave filter pills
+  const waveFilterBar = container.querySelector('#od-wave-filter-bar')
+  waveFilterBar?.querySelectorAll<HTMLElement>('.filter-pill').forEach(btn => {
+    btn.addEventListener('click', () => {
+      waveFilterBar.querySelectorAll('.filter-pill').forEach(b => b.classList.remove('filter-pill--active'))
+      btn.classList.add('filter-pill--active')
+      activeWaveFilter = btn.dataset.wave!
+      applyBothFilters()
     })
   })
 
   container.querySelector('#btn-export-csv')?.addEventListener('click', () => {
     const all = getState().mappings.filter(m => m.targetSite !== null || m.matchStatus === 'cant-find')
-    exportOneDriveCsv(applyOdFilter(all, activeOdFilter))
+    exportOneDriveCsv(applyOdFilter(applyWaveFilter(all, activeWaveFilter), activeOdFilter), waves)
   })
   container.querySelector('#btn-export-json')?.addEventListener('click', () => {
     const all = getState().mappings.filter(m => m.targetSite !== null || m.matchStatus === 'cant-find')
-    exportOneDriveJson(applyOdFilter(all, activeOdFilter))
+    exportOneDriveJson(applyOdFilter(applyWaveFilter(all, activeWaveFilter), activeOdFilter), waves)
   })
   container.querySelector('#btn-check-perms')?.addEventListener('click', () => runCheckPermissions(container))
   container.querySelector('#btn-grant-access')?.addEventListener('click', () => runGrantAccess(container))
@@ -214,16 +245,23 @@ function applyOdFilter(mappings: MigrationMapping[], filter: string): MigrationM
   return mappings.filter(m => m.matchStatus === filter)
 }
 
+function applyWaveFilter(mappings: MigrationMapping[], wave: string): MigrationMapping[] {
+  if (wave === 'all') return mappings
+  if (wave === 'none') return mappings.filter(m => !m.waveId)
+  return mappings.filter(m => m.waveId === wave)
+}
+
 // ─── Row / badge helpers ───────────────────────────────────────────────────────
 
-function odRowHtml(m: MigrationMapping): string {
+function odRowHtml(m: MigrationMapping, waves: MigrationWave[] = []): string {
   const siteUrl      = siteUrlFromDriveUrl(m.targetSite?.webUrl ?? '')
   const projectDefault = getState().currentProject?.projectData.autoMapSettings?.targetFolderPath ?? ''
   const folderPath   = m.targetFolderPath || projectDefault || ''
   const user         = m.resolvedDisplayName ?? m.targetSite?.displayName ?? '—'
   const filterStatus = m.matchStatus ?? 'manual'
+  const wave         = waves.find(w => w.id === m.waveId)
   return `
-    <tr data-filter-status="${filterStatus}">
+    <tr data-filter-status="${filterStatus}" data-wave-id="${escHtml(m.waveId ?? '')}">
       <td class="path-cell path-cell--wrap">${escHtml(m.sourceNode.originalPath)}</td>
       <td class="od-user-cell">${escHtml(user)}</td>
       <td class="path-cell path-cell--wrap">${siteUrl
@@ -232,6 +270,7 @@ function odRowHtml(m: MigrationMapping): string {
       <td class="path-cell">${folderPath ? escHtml(folderPath) : ''}</td>
       <td>${odMatchBadge(m)}</td>
       <td data-access-for="${escHtml(m.id)}">${odAccessBadge(m)}</td>
+      ${waves.length > 0 ? `<td class="od-wave-cell">${wave ? `<span class="badge od-wave-badge">${escHtml(wave.name)}</span>` : '<span class="od-wave-none">—</span>'}</td>` : ''}
     </tr>`
 }
 
@@ -249,6 +288,7 @@ function odAccessBadge(m: MigrationMapping): string {
   const s = m.accessStatus
   if (!s || s === 'unknown')              return `<span class="badge badge-neutral">— Not checked</span>`
   if (s === 'accessible' || s === 'granted') return `<span class="badge status-ready">✓ Has Access</span>`
+  if (s === 'revoked')                    return `<span class="badge badge-revoked">↩ Revoked</span>`
   if (s === 'no-drive')                   return `<span class="badge status-error">✗ No Drive</span>`
   if (s === 'no-access')                  return `<span class="badge status-error">✗ No Access</span>`
   return `<span class="badge status-error">✗ Error</span>`
@@ -432,29 +472,38 @@ async function persistMappings(): Promise<void> {
 
 // ─── OneDrive exports ─────────────────────────────────────────────────────────
 
-function exportOneDriveCsv(mappings: MigrationMapping[]): void {
+function exportOneDriveCsv(mappings: MigrationMapping[], waves: MigrationWave[] = []): void {
   const projectDefault = getState().currentProject?.projectData.autoMapSettings?.targetFolderPath ?? ''
-  const headers = ['Source Path', 'User', 'Destination OneDrive URL', 'Folder Path', 'Match Status', 'Access Status']
-  const rows = mappings.map(m => [
-    m.sourceNode.originalPath,
-    m.resolvedDisplayName ?? m.targetSite?.displayName ?? '',
-    siteUrlFromDriveUrl(m.targetSite?.webUrl ?? ''),
-    m.targetFolderPath || projectDefault || '',
-    m.matchStatus ?? '',
-    m.accessStatus ?? '',
-  ])
+  const includeWave = waves.length > 0
+  const headers = ['Source Path', 'User', 'Destination OneDrive URL', 'Folder Path', 'Match Status', 'Access Status', ...(includeWave ? ['Wave'] : [])]
+  const rows = mappings.map(m => {
+    const wave = waves.find(w => w.id === m.waveId)
+    return [
+      m.sourceNode.originalPath,
+      m.resolvedDisplayName ?? m.targetSite?.displayName ?? '',
+      siteUrlFromDriveUrl(m.targetSite?.webUrl ?? ''),
+      m.targetFolderPath || projectDefault || '',
+      m.matchStatus ?? '',
+      m.accessStatus ?? '',
+      ...(includeWave ? [wave?.name ?? ''] : []),
+    ]
+  })
   const csv = [headers, ...rows].map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(',')).join('\n')
   downloadFile(csv, 'onedrive-migration-plan.csv', 'text/csv')
 }
 
-function exportOneDriveJson(mappings: MigrationMapping[]): void {
+function exportOneDriveJson(mappings: MigrationMapping[], waves: MigrationWave[] = []): void {
   const projectDefault = getState().currentProject?.projectData.autoMapSettings?.targetFolderPath ?? ''
-  const tasks = mappings.map(m => ({
-    SourcePath:             m.sourceNode.originalPath,
-    TargetPath:             siteUrlFromDriveUrl(m.targetSite?.webUrl ?? ''),
-    TargetList:             'Documents',
-    TargetListRelativePath: m.targetFolderPath || projectDefault || '',
-  }))
+  const tasks = mappings.map(m => {
+    const wave = waves.find(w => w.id === m.waveId)
+    return {
+      SourcePath:             m.sourceNode.originalPath,
+      TargetPath:             siteUrlFromDriveUrl(m.targetSite?.webUrl ?? ''),
+      TargetList:             'Documents',
+      TargetListRelativePath: m.targetFolderPath || projectDefault || '',
+      ...(wave ? { Wave: wave.name } : {}),
+    }
+  })
   downloadFile(JSON.stringify({ Tasks: tasks }, null, 2), 'onedrive-migration-plan.json', 'application/json')
 }
 
@@ -873,6 +922,10 @@ function injectSummaryStyles(): void {
       font-family: monospace; font-size: 0.8rem; }
     .path-cell--wrap { white-space: normal; overflow: visible; text-overflow: unset; word-break: break-all; }
     .od-user-cell { font-size: 0.85rem; white-space: nowrap; }
+    .od-wave-cell { white-space: nowrap; }
+    .od-wave-badge { background: #e8f4fd; color: #0078d4; }
+    .od-wave-none { color: var(--color-text-muted); }
+    .summary-wave-filter-bar { margin-top: -8px; }
     .table-empty { text-align: center; color: var(--color-text-muted); padding: 24px !important; }
 
     /* ── Badges ── */
@@ -884,6 +937,7 @@ function injectSummaryStyles(): void {
     .status-error   { background: #fde7e9; color: var(--color-danger, #a4262c); }
     .badge-neutral  { background: var(--color-surface-alt, #f5f5f5); color: var(--color-text-muted);
       border: 1px solid var(--color-border); }
+    .badge-revoked  { background: #f3f2f1; color: #605e5c; border: 1px solid var(--color-border); }
     .badge-manual   { background: #e8f4fd; color: #0078d4; }
     .badge-cant-find { background: #fde7e9; color: #a4262c; }
 
