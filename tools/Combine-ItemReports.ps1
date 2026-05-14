@@ -106,7 +106,7 @@ try {
         }
 
         $totalRows += $fileRows
-        Write-Host " — $fileRows row(s)" -ForegroundColor Gray
+        Write-Host " - $fileRows row(s)" -ForegroundColor Gray
     }
 }
 finally {
