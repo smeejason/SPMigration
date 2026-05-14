@@ -425,14 +425,16 @@ async function runGrantAccess(container: HTMLElement): Promise<void> {
     try {
       const access = await checkUserDriveAccess(userId)
       if (access === 'accessible') {
-        newStatus = 'accessible'
+        newStatus = access
         skippedCount++
-      } else if (access === 'no-access') {
+      } else if (access === 'no-access' || access === 'no-drive') {
+        // no-drive means Graph returned 404, but grantUserDriveAccess uses
+        // SharePoint User Profiles (not Graph) so attempt the grant regardless
         await grantUserDriveAccess(userId, migrationAccount)
         newStatus = 'granted'
         grantedCount++
       } else {
-        newStatus = access  // 'no-drive' | 'error'
+        newStatus = access  // 'error'
         errorCount++
       }
     } catch {
@@ -481,24 +483,20 @@ async function persistMappings(): Promise<void> {
 
 // ─── OneDrive exports ─────────────────────────────────────────────────────────
 
-function exportOneDriveCsv(mappings: MigrationMapping[], waves: MigrationWave[] = []): void {
+function exportOneDriveCsv(mappings: MigrationMapping[], _waves: MigrationWave[] = []): void {
   const projectDefault = getState().currentProject?.projectData.autoMapSettings?.targetFolderPath ?? ''
-  const includeWave = waves.length > 0
-  const headers = ['Source Path', 'User', 'Destination OneDrive URL', 'Folder Path', 'Match Status', 'Access Status', ...(includeWave ? ['Wave'] : [])]
+  // Quote a single value only if it contains a comma, double-quote, or newline
+  const csvVal = (v: string) =>
+    v.includes(',') || v.includes('"') || v.includes('\n') ? `"${v.replace(/"/g, '""')}"` : v
   const rows = mappings.map(m => {
-    const wave = waves.find(w => w.id === m.waveId)
-    return [
-      m.sourceNode.originalPath,
-      m.resolvedDisplayName ?? m.targetSite?.displayName ?? '',
-      siteUrlFromDriveUrl(m.targetSite?.webUrl ?? ''),
-      m.targetFolderPath || projectDefault || '',
-      m.matchStatus ?? '',
-      m.accessStatus ?? '',
-      ...(includeWave ? [wave?.name ?? ''] : []),
-    ]
+    const source        = m.sourceNode.originalPath
+    const targetWeb     = siteUrlFromDriveUrl(m.targetSite?.webUrl ?? '')
+    const targetSubFolder = m.targetFolderPath || projectDefault || ''
+    // SPMT bulk-upload CSV format (no header row):
+    // Source, SourceDocLib, SourceSubFolder, TargetWeb, TargetDocLib, TargetSubFolder
+    return [source, '', '', targetWeb, 'Documents', targetSubFolder].map(csvVal).join(',')
   })
-  const csv = [headers, ...rows].map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(',')).join('\n')
-  downloadFile(csv, 'onedrive-migration-plan.csv', 'text/csv')
+  downloadFile(rows.join('\n'), 'onedrive-migration-plan.csv', 'text/csv')
 }
 
 function exportOneDriveJson(mappings: MigrationMapping[], waves: MigrationWave[] = []): void {

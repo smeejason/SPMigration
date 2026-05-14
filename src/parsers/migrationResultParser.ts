@@ -4,6 +4,56 @@ import type { MigrationResultItem, MigrationResultStatus, MigrationResultSummary
 
 // ─── Public API ───────────────────────────────────────────────────────────────
 
+/**
+ * Parse a standalone ItemReport CSV file (same schema as the CSV inside the ZIP).
+ * No failure report is available so errorCode is always empty, but Status column
+ * still carries the result so counts are accurate.
+ */
+export async function parseMigrationResultCsv(file: File): Promise<MigrationResultSummary> {
+  const text = stripBom(await file.text())
+  const itemRows = parseCsvText(text)
+  if (itemRows.length === 0) throw new Error('CSV file has no data rows')
+
+  const itemMap = new Map<string, MigrationResultItem>()
+  for (const row of itemRows) {
+    const source = row['Source'] ?? ''
+    if (!source) continue
+
+    const rawStatus = (row['Status'] ?? '').trim()
+    const status = normalizeStatus(rawStatus)
+    const item: MigrationResultItem = {
+      source,
+      destination: row['Destination'] ?? '',
+      itemName: row['Item name'] ?? '',
+      itemType: (row['Type'] ?? '').toLowerCase() === 'folder' ? 'Folder' : 'File',
+      status,
+      rawStatus,
+      resultCategory: row['Result category'] ?? '',
+      message: row['Message'] ?? '',
+      errorCode: '',
+      fileSizeBytes: parseInt((row['Item size (bytes)'] ?? '0').replace(/[^0-9]/g, '') || '0', 10),
+      isRecycleBin: source.includes('$RECYCLE.BIN'),
+      sourcePath: normalizePath(source),
+    }
+
+    const existing = itemMap.get(source)
+    if (!existing || statusPriority(status) > statusPriority(existing.status)) {
+      itemMap.set(source, item)
+    }
+  }
+
+  const items = Array.from(itemMap.values())
+  let migratedCount = 0, failedCount = 0, skippedCount = 0, partialCount = 0
+  for (const item of items) {
+    if (item.status === 'Migrated') migratedCount++
+    else if (item.status === 'Failed') failedCount++
+    else if (item.status === 'Skipped') skippedCount++
+    else if (item.status === 'Partial') partialCount++
+  }
+
+  return { items, migratedCount, failedCount, skippedCount, partialCount, totalCount: items.length }
+}
+
 export async function parseMigrationResultZip(file: File): Promise<MigrationResultSummary> {
   const zip = await JSZip.loadAsync(await file.arrayBuffer())
 
@@ -44,13 +94,15 @@ export async function parseMigrationResultZip(file: File): Promise<MigrationResu
     const source = row['Source'] ?? ''
     if (!source) continue
 
-    const status = normalizeStatus(row['Status'] ?? '')
+    const rawStatus = (row['Status'] ?? '').trim()
+    const status = normalizeStatus(rawStatus)
     const item: MigrationResultItem = {
       source,
       destination: row['Destination'] ?? '',
       itemName: row['Item name'] ?? '',
       itemType: (row['Type'] ?? '').toLowerCase() === 'folder' ? 'Folder' : 'File',
       status,
+      rawStatus,
       resultCategory: row['Result category'] ?? '',
       message: row['Message'] ?? '',
       errorCode: failureErrorCodes.get(source) ?? '',

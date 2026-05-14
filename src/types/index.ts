@@ -335,12 +335,14 @@ export interface MigrationResultItem {
   itemName: string            // Item name column
   itemType: 'File' | 'Folder' // Type column
   status: MigrationResultStatus
+  rawStatus: string           // exact Status string from CSV (e.g. 'Scan Finished')
   resultCategory: string      // Result category column
   message: string             // Message column
   errorCode: string           // Error code (from ItemFailureReport, else '')
   fileSizeBytes: number       // Item size (bytes) column
   isRecycleBin: boolean       // true when Source includes '$RECYCLE.BIN'
   sourcePath: string          // normalized: forward slashes, UNC prefix stripped
+  uploadId?: string           // tagged in memory at load time — not persisted to SharePoint
 }
 
 export interface MigrationResultSummary {
