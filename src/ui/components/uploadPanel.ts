@@ -1,7 +1,7 @@
 import { setState, getState } from '../../state/store'
 import { updateProject, getSpConfig } from '../../graph/projectService'
 import { getOrCreateProjectFolder, uploadFileToDrive, downloadDriveItem, deleteDriveItem, saveMappingsFile } from '../../graph/graphClient'
-import { parseMigrationResultZip } from '../../parsers/migrationResultParser'
+import { parseMigrationResultZip, parseMigrationResultCsv } from '../../parsers/migrationResultParser'
 import type { TreeNode, MigrationMapping, ExcelUpload, ResultUpload } from '../../types'
 
 // ─── Entry point ──────────────────────────────────────────────────────────────
@@ -54,8 +54,8 @@ export function renderUploadPanel(container: HTMLElement): void {
           <div class="upload-col-header">
             <h3>Migration Results</h3>
             <div>
-              <input type="file" id="result-file-input" accept=".zip" multiple style="display:none" />
-              <button type="button" id="btn-result-browse" class="btn-add-upload" title="Upload result ZIP">+</button>
+              <input type="file" id="result-file-input" accept=".zip,.csv" multiple style="display:none" />
+              <button type="button" id="btn-result-browse" class="btn-add-upload" title="Upload result ZIP or CSV">+</button>
             </div>
           </div>
           <div class="upload-col-body" id="result-drop-zone">
@@ -64,7 +64,7 @@ export function renderUploadPanel(container: HTMLElement): void {
               : `<div class="upload-empty-state">
                   <div class="upload-empty-icon">📦</div>
                   <p>No results yet</p>
-                  <p class="upload-empty-hint">Click <strong>+</strong> or drag .zip files here</p>
+                  <p class="upload-empty-hint">Click <strong>+</strong> or drag .zip or .csv files here</p>
                 </div>`
             }
           </div>
@@ -173,10 +173,11 @@ function setupHistoryButtons(container: HTMLElement): void {
 function renderResultHistoryItems(uploads: ResultUpload[]): string {
   return [...uploads].reverse().map((u) => {
     const date = formatDate(new Date(u.uploadedAt))
+    const icon = u.fileName.endsWith('.csv') ? '📄' : '📦'
     return `
       <div class="history-item">
         <div class="history-item-header">
-          <span class="history-item-icon">📦</span>
+          <span class="history-item-icon">${icon}</span>
           <div class="history-item-info">
             <span class="history-item-name" title="${escHtml(u.fileName)}">${escHtml(u.fileName)}</span>
             <span class="history-item-meta">${date} · ${u.totalCount.toLocaleString()} items</span>
@@ -254,7 +255,7 @@ function setupResultDropZone(container: HTMLElement): void {
   dropZone.addEventListener('drop', (e) => {
     e.preventDefault()
     dropZone.classList.remove('drop-zone--active')
-    const files = Array.from(e.dataTransfer?.files ?? []).filter((f) => f.name.endsWith('.zip'))
+    const files = Array.from(e.dataTransfer?.files ?? []).filter((f) => f.name.endsWith('.zip') || f.name.endsWith('.csv'))
     if (files.length) void handleResultFiles(container, files)
   })
 }
@@ -273,7 +274,9 @@ async function handleResultFiles(container: HTMLElement, files: File[]): Promise
 
     let summary
     try {
-      summary = await parseMigrationResultZip(file)
+      summary = file.name.endsWith('.csv')
+        ? await parseMigrationResultCsv(file)
+        : await parseMigrationResultZip(file)
     } catch (err) {
       setStatus('error', `Parse error in ${escHtml(file.name)}: ${(err as Error).message}`)
       continue
