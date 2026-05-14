@@ -787,7 +787,7 @@ function openResultsView(container: HTMLElement, mapping: MigrationMapping, revi
 
             <div class="review-col-header">
               <span class="rch-name">PATH</span>
-              <span class="rch-stat rch-migrated">MIGRATED</span>
+              <span class="rch-stat rch-status">STATUS</span>
               <span class="rch-stat rch-failed">FAILED</span>
               <span class="rch-stat rch-skipped">SKIPPED</span>
               <span class="rch-stat">TOTAL</span>
@@ -1240,8 +1240,17 @@ function createReviewNodeEl(node: ReviewNode): HTMLLIElement {
   name.title = node.path
 
   const colMigrated = document.createElement('span')
-  colMigrated.className = 'rstat rstat-migrated'
-  colMigrated.textContent = node.migratedCount > 0 ? `✓ ${node.migratedCount.toLocaleString()}` : '—'
+  if (!hasChildren) {
+    // Leaf file node: show exact CSV status string
+    const item = _allItems.find(i => i.sourcePath === node.path)
+    const rawStatus = item ? (item.rawStatus || item.status) : ''
+    colMigrated.className = `rstat rstat-status ${rawStatusClass(rawStatus)}`
+    colMigrated.textContent = rawStatus || '—'
+  } else {
+    // Folder: show aggregated migrated count
+    colMigrated.className = 'rstat rstat-status rstat-status--migrated'
+    colMigrated.textContent = node.migratedCount > 0 ? `✓ ${node.migratedCount.toLocaleString()}` : '—'
+  }
 
   const colFailed = document.createElement('span')
   colFailed.className = 'rstat rstat-failed'
@@ -1489,6 +1498,16 @@ function nodeMatchesFilters(node: ReviewNode, statusFilter: string, hideRb: bool
 
 // ─── Shared helpers ───────────────────────────────────────────────────────────
 
+function rawStatusClass(rawStatus: string): string {
+  const s = rawStatus.toLowerCase()
+  if (s === 'migrated') return 'rstat-status--migrated'
+  if (s === 'scan finished') return 'rstat-status--scan'
+  if (s === 'failed') return 'rstat-status--failed'
+  if (s === 'skipped') return 'rstat-status--skipped'
+  if (s === 'partial' || s === 'partial success') return 'rstat-status--partial'
+  return 'rstat-status--other'
+}
+
 function statusBadgeHtml(status: string, isRecycleBin: boolean): string {
   if (isRecycleBin) return `<span class="rbadge rbadge--rb">🗑️ Recycle Bin (${escHtml(status)})</span>`
   if (status === 'Migrated') return `<span class="rbadge rbadge--migrated">✓ Migrated</span>`
@@ -1560,7 +1579,7 @@ function injectReviewStyles(): void {
       font-size: 0.62rem; font-weight: 700; color: var(--color-text-muted);
       text-transform: uppercase; letter-spacing: 0.05em; flex-shrink: 0; gap: 8px; }
     .rch-dest { flex: 1; }
-    .rch-migrated    { width: 80px;  text-align: right; flex-shrink: 0; }
+    .rch-status      { width: 108px; text-align: right; flex-shrink: 0; }
     .rch-scanfinished{ width: 90px;  text-align: right; flex-shrink: 0; }
     .rch-skip        { width: 68px;  text-align: right; flex-shrink: 0; }
     .rch-fail        { width: 58px;  text-align: right; flex-shrink: 0; }
@@ -1809,8 +1828,8 @@ function injectReviewStyles(): void {
     /* ── Tree ── */
     .rch-name { flex: 1; padding-left: 64px; }
     .rch-stat { width: 80px; text-align: right; padding-right: 12px; flex-shrink: 0; }
-    .rch-migrated { color: #107c10; }
-    .rch-failed { color: var(--color-danger, #a4262c); }
+    .rch-status  { color: #605e5c; }
+    .rch-failed  { color: var(--color-danger, #a4262c); }
     .rch-skipped { color: #605e5c; }
     .review-tree { flex: 1; overflow-y: auto; list-style: none; padding: 0; margin: 0; min-height: 0; }
     .review-node { list-style: none; }
@@ -1826,7 +1845,13 @@ function injectReviewStyles(): void {
     .review-name { flex: 1; min-width: 0; font-size: 0.85rem; font-family: 'Consolas', monospace;
       white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .rstat { width: 80px; text-align: right; padding-right: 12px; font-size: 0.78rem; flex-shrink: 0; white-space: nowrap; }
-    .rstat-migrated { color: #107c10; font-weight: 600; }
+    .rstat-status { width: 108px; text-align: right; padding-right: 12px; font-size: 0.78rem; flex-shrink: 0; white-space: nowrap; }
+    .rstat-status--migrated { color: #107c10; font-weight: 600; }
+    .rstat-status--scan     { color: #0078d4; font-weight: 600; }
+    .rstat-status--failed   { color: var(--color-danger, #a4262c); font-weight: 600; }
+    .rstat-status--skipped  { color: var(--color-text-muted); }
+    .rstat-status--partial  { color: #7d4200; font-weight: 600; }
+    .rstat-status--other    { color: var(--color-text-muted); }
     .rstat-failed { color: var(--color-danger, #a4262c); font-weight: 600; }
     .rstat-skipped { color: var(--color-text-muted); }
     .rstat-total { color: var(--color-text-muted); }
