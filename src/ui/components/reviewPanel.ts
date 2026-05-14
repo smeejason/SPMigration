@@ -98,11 +98,19 @@ function spStatForMapping(m: MigrationMapping, reviewData: ReviewData): { scanMi
   if (items.length === 0) return null
   return {
     scanMigrated: items.filter(i => {
-      const s = (i.rawStatus || i.status).toLowerCase()
-      return s === 'migrated' || s === 'scan finished'
+      // Use rawStatus when available (new uploads); fall back to normalised status
+      if (i.rawStatus) {
+        const r = i.rawStatus.toLowerCase()
+        return r === 'migrated' || r === 'scan finished'
+      }
+      return i.status === 'Migrated'
     }).length,
     failed:  items.filter(i => i.status === 'Failed').length,
-    skipped: items.filter(i => i.status === 'Skipped').length,
+    skipped: items.filter(i => {
+      // With rawStatus: only count items that are genuinely Skipped (not Scan Finished)
+      if (i.rawStatus) return i.rawStatus.toLowerCase() === 'skipped'
+      return i.status === 'Skipped'
+    }).length,
   }
 }
 
@@ -1425,8 +1433,6 @@ function injectReviewStyles(): void {
     .review-dest-row--selected { background: var(--color-primary-light, #deecf9) !important; }
     .review-dest-toggle { font-size: 0.6rem; color: var(--color-text-muted); width: 10px; flex-shrink: 0; }
     .review-dest-item--flat .review-dest-row { padding-left: 12px; }
-    .review-dest-item--flat .review-dest-name { max-width: 180px; }
-    .review-dest-item--flat .rev-dest-phase { display: contents; }
     .review-dest-avatar { width: 28px; height: 28px; border-radius: 50%;
       background: var(--color-primary, #0078d4); color: white; font-size: 0.72rem; font-weight: 700;
       display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
@@ -1450,7 +1456,7 @@ function injectReviewStyles(): void {
     /* ── Phase select ── */
     .rev-phase-select { font-size: 0.75rem; padding: 2px 4px; border-radius: 4px;
       border: 1px solid var(--color-border); background: white; cursor: pointer;
-      flex-shrink: 0; font-family: inherit; }
+      flex-shrink: 0; font-family: inherit; width: 100px; }
 
     /* ── Phase badges ── */
     .rev-phase-badge { display: inline-block; padding: 2px 8px; border-radius: 10px;
