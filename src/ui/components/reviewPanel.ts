@@ -91,23 +91,22 @@ function aggregatePhase(mappings: MigrationMapping[]): MigrationPhase {
 
 // ─── SPMT result cross-reference ──────────────────────────────────────────────
 
-function spStatForMapping(m: MigrationMapping, reviewData: ReviewData): { scanMigrated: number; failed: number; skipped: number } | null {
+function spStatForMapping(m: MigrationMapping, reviewData: ReviewData): { migrated: number; scanFinished: number; failed: number; skipped: number } | null {
   const sourcePath = m.sourceNode.path
   const items = reviewData.items.filter(i =>
     i.sourcePath === sourcePath || i.sourcePath.startsWith(sourcePath + '/'))
   if (items.length === 0) return null
   return {
-    scanMigrated: items.filter(i => {
-      // Use rawStatus when available (new uploads); fall back to normalised status
-      if (i.rawStatus) {
-        const r = i.rawStatus.toLowerCase()
-        return r === 'migrated' || r === 'scan finished'
-      }
+    migrated: items.filter(i => {
+      if (i.rawStatus) return i.rawStatus.toLowerCase() === 'migrated'
       return i.status === 'Migrated'
+    }).length,
+    scanFinished: items.filter(i => {
+      if (i.rawStatus) return i.rawStatus.toLowerCase() === 'scan finished'
+      return false  // can't distinguish from Skipped without rawStatus
     }).length,
     failed:  items.filter(i => i.status === 'Failed').length,
     skipped: items.filter(i => {
-      // With rawStatus: only count items that are genuinely Skipped (not Scan Finished)
       if (i.rawStatus) return i.rawStatus.toLowerCase() === 'skipped'
       return i.status === 'Skipped'
     }).length,
@@ -295,7 +294,8 @@ function renderLayout(container: HTMLElement, groups: DestGroup[], migrationAcco
         <div class="review-mapping-left">
           <div class="review-col-header">
             <span class="rch-dest">Account</span>
-            <span class="rch-scan">Scanned / Migrated</span>
+            <span class="rch-migrated">Migrated</span>
+            <span class="rch-scanfinished">Scan Finished</span>
             <span class="rch-skip">Skipped</span>
             <span class="rch-fail">Failed</span>
             <span class="rch-view"></span>
@@ -326,9 +326,10 @@ function renderDestItemHtml(g: DestGroup, reviewData: ReviewData): string {
   if (g.mappings.length === 1) {
     const m = g.mappings[0]
     const spStat = spStatForMapping(m, reviewData)
-    const scanCell  = spStat ? `<span class="rdc-scan">${spStat.scanMigrated.toLocaleString()}</span>` : `<span class="rdc-scan rdc-empty">—</span>`
-    const skipCell  = spStat ? `<span class="rdc-skip">${spStat.skipped.toLocaleString()}</span>`      : `<span class="rdc-skip rdc-empty">—</span>`
-    const failCell  = spStat ? `<span class="rdc-fail">${spStat.failed > 0 ? spStat.failed.toLocaleString() : '0'}</span>` : `<span class="rdc-fail rdc-empty">—</span>`
+    const migratedCell    = spStat ? `<span class="rdc-migrated">${spStat.migrated.toLocaleString()}</span>` : `<span class="rdc-migrated rdc-empty">—</span>`
+    const scanFinCell     = spStat ? `<span class="rdc-scanfinished">${spStat.scanFinished.toLocaleString()}</span>` : `<span class="rdc-scanfinished rdc-empty">—</span>`
+    const skipCell        = spStat ? `<span class="rdc-skip">${spStat.skipped.toLocaleString()}</span>` : `<span class="rdc-skip rdc-empty">—</span>`
+    const failCell        = spStat ? `<span class="rdc-fail">${spStat.failed > 0 ? spStat.failed.toLocaleString() : '0'}</span>` : `<span class="rdc-fail rdc-empty">—</span>`
     const viewBtn   = spStat
       ? `<button class="rev-view-btn" data-mapping-id="${escHtml(m.id)}" title="Open full results tree">View</button>`
       : `<span class="rdc-view-placeholder"></span>`
@@ -344,7 +345,7 @@ function renderDestItemHtml(g: DestGroup, reviewData: ReviewData): string {
         <div class="review-dest-row" tabindex="0" role="button">
           <span class="review-dest-avatar">${initials}</span>
           <span class="review-dest-name">${escHtml(g.displayName)}</span>
-          ${scanCell}${skipCell}${failCell}
+          ${migratedCell}${scanFinCell}${skipCell}${failCell}
           <span class="rdc-view">${viewBtn}</span>
           <span class="rev-dest-phase" data-dest-phase="${escHtml(g.key)}">${phaseSelect}</span>
         </div>
@@ -352,11 +353,12 @@ function renderDestItemHtml(g: DestGroup, reviewData: ReviewData): string {
   }
 
   // Multiple mappings — expandable, aggregate stats shown on header row
-  const totalScan  = g.mappings.reduce((s, m) => s + (spStatForMapping(m, reviewData)?.scanMigrated ?? 0), 0)
-  const totalSkip  = g.mappings.reduce((s, m) => s + (spStatForMapping(m, reviewData)?.skipped ?? 0), 0)
-  const totalFail  = g.mappings.reduce((s, m) => s + (spStatForMapping(m, reviewData)?.failed ?? 0), 0)
-  const hasAny     = g.mappings.some(m => spStatForMapping(m, reviewData) !== null)
-  const sourceRows = g.mappings.map(m => renderSourceRowHtml(m, reviewData)).join('')
+  const totalMigrated    = g.mappings.reduce((s, m) => s + (spStatForMapping(m, reviewData)?.migrated ?? 0), 0)
+  const totalScanFin     = g.mappings.reduce((s, m) => s + (spStatForMapping(m, reviewData)?.scanFinished ?? 0), 0)
+  const totalSkip        = g.mappings.reduce((s, m) => s + (spStatForMapping(m, reviewData)?.skipped ?? 0), 0)
+  const totalFail        = g.mappings.reduce((s, m) => s + (spStatForMapping(m, reviewData)?.failed ?? 0), 0)
+  const hasAny           = g.mappings.some(m => spStatForMapping(m, reviewData) !== null)
+  const sourceRows       = g.mappings.map(m => renderSourceRowHtml(m, reviewData)).join('')
 
   return `
     <li class="review-dest-item" data-dest-key="${escHtml(g.key)}">
@@ -364,7 +366,9 @@ function renderDestItemHtml(g: DestGroup, reviewData: ReviewData): string {
         <span class="review-dest-toggle">▶</span>
         <span class="review-dest-avatar">${initials}</span>
         <span class="review-dest-name">${escHtml(g.displayName)}</span>
-        ${hasAny ? `<span class="rdc-scan">${totalScan.toLocaleString()}</span><span class="rdc-skip">${totalSkip.toLocaleString()}</span><span class="rdc-fail">${totalFail.toLocaleString()}</span>` : `<span class="rdc-scan rdc-empty">—</span><span class="rdc-skip rdc-empty">—</span><span class="rdc-fail rdc-empty">—</span>`}
+        ${hasAny
+          ? `<span class="rdc-migrated">${totalMigrated.toLocaleString()}</span><span class="rdc-scanfinished">${totalScanFin.toLocaleString()}</span><span class="rdc-skip">${totalSkip.toLocaleString()}</span><span class="rdc-fail">${totalFail.toLocaleString()}</span>`
+          : `<span class="rdc-migrated rdc-empty">—</span><span class="rdc-scanfinished rdc-empty">—</span><span class="rdc-skip rdc-empty">—</span><span class="rdc-fail rdc-empty">—</span>`}
         <span class="rdc-view"></span>
         <span class="rev-dest-phase" data-dest-phase="${escHtml(g.key)}">${phaseBadgeHtml(phase)}</span>
       </div>
@@ -377,9 +381,10 @@ function renderDestItemHtml(g: DestGroup, reviewData: ReviewData): string {
 function renderSourceRowHtml(m: MigrationMapping, reviewData: ReviewData): string {
   const name = m.sourceNode.name || m.sourceNode.originalPath
   const spStat = spStatForMapping(m, reviewData)
-  const scanCell = spStat ? `<span class="rdc-scan">${spStat.scanMigrated.toLocaleString()}</span>` : `<span class="rdc-scan rdc-empty">—</span>`
-  const skipCell = spStat ? `<span class="rdc-skip">${spStat.skipped.toLocaleString()}</span>`      : `<span class="rdc-skip rdc-empty">—</span>`
-  const failCell = spStat ? `<span class="rdc-fail">${spStat.failed.toLocaleString()}</span>`       : `<span class="rdc-fail rdc-empty">—</span>`
+  const migratedCell = spStat ? `<span class="rdc-migrated">${spStat.migrated.toLocaleString()}</span>`         : `<span class="rdc-migrated rdc-empty">—</span>`
+  const scanFinCell  = spStat ? `<span class="rdc-scanfinished">${spStat.scanFinished.toLocaleString()}</span>` : `<span class="rdc-scanfinished rdc-empty">—</span>`
+  const skipCell     = spStat ? `<span class="rdc-skip">${spStat.skipped.toLocaleString()}</span>`              : `<span class="rdc-skip rdc-empty">—</span>`
+  const failCell     = spStat ? `<span class="rdc-fail">${spStat.failed.toLocaleString()}</span>`               : `<span class="rdc-fail rdc-empty">—</span>`
   const viewBtn  = spStat
     ? `<button class="rev-view-btn" data-mapping-id="${escHtml(m.id)}" title="Open full results tree">View</button>`
     : ''
@@ -394,7 +399,7 @@ function renderSourceRowHtml(m: MigrationMapping, reviewData: ReviewData): strin
     <li class="review-source-row">
       <span class="review-source-icon">📁</span>
       <span class="review-source-name" title="${escHtml(m.sourceNode.originalPath)}">${escHtml(name)}</span>
-      ${scanCell}${skipCell}${failCell}
+      ${migratedCell}${scanFinCell}${skipCell}${failCell}
       <span class="rdc-view">${viewBtn}</span>
       ${phaseSelect}
     </li>`
@@ -1410,19 +1415,21 @@ function injectReviewStyles(): void {
       font-size: 0.62rem; font-weight: 700; color: var(--color-text-muted);
       text-transform: uppercase; letter-spacing: 0.05em; flex-shrink: 0; gap: 8px; }
     .rch-dest { flex: 1; }
-    .rch-scan { width: 110px; text-align: right; flex-shrink: 0; }
-    .rch-skip { width: 68px;  text-align: right; flex-shrink: 0; }
-    .rch-fail { width: 58px;  text-align: right; flex-shrink: 0; }
-    .rch-view { width: 58px;  flex-shrink: 0; }
-    .rch-phase { width: 100px; text-align: right; padding-right: 4px; flex-shrink: 0; }
+    .rch-migrated    { width: 80px;  text-align: right; flex-shrink: 0; }
+    .rch-scanfinished{ width: 90px;  text-align: right; flex-shrink: 0; }
+    .rch-skip        { width: 68px;  text-align: right; flex-shrink: 0; }
+    .rch-fail        { width: 58px;  text-align: right; flex-shrink: 0; }
+    .rch-view        { width: 58px;  flex-shrink: 0; }
+    .rch-phase       { width: 100px; text-align: right; padding-right: 4px; flex-shrink: 0; }
 
     /* ── Stat cells ── */
-    .rdc-scan { width: 110px; text-align: right; font-size: 0.8rem; flex-shrink: 0; font-variant-numeric: tabular-nums; }
-    .rdc-skip { width: 68px;  text-align: right; font-size: 0.8rem; flex-shrink: 0; font-variant-numeric: tabular-nums; color: var(--color-text-muted); }
-    .rdc-fail { width: 58px;  text-align: right; font-size: 0.8rem; flex-shrink: 0; font-variant-numeric: tabular-nums; }
+    .rdc-migrated     { width: 80px;  text-align: right; font-size: 0.8rem; flex-shrink: 0; font-variant-numeric: tabular-nums; color: #107c10; font-weight: 600; }
+    .rdc-scanfinished { width: 90px;  text-align: right; font-size: 0.8rem; flex-shrink: 0; font-variant-numeric: tabular-nums; color: var(--color-primary, #0078d4); }
+    .rdc-skip         { width: 68px;  text-align: right; font-size: 0.8rem; flex-shrink: 0; font-variant-numeric: tabular-nums; color: var(--color-text-muted); }
+    .rdc-fail         { width: 58px;  text-align: right; font-size: 0.8rem; flex-shrink: 0; font-variant-numeric: tabular-nums; }
     .rdc-fail:not(.rdc-empty) { color: var(--color-danger, #a4262c); font-weight: 600; }
-    .rdc-view { width: 58px;  flex-shrink: 0; display: flex; align-items: center; justify-content: flex-start; padding-left: 4px; }
-    .rdc-empty { color: var(--color-text-muted); opacity: 0.5; }
+    .rdc-view         { width: 58px;  flex-shrink: 0; display: flex; align-items: center; justify-content: flex-start; padding-left: 4px; }
+    .rdc-migrated.rdc-empty, .rdc-scanfinished.rdc-empty, .rdc-skip.rdc-empty, .rdc-fail.rdc-empty { color: var(--color-text-muted); opacity: 0.5; font-weight: normal; }
 
     /* ── Destination list ── */
     .review-dest-list { flex: 1; overflow-y: auto; list-style: none; padding: 0; margin: 0; min-height: 0; }
