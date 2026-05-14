@@ -480,7 +480,7 @@ function wireDestList(container: HTMLElement, groups: DestGroup[], migrationAcco
       list.querySelectorAll('.review-dest-row').forEach(r => r.classList.remove('review-dest-row--selected'))
       row.classList.add('review-dest-row--selected')
       renderRightPanel(rightPanel, group, migrationAccount, reviewData, resultUploads, list, (newStatus, mappingId) =>
-        handleAccessChanged(newStatus, mappingId, list, groups))
+        handleAccessChanged(newStatus, mappingId, list, groups), container)
     })
   })
 
@@ -533,6 +533,7 @@ function renderRightPanel(
   resultUploads: ResultUpload[],
   list: HTMLElement,
   onAccessChanged: (s: OneDriveAccessStatus, id: string) => Promise<void>,
+  container: HTMLElement,
 ): void {
   const relevantUploads = uploadsForGroup(group, reviewData, resultUploads)
   const selUploadId = _selectedUploadId.get(group.key) ?? relevantUploads[0]?.id
@@ -545,6 +546,7 @@ function renderRightPanel(
           `<option value="${escHtml(u.id)}" ${u.id === selUploadId ? 'selected' : ''}>${escHtml(formatUploadLabel(u))}</option>`
         ).join('')}
       </select>
+      <button class="rev-csv-view-btn" id="rev-csv-view-btn" title="View results for selected CSV">🔍</button>
     </div>` : ''
 
   const breakdown = statusBreakdownHtml(group, reviewData, selUploadId)
@@ -594,6 +596,14 @@ function renderRightPanel(
         <div id="rev-breakdown-wrap">${breakdown}</div>
       </div>`
   }
+
+  // Wire CSV view button → open results tree for selected CSV
+  rightPanel.querySelector<HTMLButtonElement>('#rev-csv-view-btn')?.addEventListener('click', () => {
+    const uploadId = _selectedUploadId.get(group.key) ?? relevantUploads[0]?.id
+    const rv = getState().reviewData
+    if (!rv) return
+    openResultsView(container, group.mappings[0], rv, uploadId)
+  })
 
   // Wire CSV selector → update table row stats + breakdown
   rightPanel.querySelector<HTMLSelectElement>('#rev-csv-select')?.addEventListener('change', (e) => {
@@ -1593,6 +1603,10 @@ function injectReviewStyles(): void {
       letter-spacing: 0.05em; color: var(--color-text-muted); white-space: nowrap; }
     .rev-csv-select { flex: 1; font-size: 0.8rem; padding: 3px 6px; border-radius: 4px;
       border: 1px solid var(--color-border); background: white; font-family: inherit; cursor: pointer; }
+    .rev-csv-view-btn { flex-shrink: 0; width: 26px; height: 26px; padding: 0; display: flex;
+      align-items: center; justify-content: center; border: 1px solid var(--color-border);
+      border-radius: 4px; background: white; cursor: pointer; font-size: 0.85rem; line-height: 1; }
+    .rev-csv-view-btn:hover { background: var(--color-surface-alt); border-color: var(--color-primary); }
 
     /* ── Source rows ── */
     .review-dest-sources { list-style: none; padding: 0; margin: 0;
