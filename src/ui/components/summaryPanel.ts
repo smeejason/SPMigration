@@ -425,14 +425,16 @@ async function runGrantAccess(container: HTMLElement): Promise<void> {
     try {
       const access = await checkUserDriveAccess(userId)
       if (access === 'accessible') {
-        newStatus = 'accessible'
+        newStatus = access
         skippedCount++
-      } else if (access === 'no-access') {
+      } else if (access === 'no-access' || access === 'no-drive') {
+        // no-drive means Graph returned 404, but grantUserDriveAccess uses
+        // SharePoint User Profiles (not Graph) so attempt the grant regardless
         await grantUserDriveAccess(userId, migrationAccount)
         newStatus = 'granted'
         grantedCount++
       } else {
-        newStatus = access  // 'no-drive' | 'error'
+        newStatus = access  // 'error'
         errorCount++
       }
     } catch {
