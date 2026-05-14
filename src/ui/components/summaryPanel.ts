@@ -235,8 +235,8 @@ function renderOneDriveSummary(container: HTMLElement, mappings: MigrationMappin
     const all = getState().mappings.filter(m => m.targetSite !== null || m.matchStatus === 'cant-find')
     exportOneDriveJson(applyOdFilter(applyWaveFilter(all, activeWaveFilter), activeOdFilter), waves)
   })
-  container.querySelector('#btn-check-perms')?.addEventListener('click', () => runCheckPermissions(container))
-  container.querySelector('#btn-grant-access')?.addEventListener('click', () => runGrantAccess(container))
+  container.querySelector('#btn-check-perms')?.addEventListener('click', () => runCheckPermissions(container, activeOdFilter, activeWaveFilter))
+  container.querySelector('#btn-grant-access')?.addEventListener('click', () => runGrantAccess(container, activeOdFilter, activeWaveFilter))
 }
 
 function applyOdFilter(mappings: MigrationMapping[], filter: string): MigrationMapping[] {
@@ -296,17 +296,13 @@ function odAccessBadge(m: MigrationMapping): string {
 
 // ─── Check Permissions ────────────────────────────────────────────────────────
 
-function visibleMappingIds(container: HTMLElement): Set<string> {
-  return new Set(
-    [...container.querySelectorAll<HTMLTableRowElement>('tr[data-mapping-id]')]
-      .filter(row => row.style.display !== 'none')
-      .map(row => row.dataset.mappingId!)
-  )
+function filteredOdMappings(statusFilter: string, waveFilter: string): MigrationMapping[] {
+  const all = getState().mappings.filter(m => m.targetSite?.id)
+  return applyOdFilter(applyWaveFilter(all, waveFilter), statusFilter)
 }
 
-async function runCheckPermissions(container: HTMLElement): Promise<void> {
-  const ids = visibleMappingIds(container)
-  const matchedMappings = getState().mappings.filter(m => m.targetSite?.id && ids.has(m.id))
+async function runCheckPermissions(container: HTMLElement, statusFilter = 'all', waveFilter = 'all'): Promise<void> {
+  const matchedMappings = filteredOdMappings(statusFilter, waveFilter)
   if (matchedMappings.length === 0) return
 
   const btnCheck = container.querySelector<HTMLButtonElement>('#btn-check-perms')!
@@ -386,7 +382,7 @@ async function runCheckPermissions(container: HTMLElement): Promise<void> {
 
 // ─── Grant Drive Access ───────────────────────────────────────────────────────
 
-async function runGrantAccess(container: HTMLElement): Promise<void> {
+async function runGrantAccess(container: HTMLElement, statusFilter = 'all', waveFilter = 'all'): Promise<void> {
   const state = getState()
   const migrationAccount = state.currentProject?.projectData?.autoMapSettings?.migrationAccount
   if (!migrationAccount) {
@@ -394,8 +390,7 @@ async function runGrantAccess(container: HTMLElement): Promise<void> {
     return
   }
 
-  const ids = visibleMappingIds(container)
-  const matchedMappings = state.mappings.filter(m => m.targetSite?.id && ids.has(m.id))
+  const matchedMappings = filteredOdMappings(statusFilter, waveFilter)
   if (matchedMappings.length === 0) return
 
   const btnCheck = container.querySelector<HTMLButtonElement>('#btn-check-perms')!
