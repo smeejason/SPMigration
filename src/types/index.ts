@@ -342,6 +342,7 @@ export interface MigrationResultItem {
   fileSizeBytes: number       // Item size (bytes) column
   isRecycleBin: boolean       // true when Source includes '$RECYCLE.BIN'
   sourcePath: string          // normalized: forward slashes, UNC prefix stripped
+  uploadId?: string           // tagged in memory at load time — not persisted to SharePoint
 }
 
 export interface MigrationResultSummary {

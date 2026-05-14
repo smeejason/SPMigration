@@ -3,8 +3,12 @@ import { persistProjectMappings, getSpConfig, updateProject } from '../../graph/
 import { renderPersonCard } from './oneDrivePersonCard'
 import { downloadDriveItem, resolveSharePointItemByUrl, resolveDriveItemRef, resolveOneDriveFolderByPath, listDriveItemsRecursive } from '../../graph/graphClient'
 import { buildReviewTree } from '../../parsers/migrationResultParser'
-import type { MigrationMapping, MigrationPhase, OneDriveAccessStatus, MigrationResultSummary, MigrationResultItem, ReviewData, ReviewNode } from '../../types'
+import type { MigrationMapping, MigrationPhase, OneDriveAccessStatus, MigrationResultSummary, MigrationResultItem, ReviewData, ReviewNode, ResultUpload } from '../../types'
 import type { SpDriveItemDetails, DriveItemFlat } from '../../graph/graphClient'
+
+// ─── Per-destination CSV selection (cleared on each layout render) ────────────
+
+const _selectedUploadId = new Map<string, string>()   // destKey → uploadId
 
 // ─── Tree view module-level state (scoped per-open) ──────────────────────────
 
@@ -91,10 +95,27 @@ function aggregatePhase(mappings: MigrationMapping[]): MigrationPhase {
 
 // ─── SPMT result cross-reference ──────────────────────────────────────────────
 
-function spStatForMapping(m: MigrationMapping, reviewData: ReviewData): { migrated: number; scanFinished: number; failed: number; skipped: number } | null {
+// Returns uploads (newest-first) that have items matching at least one mapping in the group
+function uploadsForGroup(group: DestGroup, reviewData: ReviewData, resultUploads: ResultUpload[]): ResultUpload[] {
+  const relevantIds = new Set<string>()
+  for (const m of group.mappings) {
+    const p = m.sourceNode.path
+    for (const item of reviewData.items) {
+      if (item.uploadId && (item.sourcePath === p || item.sourcePath.startsWith(p + '/'))) {
+        relevantIds.add(item.uploadId)
+      }
+    }
+  }
+  return resultUploads
+    .filter(u => relevantIds.has(u.id))
+    .sort((a, b) => new Date(b.uploadedAt).getTime() - new Date(a.uploadedAt).getTime())
+}
+
+function spStatForMapping(m: MigrationMapping, reviewData: ReviewData, uploadId?: string): { migrated: number; scanFinished: number; failed: number; skipped: number } | null {
   const sourcePath = m.sourceNode.path
   const items = reviewData.items.filter(i =>
-    i.sourcePath === sourcePath || i.sourcePath.startsWith(sourcePath + '/'))
+    (uploadId === undefined || i.uploadId === uploadId) &&
+    (i.sourcePath === sourcePath || i.sourcePath.startsWith(sourcePath + '/')))
   if (items.length === 0) return null
   return {
     migrated: items.filter(i => {
@@ -103,7 +124,7 @@ function spStatForMapping(m: MigrationMapping, reviewData: ReviewData): { migrat
     }).length,
     scanFinished: items.filter(i => {
       if (i.rawStatus) return i.rawStatus.toLowerCase() === 'scan finished'
-      return false  // can't distinguish from Skipped without rawStatus
+      return false
     }).length,
     failed:  items.filter(i => i.status === 'Failed').length,
     skipped: items.filter(i => {
@@ -113,11 +134,14 @@ function spStatForMapping(m: MigrationMapping, reviewData: ReviewData): { migrat
   }
 }
 
-function statusBreakdownHtml(group: DestGroup, reviewData: ReviewData): string {
+function statusBreakdownHtml(group: DestGroup, reviewData: ReviewData, uploadId?: string): string {
   const items: MigrationResultItem[] = []
   for (const m of group.mappings) {
     const p = m.sourceNode.path
-    reviewData.items.filter(i => i.sourcePath === p || i.sourcePath.startsWith(p + '/')).forEach(i => items.push(i))
+    reviewData.items
+      .filter(i => (uploadId === undefined || i.uploadId === uploadId) &&
+        (i.sourcePath === p || i.sourcePath.startsWith(p + '/')))
+      .forEach(i => items.push(i))
   }
   if (items.length === 0) return ''
 
@@ -129,7 +153,7 @@ function statusBreakdownHtml(group: DestGroup, reviewData: ReviewData): string {
   const rows = Array.from(counts.entries()).sort((a, b) => b[1] - a[1])
 
   return `
-    <div class="rev-status-breakdown">
+    <div class="rev-status-breakdown" id="rev-status-breakdown">
       <div class="rev-sb-title">Migration Status Breakdown</div>
       <table class="rev-sb-table">
         ${rows.map(([status, count]) => `
@@ -160,7 +184,10 @@ async function ensureReviewData(): Promise<ReviewData | null> {
     resultUploads.map(u => downloadDriveItem(siteId, u.summaryItemId))
   ) as MigrationResultSummary[]
 
-  const combinedItems: MigrationResultItem[] = downloads.flatMap(d => d.items ?? [])
+  // Tag each item with its upload's ID at load time (not persisted — memory only)
+  const combinedItems: MigrationResultItem[] = downloads.flatMap((d, i) =>
+    (d.items ?? []).map(item => ({ ...item, uploadId: resultUploads[i].id }))
+  )
   const tree = buildReviewTree(combinedItems)
   const reviewData: ReviewData = {
     tree,
@@ -240,12 +267,13 @@ export async function renderReviewPanel(container: HTMLElement): Promise<void> {
   }
 
   const migrationAccount = project.projectData.autoMapSettings?.migrationAccount ?? ''
-  renderLayout(container, groups, migrationAccount, reviewData!)
+  renderLayout(container, groups, migrationAccount, reviewData!, resultUploads)
 }
 
 // ─── Layout ───────────────────────────────────────────────────────────────────
 
-function renderLayout(container: HTMLElement, groups: DestGroup[], migrationAccount: string, reviewData: ReviewData): void {
+function renderLayout(container: HTMLElement, groups: DestGroup[], migrationAccount: string, reviewData: ReviewData, resultUploads: ResultUpload[]): void {
+  _selectedUploadId.clear()
   const totalDests = groups.length
   const withAccess = groups.filter(g =>
     g.isOneDrive && g.mappings.some(m => m.accessStatus === 'accessible' || m.accessStatus === 'granted')).length
@@ -302,7 +330,7 @@ function renderLayout(container: HTMLElement, groups: DestGroup[], migrationAcco
             <span class="rch-phase">Phase</span>
           </div>
           <ul class="review-dest-list" id="review-dest-list">
-            ${groups.map(g => renderDestItemHtml(g, reviewData)).join('')}
+            ${groups.map(g => renderDestItemHtml(g, reviewData, resultUploads)).join('')}
           </ul>
         </div>
         <div class="review-mapping-right" id="review-mapping-right">
@@ -315,23 +343,36 @@ function renderLayout(container: HTMLElement, groups: DestGroup[], migrationAcco
     </div>
   `
 
-  wireDestList(container, groups, migrationAccount, reviewData)
+  wireDestList(container, groups, migrationAccount, reviewData, resultUploads)
 }
 
-function renderDestItemHtml(g: DestGroup, reviewData: ReviewData): string {
+function formatUploadLabel(u: ResultUpload): string {
+  const d = new Date(u.uploadedAt)
+  const date = d.toLocaleDateString(undefined, { day: '2-digit', month: 'short', year: 'numeric' })
+  return `${u.fileName} (${date})`
+}
+
+function renderDestItemHtml(g: DestGroup, reviewData: ReviewData, resultUploads: ResultUpload[]): string {
   const initials = escHtml(g.displayName.slice(0, 2).toUpperCase())
   const phase = aggregatePhase(g.mappings)
 
   // Single mapping — flat row with stat columns
+  // Find relevant uploads for this group; default to newest
+  const relevantUploads = uploadsForGroup(g, reviewData, resultUploads)
+  const defaultUploadId = relevantUploads[0]?.id  // newest first
+  const selUploadId = _selectedUploadId.get(g.key) ?? defaultUploadId
+  if (selUploadId && !_selectedUploadId.has(g.key)) _selectedUploadId.set(g.key, selUploadId)
+
   if (g.mappings.length === 1) {
     const m = g.mappings[0]
-    const spStat = spStatForMapping(m, reviewData)
-    const migratedCell    = spStat ? `<span class="rdc-migrated">${spStat.migrated.toLocaleString()}</span>` : `<span class="rdc-migrated rdc-empty">—</span>`
-    const scanFinCell     = spStat ? `<span class="rdc-scanfinished">${spStat.scanFinished.toLocaleString()}</span>` : `<span class="rdc-scanfinished rdc-empty">—</span>`
-    const skipCell        = spStat ? `<span class="rdc-skip">${spStat.skipped.toLocaleString()}</span>` : `<span class="rdc-skip rdc-empty">—</span>`
-    const failCell        = spStat ? `<span class="rdc-fail">${spStat.failed > 0 ? spStat.failed.toLocaleString() : '0'}</span>` : `<span class="rdc-fail rdc-empty">—</span>`
-    const viewBtn   = spStat
-      ? `<button class="rev-view-btn" data-mapping-id="${escHtml(m.id)}" title="Open full results tree">View</button>`
+    const spStat = spStatForMapping(m, reviewData, selUploadId)
+    const csvLabel = relevantUploads.length > 0 ? `<span class="rev-csv-label" data-csv-label="${escHtml(g.key)}">${escHtml(relevantUploads.find(u => u.id === selUploadId)?.fileName ?? '')}</span>` : ''
+    const migratedCell  = spStat ? `<span class="rdc-migrated" data-stat-migrated="${escHtml(g.key)}">${spStat.migrated.toLocaleString()}</span>` : `<span class="rdc-migrated rdc-empty" data-stat-migrated="${escHtml(g.key)}">—</span>`
+    const scanFinCell   = spStat ? `<span class="rdc-scanfinished" data-stat-scanfinished="${escHtml(g.key)}">${spStat.scanFinished.toLocaleString()}</span>` : `<span class="rdc-scanfinished rdc-empty" data-stat-scanfinished="${escHtml(g.key)}">—</span>`
+    const skipCell      = spStat ? `<span class="rdc-skip" data-stat-skipped="${escHtml(g.key)}">${spStat.skipped.toLocaleString()}</span>` : `<span class="rdc-skip rdc-empty" data-stat-skipped="${escHtml(g.key)}">—</span>`
+    const failCell      = spStat ? `<span class="rdc-fail" data-stat-failed="${escHtml(g.key)}">${spStat.failed > 0 ? spStat.failed.toLocaleString() : '0'}</span>` : `<span class="rdc-fail rdc-empty" data-stat-failed="${escHtml(g.key)}">—</span>`
+    const viewBtn = spStat
+      ? `<button class="rev-view-btn" data-mapping-id="${escHtml(m.id)}" data-dest-key="${escHtml(g.key)}" title="Open full results tree">View</button>`
       : `<span class="rdc-view-placeholder"></span>`
     const phaseSelect = `
       <select class="rev-phase-select" data-mapping-id="${escHtml(m.id)}" title="Migration phase">
@@ -344,7 +385,10 @@ function renderDestItemHtml(g: DestGroup, reviewData: ReviewData): string {
       <li class="review-dest-item review-dest-item--flat" data-dest-key="${escHtml(g.key)}">
         <div class="review-dest-row" tabindex="0" role="button">
           <span class="review-dest-avatar">${initials}</span>
-          <span class="review-dest-name">${escHtml(g.displayName)}</span>
+          <div class="review-dest-name-wrap">
+            <span class="review-dest-name">${escHtml(g.displayName)}</span>
+            ${csvLabel}
+          </div>
           ${migratedCell}${scanFinCell}${skipCell}${failCell}
           <span class="rdc-view">${viewBtn}</span>
           <span class="rev-dest-phase" data-dest-phase="${escHtml(g.key)}">${phaseSelect}</span>
@@ -353,22 +397,26 @@ function renderDestItemHtml(g: DestGroup, reviewData: ReviewData): string {
   }
 
   // Multiple mappings — expandable, aggregate stats shown on header row
-  const totalMigrated    = g.mappings.reduce((s, m) => s + (spStatForMapping(m, reviewData)?.migrated ?? 0), 0)
-  const totalScanFin     = g.mappings.reduce((s, m) => s + (spStatForMapping(m, reviewData)?.scanFinished ?? 0), 0)
-  const totalSkip        = g.mappings.reduce((s, m) => s + (spStatForMapping(m, reviewData)?.skipped ?? 0), 0)
-  const totalFail        = g.mappings.reduce((s, m) => s + (spStatForMapping(m, reviewData)?.failed ?? 0), 0)
-  const hasAny           = g.mappings.some(m => spStatForMapping(m, reviewData) !== null)
-  const sourceRows       = g.mappings.map(m => renderSourceRowHtml(m, reviewData)).join('')
+  const totalMigrated = g.mappings.reduce((s, m) => s + (spStatForMapping(m, reviewData, selUploadId)?.migrated ?? 0), 0)
+  const totalScanFin  = g.mappings.reduce((s, m) => s + (spStatForMapping(m, reviewData, selUploadId)?.scanFinished ?? 0), 0)
+  const totalSkip     = g.mappings.reduce((s, m) => s + (spStatForMapping(m, reviewData, selUploadId)?.skipped ?? 0), 0)
+  const totalFail     = g.mappings.reduce((s, m) => s + (spStatForMapping(m, reviewData, selUploadId)?.failed ?? 0), 0)
+  const hasAny        = g.mappings.some(m => spStatForMapping(m, reviewData, selUploadId) !== null)
+  const csvLabel      = relevantUploads.length > 0 ? `<span class="rev-csv-label" data-csv-label="${escHtml(g.key)}">${escHtml(relevantUploads.find(u => u.id === selUploadId)?.fileName ?? '')}</span>` : ''
+  const sourceRows    = g.mappings.map(m => renderSourceRowHtml(m, reviewData, selUploadId)).join('')
 
   return `
     <li class="review-dest-item" data-dest-key="${escHtml(g.key)}">
       <div class="review-dest-row" tabindex="0" role="button">
         <span class="review-dest-toggle">▶</span>
         <span class="review-dest-avatar">${initials}</span>
-        <span class="review-dest-name">${escHtml(g.displayName)}</span>
+        <div class="review-dest-name-wrap">
+          <span class="review-dest-name">${escHtml(g.displayName)}</span>
+          ${csvLabel}
+        </div>
         ${hasAny
-          ? `<span class="rdc-migrated">${totalMigrated.toLocaleString()}</span><span class="rdc-scanfinished">${totalScanFin.toLocaleString()}</span><span class="rdc-skip">${totalSkip.toLocaleString()}</span><span class="rdc-fail">${totalFail.toLocaleString()}</span>`
-          : `<span class="rdc-migrated rdc-empty">—</span><span class="rdc-scanfinished rdc-empty">—</span><span class="rdc-skip rdc-empty">—</span><span class="rdc-fail rdc-empty">—</span>`}
+          ? `<span class="rdc-migrated" data-stat-migrated="${escHtml(g.key)}">${totalMigrated.toLocaleString()}</span><span class="rdc-scanfinished" data-stat-scanfinished="${escHtml(g.key)}">${totalScanFin.toLocaleString()}</span><span class="rdc-skip" data-stat-skipped="${escHtml(g.key)}">${totalSkip.toLocaleString()}</span><span class="rdc-fail" data-stat-failed="${escHtml(g.key)}">${totalFail.toLocaleString()}</span>`
+          : `<span class="rdc-migrated rdc-empty" data-stat-migrated="${escHtml(g.key)}">—</span><span class="rdc-scanfinished rdc-empty" data-stat-scanfinished="${escHtml(g.key)}">—</span><span class="rdc-skip rdc-empty" data-stat-skipped="${escHtml(g.key)}">—</span><span class="rdc-fail rdc-empty" data-stat-failed="${escHtml(g.key)}">—</span>`}
         <span class="rdc-view"></span>
         <span class="rev-dest-phase" data-dest-phase="${escHtml(g.key)}">${phaseBadgeHtml(phase)}</span>
       </div>
@@ -378,15 +426,15 @@ function renderDestItemHtml(g: DestGroup, reviewData: ReviewData): string {
     </li>`
 }
 
-function renderSourceRowHtml(m: MigrationMapping, reviewData: ReviewData): string {
+function renderSourceRowHtml(m: MigrationMapping, reviewData: ReviewData, uploadId?: string): string {
   const name = m.sourceNode.name || m.sourceNode.originalPath
-  const spStat = spStatForMapping(m, reviewData)
+  const spStat = spStatForMapping(m, reviewData, uploadId)
   const migratedCell = spStat ? `<span class="rdc-migrated">${spStat.migrated.toLocaleString()}</span>`         : `<span class="rdc-migrated rdc-empty">—</span>`
   const scanFinCell  = spStat ? `<span class="rdc-scanfinished">${spStat.scanFinished.toLocaleString()}</span>` : `<span class="rdc-scanfinished rdc-empty">—</span>`
   const skipCell     = spStat ? `<span class="rdc-skip">${spStat.skipped.toLocaleString()}</span>`              : `<span class="rdc-skip rdc-empty">—</span>`
   const failCell     = spStat ? `<span class="rdc-fail">${spStat.failed.toLocaleString()}</span>`               : `<span class="rdc-fail rdc-empty">—</span>`
   const viewBtn  = spStat
-    ? `<button class="rev-view-btn" data-mapping-id="${escHtml(m.id)}" title="Open full results tree">View</button>`
+    ? `<button class="rev-view-btn" data-mapping-id="${escHtml(m.id)}" data-dest-key="" title="Open full results tree">View</button>`
     : ''
   const phaseSelect = `
     <select class="rev-phase-select" data-mapping-id="${escHtml(m.id)}" title="Migration phase">
@@ -407,7 +455,7 @@ function renderSourceRowHtml(m: MigrationMapping, reviewData: ReviewData): strin
 
 // ─── Wiring ───────────────────────────────────────────────────────────────────
 
-function wireDestList(container: HTMLElement, groups: DestGroup[], migrationAccount: string, reviewData: ReviewData): void {
+function wireDestList(container: HTMLElement, groups: DestGroup[], migrationAccount: string, reviewData: ReviewData, resultUploads: ResultUpload[]): void {
   const list = container.querySelector<HTMLElement>('#review-dest-list')!
   const rightPanel = container.querySelector<HTMLElement>('#review-mapping-right')!
 
@@ -431,7 +479,7 @@ function wireDestList(container: HTMLElement, groups: DestGroup[], migrationAcco
 
       list.querySelectorAll('.review-dest-row').forEach(r => r.classList.remove('review-dest-row--selected'))
       row.classList.add('review-dest-row--selected')
-      renderRightPanel(rightPanel, group, migrationAccount, reviewData, (newStatus, mappingId) =>
+      renderRightPanel(rightPanel, group, migrationAccount, reviewData, resultUploads, list, (newStatus, mappingId) =>
         handleAccessChanged(newStatus, mappingId, list, groups))
     })
   })
@@ -442,12 +490,13 @@ function wireDestList(container: HTMLElement, groups: DestGroup[], migrationAcco
     if (!btn) return
     e.stopPropagation()
     const mappingId = btn.dataset.mappingId!
+    const destKey   = btn.dataset.destKey ?? ''
     const mapping = getState().mappings.find(m => m.id === mappingId)
     if (!mapping) return
     const reviewData = getState().reviewData
     if (!reviewData) return
-    // Pass the outer container so the back button can re-render the destinations view
-    openResultsView(container, mapping, reviewData)
+    const uploadId = destKey ? _selectedUploadId.get(destKey) : undefined
+    openResultsView(container, mapping, reviewData, uploadId)
   })
 
   // Phase select change
@@ -481,16 +530,32 @@ function renderRightPanel(
   group: DestGroup,
   migrationAccount: string,
   reviewData: ReviewData,
+  resultUploads: ResultUpload[],
+  list: HTMLElement,
   onAccessChanged: (s: OneDriveAccessStatus, id: string) => Promise<void>,
 ): void {
-  const breakdown = statusBreakdownHtml(group, reviewData)
+  const relevantUploads = uploadsForGroup(group, reviewData, resultUploads)
+  const selUploadId = _selectedUploadId.get(group.key) ?? relevantUploads[0]?.id
+
+  const csvSelectorHtml = relevantUploads.length > 0 ? `
+    <div class="rev-csv-selector">
+      <label class="rev-csv-selector-label">Results CSV</label>
+      <select class="rev-csv-select" id="rev-csv-select">
+        ${relevantUploads.map(u =>
+          `<option value="${escHtml(u.id)}" ${u.id === selUploadId ? 'selected' : ''}>${escHtml(formatUploadLabel(u))}</option>`
+        ).join('')}
+      </select>
+    </div>` : ''
+
+  const breakdown = statusBreakdownHtml(group, reviewData, selUploadId)
 
   if (group.isOneDrive) {
     const rep = group.mappings[0]
     rightPanel.innerHTML = `
       <div style="padding:16px;overflow-y:auto;height:100%;box-sizing:border-box;">
         <div id="rev-person-card-wrap"></div>
-        ${breakdown}
+        ${csvSelectorHtml}
+        <div id="rev-breakdown-wrap">${breakdown}</div>
       </div>`
     renderPersonCard({
       mapping: rep,
@@ -525,9 +590,78 @@ function renderRightPanel(
             </div>` : ''}
           </div>
         </div>
-        ${breakdown}
+        ${csvSelectorHtml}
+        <div id="rev-breakdown-wrap">${breakdown}</div>
       </div>`
   }
+
+  // Wire CSV selector → update table row stats + breakdown
+  rightPanel.querySelector<HTMLSelectElement>('#rev-csv-select')?.addEventListener('change', (e) => {
+    const newUploadId = (e.target as HTMLSelectElement).value
+    _selectedUploadId.set(group.key, newUploadId)
+
+    // Update status breakdown in right panel
+    const breakdownWrap = rightPanel.querySelector<HTMLElement>('#rev-breakdown-wrap')!
+    breakdownWrap.innerHTML = statusBreakdownHtml(group, reviewData, newUploadId)
+
+    // Update stat cells and CSV label in the table row
+    updateRowStats(list, group, reviewData, newUploadId)
+
+    // Update any open source rows too (multi-mapping case)
+    const destItem = list.querySelector<HTMLElement>(`.review-dest-item[data-dest-key="${CSS.escape(group.key)}"]`)
+    if (destItem) {
+      const sourcesList = destItem.querySelector<HTMLElement>('.review-dest-sources')
+      if (sourcesList && sourcesList.style.display !== 'none') {
+        sourcesList.innerHTML = group.mappings.map(m => renderSourceRowHtml(m, reviewData, newUploadId)).join('')
+      }
+    }
+  })
+}
+
+function updateRowStats(list: HTMLElement, group: DestGroup, reviewData: ReviewData, uploadId: string): void {
+  const upload = reviewData.items.find(i => i.uploadId === uploadId)?.uploadId
+  const csvFileName = upload ? (getState().currentProject?.projectData.resultUploads?.find(u => u.id === uploadId)?.fileName ?? '') : ''
+
+  const setCell = (attr: string, value: string, isEmpty: boolean) => {
+    const el = list.querySelector<HTMLElement>(`[${attr}="${CSS.escape(group.key)}"]`)
+    if (el) {
+      el.textContent = value
+      el.classList.toggle('rdc-empty', isEmpty)
+    }
+  }
+
+  if (group.mappings.length === 1) {
+    const spStat = spStatForMapping(group.mappings[0], reviewData, uploadId)
+    if (spStat) {
+      setCell('data-stat-migrated',     spStat.migrated.toLocaleString(), false)
+      setCell('data-stat-scanfinished', spStat.scanFinished.toLocaleString(), false)
+      setCell('data-stat-skipped',      spStat.skipped.toLocaleString(), false)
+      setCell('data-stat-failed',       spStat.failed > 0 ? spStat.failed.toLocaleString() : '0', false)
+    } else {
+      setCell('data-stat-migrated', '—', true)
+      setCell('data-stat-scanfinished', '—', true)
+      setCell('data-stat-skipped', '—', true)
+      setCell('data-stat-failed', '—', true)
+    }
+  } else {
+    const totalMigrated = group.mappings.reduce((s, m) => s + (spStatForMapping(m, reviewData, uploadId)?.migrated ?? 0), 0)
+    const totalScanFin  = group.mappings.reduce((s, m) => s + (spStatForMapping(m, reviewData, uploadId)?.scanFinished ?? 0), 0)
+    const totalSkip     = group.mappings.reduce((s, m) => s + (spStatForMapping(m, reviewData, uploadId)?.skipped ?? 0), 0)
+    const totalFail     = group.mappings.reduce((s, m) => s + (spStatForMapping(m, reviewData, uploadId)?.failed ?? 0), 0)
+    const hasAny        = group.mappings.some(m => spStatForMapping(m, reviewData, uploadId) !== null)
+    setCell('data-stat-migrated',     hasAny ? totalMigrated.toLocaleString() : '—', !hasAny)
+    setCell('data-stat-scanfinished', hasAny ? totalScanFin.toLocaleString()  : '—', !hasAny)
+    setCell('data-stat-skipped',      hasAny ? totalSkip.toLocaleString()     : '—', !hasAny)
+    setCell('data-stat-failed',       hasAny ? totalFail.toLocaleString()     : '—', !hasAny)
+  }
+
+  // Update CSV label in table row
+  const labelEl = list.querySelector<HTMLElement>(`[data-csv-label="${CSS.escape(group.key)}"]`)
+  if (labelEl) labelEl.textContent = csvFileName
+
+  // Update View button's stored upload context
+  const viewBtn = list.querySelector<HTMLButtonElement>(`.rev-view-btn[data-dest-key="${CSS.escape(group.key)}"]`)
+  if (viewBtn) viewBtn.dataset.destKey = group.key
 }
 
 async function handleAccessChanged(
@@ -556,13 +690,14 @@ async function handleAccessChanged(
 
 // ─── Results tree view ────────────────────────────────────────────────────────
 
-function openResultsView(container: HTMLElement, mapping: MigrationMapping, reviewData: ReviewData): void {
+function openResultsView(container: HTMLElement, mapping: MigrationMapping, reviewData: ReviewData, uploadId?: string): void {
   const sourcePath = mapping.sourceNode.path
   const sourceName = mapping.sourceNode.name || mapping.sourceNode.originalPath
 
-  // Filter items to just this source path and build a sub-tree
+  // Filter items to this source path, and optionally to a specific upload CSV
   const filteredItems = reviewData.items.filter(i =>
-    i.sourcePath === sourcePath || i.sourcePath.startsWith(sourcePath + '/'))
+    (uploadId === undefined || i.uploadId === uploadId) &&
+    (i.sourcePath === sourcePath || i.sourcePath.startsWith(sourcePath + '/')))
   const subTree = buildReviewTree(filteredItems)
   const totals = {
     migrated: filteredItems.filter(i => i.status === 'Migrated').length,
@@ -1443,9 +1578,21 @@ function injectReviewStyles(): void {
     .review-dest-avatar { width: 28px; height: 28px; border-radius: 50%;
       background: var(--color-primary, #0078d4); color: white; font-size: 0.72rem; font-weight: 700;
       display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
-    .review-dest-name { flex: 1; font-size: 0.875rem; font-weight: 500;
+    .review-dest-name-wrap { flex: 1; min-width: 0; display: flex; flex-direction: column;
+      justify-content: center; gap: 1px; overflow: hidden; }
+    .review-dest-name { font-size: 0.875rem; font-weight: 500;
       white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .rev-csv-label { font-size: 0.68rem; color: var(--color-text-muted); white-space: nowrap;
+      overflow: hidden; text-overflow: ellipsis; font-style: italic; }
     .rev-dest-phase { flex-shrink: 0; }
+
+    /* ── CSV selector (right panel) ── */
+    .rev-csv-selector { margin-bottom: 16px; padding: 10px 12px; background: var(--color-surface-alt, #f8f8f8);
+      border: 1px solid var(--color-border); border-radius: 6px; display: flex; align-items: center; gap: 10px; }
+    .rev-csv-selector-label { font-size: 0.72rem; font-weight: 700; text-transform: uppercase;
+      letter-spacing: 0.05em; color: var(--color-text-muted); white-space: nowrap; }
+    .rev-csv-select { flex: 1; font-size: 0.8rem; padding: 3px 6px; border-radius: 4px;
+      border: 1px solid var(--color-border); background: white; font-family: inherit; cursor: pointer; }
 
     /* ── Source rows ── */
     .review-dest-sources { list-style: none; padding: 0; margin: 0;
