@@ -190,17 +190,19 @@ function renderOneDriveSummary(container: HTMLElement, mappings: MigrationMappin
 
   injectSummaryStyles()
 
-  // Track active filters for export
-  let activeOdFilter = 'all'
-  let activeWaveFilter = 'all'
+  // Store active filter state on the container so any function can read it without closure magic
+  container.dataset.odStatusFilter = 'all'
+  container.dataset.odWaveFilter   = 'all'
 
   function applyBothFilters(): void {
+    const sf = container.dataset.odStatusFilter ?? 'all'
+    const wf = container.dataset.odWaveFilter   ?? 'all'
     container.querySelectorAll<HTMLTableRowElement>('tr[data-filter-status]').forEach(row => {
-      const statusMatch = activeOdFilter === 'all' || row.dataset.filterStatus === activeOdFilter
+      const statusMatch = sf === 'all' || row.dataset.filterStatus === sf
       const waveVal = row.dataset.waveId ?? ''
-      const waveMatch = activeWaveFilter === 'all'
-        || (activeWaveFilter === 'none' && !waveVal)
-        || row.dataset.waveId === activeWaveFilter
+      const waveMatch = wf === 'all'
+        || (wf === 'none' && !waveVal)
+        || waveVal === wf
       row.style.display = statusMatch && waveMatch ? '' : 'none'
     })
   }
@@ -211,7 +213,7 @@ function renderOneDriveSummary(container: HTMLElement, mappings: MigrationMappin
     btn.addEventListener('click', () => {
       filterBar.querySelectorAll('.filter-pill').forEach(b => b.classList.remove('filter-pill--active'))
       btn.classList.add('filter-pill--active')
-      activeOdFilter = btn.dataset.filter!
+      container.dataset.odStatusFilter = btn.dataset.filter!
       applyBothFilters()
     })
   })
@@ -222,18 +224,18 @@ function renderOneDriveSummary(container: HTMLElement, mappings: MigrationMappin
     btn.addEventListener('click', () => {
       waveFilterBar.querySelectorAll('.filter-pill').forEach(b => b.classList.remove('filter-pill--active'))
       btn.classList.add('filter-pill--active')
-      activeWaveFilter = btn.dataset.wave!
+      container.dataset.odWaveFilter = btn.dataset.wave!
       applyBothFilters()
     })
   })
 
   container.querySelector('#btn-export-csv')?.addEventListener('click', () => {
     const all = getState().mappings.filter(m => m.targetSite !== null || m.matchStatus === 'cant-find')
-    exportOneDriveCsv(applyOdFilter(applyWaveFilter(all, activeWaveFilter), activeOdFilter), waves)
+    exportOneDriveCsv(applyOdFilter(applyWaveFilter(all, container.dataset.odWaveFilter ?? 'all'), container.dataset.odStatusFilter ?? 'all'), waves)
   })
   container.querySelector('#btn-export-json')?.addEventListener('click', () => {
     const all = getState().mappings.filter(m => m.targetSite !== null || m.matchStatus === 'cant-find')
-    exportOneDriveJson(applyOdFilter(applyWaveFilter(all, activeWaveFilter), activeOdFilter), waves)
+    exportOneDriveJson(applyOdFilter(applyWaveFilter(all, container.dataset.odWaveFilter ?? 'all'), container.dataset.odStatusFilter ?? 'all'), waves)
   })
   container.querySelector('#btn-check-perms')?.addEventListener('click', () => runCheckPermissions(container))
   container.querySelector('#btn-grant-access')?.addEventListener('click', () => runGrantAccess(container))
@@ -296,16 +298,11 @@ function odAccessBadge(m: MigrationMapping): string {
 
 // ─── Check Permissions ────────────────────────────────────────────────────────
 
-function activeFilters(container: HTMLElement): { statusFilter: string; waveFilter: string } {
-  const statusFilter = container.querySelector<HTMLElement>('#od-filter-bar .filter-pill--active')?.dataset.filter ?? 'all'
-  const waveFilter   = container.querySelector<HTMLElement>('#od-wave-filter-bar .filter-pill--active')?.dataset.wave ?? 'all'
-  return { statusFilter, waveFilter }
-}
-
 function filteredOdMappings(container: HTMLElement): MigrationMapping[] {
-  const { statusFilter, waveFilter } = activeFilters(container)
+  const sf = container.dataset.odStatusFilter ?? 'all'
+  const wf = container.dataset.odWaveFilter   ?? 'all'
   const all = getState().mappings.filter(m => m.targetSite?.id)
-  return applyOdFilter(applyWaveFilter(all, waveFilter), statusFilter)
+  return applyOdFilter(applyWaveFilter(all, wf), sf)
 }
 
 async function runCheckPermissions(container: HTMLElement): Promise<void> {
