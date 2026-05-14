@@ -335,6 +335,7 @@ export interface MigrationResultItem {
   itemName: string            // Item name column
   itemType: 'File' | 'Folder' // Type column
   status: MigrationResultStatus
+  rawStatus: string           // exact Status string from CSV (e.g. 'Scan Finished')
   resultCategory: string      // Result category column
   message: string             // Message column
   errorCode: string           // Error code (from ItemFailureReport, else '')

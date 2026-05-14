@@ -1,6 +1,6 @@
 import { getState, setState } from '../../state/store'
 import { persistProjectMappings, getSpConfig, updateProject } from '../../graph/projectService'
-import { renderPersonCard, accessStatusBadge } from './oneDrivePersonCard'
+import { renderPersonCard } from './oneDrivePersonCard'
 import { downloadDriveItem, resolveSharePointItemByUrl, resolveDriveItemRef, resolveOneDriveFolderByPath, listDriveItemsRecursive } from '../../graph/graphClient'
 import { buildReviewTree } from '../../parsers/migrationResultParser'
 import type { MigrationMapping, MigrationPhase, OneDriveAccessStatus, MigrationResultSummary, MigrationResultItem, ReviewData, ReviewNode } from '../../types'
@@ -91,16 +91,51 @@ function aggregatePhase(mappings: MigrationMapping[]): MigrationPhase {
 
 // ─── SPMT result cross-reference ──────────────────────────────────────────────
 
-function spStatForMapping(m: MigrationMapping, reviewData: ReviewData): { migrated: number; failed: number; skipped: number } | null {
+function spStatForMapping(m: MigrationMapping, reviewData: ReviewData): { scanMigrated: number; failed: number; skipped: number } | null {
   const sourcePath = m.sourceNode.path
   const items = reviewData.items.filter(i =>
     i.sourcePath === sourcePath || i.sourcePath.startsWith(sourcePath + '/'))
   if (items.length === 0) return null
   return {
-    migrated: items.filter(i => i.status === 'Migrated').length,
-    failed:   items.filter(i => i.status === 'Failed').length,
-    skipped:  items.filter(i => i.status === 'Skipped').length,
+    scanMigrated: items.filter(i => {
+      const s = (i.rawStatus || i.status).toLowerCase()
+      return s === 'migrated' || s === 'scan finished'
+    }).length,
+    failed:  items.filter(i => i.status === 'Failed').length,
+    skipped: items.filter(i => i.status === 'Skipped').length,
   }
+}
+
+function statusBreakdownHtml(group: DestGroup, reviewData: ReviewData): string {
+  const items: MigrationResultItem[] = []
+  for (const m of group.mappings) {
+    const p = m.sourceNode.path
+    reviewData.items.filter(i => i.sourcePath === p || i.sourcePath.startsWith(p + '/')).forEach(i => items.push(i))
+  }
+  if (items.length === 0) return ''
+
+  const counts = new Map<string, number>()
+  for (const item of items) {
+    const s = item.rawStatus || item.status
+    counts.set(s, (counts.get(s) ?? 0) + 1)
+  }
+  const rows = Array.from(counts.entries()).sort((a, b) => b[1] - a[1])
+
+  return `
+    <div class="rev-status-breakdown">
+      <div class="rev-sb-title">Migration Status Breakdown</div>
+      <table class="rev-sb-table">
+        ${rows.map(([status, count]) => `
+          <tr class="rev-sb-row">
+            <td class="rev-sb-status">${escHtml(status)}</td>
+            <td class="rev-sb-count">${count.toLocaleString()}</td>
+          </tr>`).join('')}
+        <tr class="rev-sb-total-row">
+          <td class="rev-sb-status">Total</td>
+          <td class="rev-sb-count">${items.length.toLocaleString()}</td>
+        </tr>
+      </table>
+    </div>`
 }
 
 // ─── Review data loading ──────────────────────────────────────────────────────
@@ -251,7 +286,11 @@ function renderLayout(container: HTMLElement, groups: DestGroup[], migrationAcco
       <div class="review-mapping-layout">
         <div class="review-mapping-left">
           <div class="review-col-header">
-            <span class="rch-dest">Destination</span>
+            <span class="rch-dest">Account</span>
+            <span class="rch-scan">Scanned / Migrated</span>
+            <span class="rch-skip">Skipped</span>
+            <span class="rch-fail">Failed</span>
+            <span class="rch-view"></span>
             <span class="rch-phase">Phase</span>
           </div>
           <ul class="review-dest-list" id="review-dest-list">
@@ -268,31 +307,23 @@ function renderLayout(container: HTMLElement, groups: DestGroup[], migrationAcco
     </div>
   `
 
-  wireDestList(container, groups, migrationAccount)
+  wireDestList(container, groups, migrationAccount, reviewData)
 }
 
 function renderDestItemHtml(g: DestGroup, reviewData: ReviewData): string {
   const initials = escHtml(g.displayName.slice(0, 2).toUpperCase())
   const phase = aggregatePhase(g.mappings)
-  const accessBadge = g.isOneDrive
-    ? `<span class="rev-access-mini">${accessStatusBadge(g.mappings[0]?.accessStatus)}</span>`
-    : ''
 
-  // Single mapping — merge into one flat row
+  // Single mapping — flat row with stat columns
   if (g.mappings.length === 1) {
     const m = g.mappings[0]
     const spStat = spStatForMapping(m, reviewData)
-    const size = m.sourceNode.sizeBytes > 0 ? formatBytes(m.sourceNode.sizeBytes) : ''
-    const spHtml = spStat
-      ? `<span class="rev-source-spstat">
-          <span class="rss-m" title="Migrated">✓${spStat.migrated}</span>
-          ${spStat.failed > 0 ? `<span class="rss-f" title="Failed">✗${spStat.failed}</span>` : ''}
-          ${spStat.skipped > 0 ? `<span class="rss-s" title="Skipped">⊘${spStat.skipped}</span>` : ''}
-        </span>`
-      : ''
-    const viewBtn = spStat
-      ? `<button class="rev-view-results-btn" data-mapping-id="${escHtml(m.id)}" title="Open full results tree">View →</button>`
-      : ''
+    const scanCell  = spStat ? `<span class="rdc-scan">${spStat.scanMigrated.toLocaleString()}</span>` : `<span class="rdc-scan rdc-empty">—</span>`
+    const skipCell  = spStat ? `<span class="rdc-skip">${spStat.skipped.toLocaleString()}</span>`      : `<span class="rdc-skip rdc-empty">—</span>`
+    const failCell  = spStat ? `<span class="rdc-fail">${spStat.failed > 0 ? spStat.failed.toLocaleString() : '0'}</span>` : `<span class="rdc-fail rdc-empty">—</span>`
+    const viewBtn   = spStat
+      ? `<button class="rev-view-btn" data-mapping-id="${escHtml(m.id)}" title="Open full results tree">View</button>`
+      : `<span class="rdc-view-placeholder"></span>`
     const phaseSelect = `
       <select class="rev-phase-select" data-mapping-id="${escHtml(m.id)}" title="Migration phase">
         ${PHASES.map(p =>
@@ -305,16 +336,18 @@ function renderDestItemHtml(g: DestGroup, reviewData: ReviewData): string {
         <div class="review-dest-row" tabindex="0" role="button">
           <span class="review-dest-avatar">${initials}</span>
           <span class="review-dest-name">${escHtml(g.displayName)}</span>
-          ${size ? `<span class="review-source-size">${escHtml(size)}</span>` : ''}
-          ${spHtml}
-          ${viewBtn}
-          ${accessBadge}
+          ${scanCell}${skipCell}${failCell}
+          <span class="rdc-view">${viewBtn}</span>
           <span class="rev-dest-phase" data-dest-phase="${escHtml(g.key)}">${phaseSelect}</span>
         </div>
       </li>`
   }
 
-  // Multiple mappings — keep expandable list
+  // Multiple mappings — expandable, aggregate stats shown on header row
+  const totalScan  = g.mappings.reduce((s, m) => s + (spStatForMapping(m, reviewData)?.scanMigrated ?? 0), 0)
+  const totalSkip  = g.mappings.reduce((s, m) => s + (spStatForMapping(m, reviewData)?.skipped ?? 0), 0)
+  const totalFail  = g.mappings.reduce((s, m) => s + (spStatForMapping(m, reviewData)?.failed ?? 0), 0)
+  const hasAny     = g.mappings.some(m => spStatForMapping(m, reviewData) !== null)
   const sourceRows = g.mappings.map(m => renderSourceRowHtml(m, reviewData)).join('')
 
   return `
@@ -323,7 +356,8 @@ function renderDestItemHtml(g: DestGroup, reviewData: ReviewData): string {
         <span class="review-dest-toggle">▶</span>
         <span class="review-dest-avatar">${initials}</span>
         <span class="review-dest-name">${escHtml(g.displayName)}</span>
-        ${accessBadge}
+        ${hasAny ? `<span class="rdc-scan">${totalScan.toLocaleString()}</span><span class="rdc-skip">${totalSkip.toLocaleString()}</span><span class="rdc-fail">${totalFail.toLocaleString()}</span>` : `<span class="rdc-scan rdc-empty">—</span><span class="rdc-skip rdc-empty">—</span><span class="rdc-fail rdc-empty">—</span>`}
+        <span class="rdc-view"></span>
         <span class="rev-dest-phase" data-dest-phase="${escHtml(g.key)}">${phaseBadgeHtml(phase)}</span>
       </div>
       <ul class="review-dest-sources" style="display:none">
@@ -334,16 +368,13 @@ function renderDestItemHtml(g: DestGroup, reviewData: ReviewData): string {
 
 function renderSourceRowHtml(m: MigrationMapping, reviewData: ReviewData): string {
   const name = m.sourceNode.name || m.sourceNode.originalPath
-  const size = m.sourceNode.sizeBytes > 0 ? formatBytes(m.sourceNode.sizeBytes) : ''
   const spStat = spStatForMapping(m, reviewData)
-  const spHtml = spStat
-    ? `<span class="rev-source-spstat">
-        <span class="rss-m" title="Migrated">✓${spStat.migrated}</span>
-        ${spStat.failed > 0 ? `<span class="rss-f" title="Failed">✗${spStat.failed}</span>` : ''}
-        ${spStat.skipped > 0 ? `<span class="rss-s" title="Skipped">⊘${spStat.skipped}</span>` : ''}
-      </span>`
+  const scanCell = spStat ? `<span class="rdc-scan">${spStat.scanMigrated.toLocaleString()}</span>` : `<span class="rdc-scan rdc-empty">—</span>`
+  const skipCell = spStat ? `<span class="rdc-skip">${spStat.skipped.toLocaleString()}</span>`      : `<span class="rdc-skip rdc-empty">—</span>`
+  const failCell = spStat ? `<span class="rdc-fail">${spStat.failed.toLocaleString()}</span>`       : `<span class="rdc-fail rdc-empty">—</span>`
+  const viewBtn  = spStat
+    ? `<button class="rev-view-btn" data-mapping-id="${escHtml(m.id)}" title="Open full results tree">View</button>`
     : ''
-
   const phaseSelect = `
     <select class="rev-phase-select" data-mapping-id="${escHtml(m.id)}" title="Migration phase">
       ${PHASES.map(p =>
@@ -351,24 +382,19 @@ function renderSourceRowHtml(m: MigrationMapping, reviewData: ReviewData): strin
       ).join('')}
     </select>`
 
-  const viewBtn = spStat
-    ? `<button class="rev-view-results-btn" data-mapping-id="${escHtml(m.id)}" title="Open full results tree">View →</button>`
-    : ''
-
   return `
     <li class="review-source-row">
       <span class="review-source-icon">📁</span>
       <span class="review-source-name" title="${escHtml(m.sourceNode.originalPath)}">${escHtml(name)}</span>
-      ${size ? `<span class="review-source-size">${escHtml(size)}</span>` : ''}
-      ${spHtml}
-      ${viewBtn}
+      ${scanCell}${skipCell}${failCell}
+      <span class="rdc-view">${viewBtn}</span>
       ${phaseSelect}
     </li>`
 }
 
 // ─── Wiring ───────────────────────────────────────────────────────────────────
 
-function wireDestList(container: HTMLElement, groups: DestGroup[], migrationAccount: string): void {
+function wireDestList(container: HTMLElement, groups: DestGroup[], migrationAccount: string, reviewData: ReviewData): void {
   const list = container.querySelector<HTMLElement>('#review-dest-list')!
   const rightPanel = container.querySelector<HTMLElement>('#review-mapping-right')!
 
@@ -392,14 +418,14 @@ function wireDestList(container: HTMLElement, groups: DestGroup[], migrationAcco
 
       list.querySelectorAll('.review-dest-row').forEach(r => r.classList.remove('review-dest-row--selected'))
       row.classList.add('review-dest-row--selected')
-      renderRightPanel(rightPanel, group, migrationAccount, (newStatus, mappingId) =>
+      renderRightPanel(rightPanel, group, migrationAccount, reviewData, (newStatus, mappingId) =>
         handleAccessChanged(newStatus, mappingId, list, groups))
     })
   })
 
   // "View Results" button click — navigate to full tree view for that mapping
   list.addEventListener('click', (e) => {
-    const btn = (e.target as HTMLElement).closest<HTMLButtonElement>('.rev-view-results-btn')
+    const btn = (e.target as HTMLElement).closest<HTMLButtonElement>('.rev-view-btn')
     if (!btn) return
     e.stopPropagation()
     const mappingId = btn.dataset.mappingId!
@@ -441,11 +467,18 @@ function renderRightPanel(
   rightPanel: HTMLElement,
   group: DestGroup,
   migrationAccount: string,
+  reviewData: ReviewData,
   onAccessChanged: (s: OneDriveAccessStatus, id: string) => Promise<void>,
 ): void {
+  const breakdown = statusBreakdownHtml(group, reviewData)
+
   if (group.isOneDrive) {
     const rep = group.mappings[0]
-    rightPanel.innerHTML = `<div id="rev-person-card-wrap" style="padding:16px;overflow-y:auto;height:100%;box-sizing:border-box;"></div>`
+    rightPanel.innerHTML = `
+      <div style="padding:16px;overflow-y:auto;height:100%;box-sizing:border-box;">
+        <div id="rev-person-card-wrap"></div>
+        ${breakdown}
+      </div>`
     renderPersonCard({
       mapping: rep,
       migrationAccount,
@@ -479,6 +512,7 @@ function renderRightPanel(
             </div>` : ''}
           </div>
         </div>
+        ${breakdown}
       </div>`
   }
 }
@@ -486,7 +520,7 @@ function renderRightPanel(
 async function handleAccessChanged(
   newStatus: OneDriveAccessStatus,
   mappingId: string,
-  list: HTMLElement,
+  _list: HTMLElement,
   groups: DestGroup[],
 ): Promise<void> {
   try {
@@ -498,12 +532,6 @@ async function handleAccessChanged(
   const mapping = getState().mappings.find(m => m.id === mappingId)
   if (!mapping) return
   const destKey = mapping.targetSite?.id ?? ''
-  const destItem = list.querySelector<HTMLElement>(`.review-dest-item[data-dest-key="${CSS.escape(destKey)}"]`)
-  if (destItem) {
-    const mini = destItem.querySelector<HTMLElement>('.rev-access-mini')
-    if (mini) mini.innerHTML = accessStatusBadge(newStatus)
-  }
-
   const group = groups.find(g => g.key === destKey)
   if (group) {
     const m = group.mappings.find(m => m.id === mappingId)
@@ -1374,7 +1402,19 @@ function injectReviewStyles(): void {
       font-size: 0.62rem; font-weight: 700; color: var(--color-text-muted);
       text-transform: uppercase; letter-spacing: 0.05em; flex-shrink: 0; gap: 8px; }
     .rch-dest { flex: 1; }
-    .rch-phase { width: 90px; text-align: right; padding-right: 8px; }
+    .rch-scan { width: 110px; text-align: right; flex-shrink: 0; }
+    .rch-skip { width: 68px;  text-align: right; flex-shrink: 0; }
+    .rch-fail { width: 58px;  text-align: right; flex-shrink: 0; }
+    .rch-view { width: 58px;  flex-shrink: 0; }
+    .rch-phase { width: 100px; text-align: right; padding-right: 4px; flex-shrink: 0; }
+
+    /* ── Stat cells ── */
+    .rdc-scan { width: 110px; text-align: right; font-size: 0.8rem; flex-shrink: 0; font-variant-numeric: tabular-nums; }
+    .rdc-skip { width: 68px;  text-align: right; font-size: 0.8rem; flex-shrink: 0; font-variant-numeric: tabular-nums; color: var(--color-text-muted); }
+    .rdc-fail { width: 58px;  text-align: right; font-size: 0.8rem; flex-shrink: 0; font-variant-numeric: tabular-nums; }
+    .rdc-fail:not(.rdc-empty) { color: var(--color-danger, #a4262c); font-weight: 600; }
+    .rdc-view { width: 58px;  flex-shrink: 0; display: flex; align-items: center; justify-content: flex-start; padding-left: 4px; }
+    .rdc-empty { color: var(--color-text-muted); opacity: 0.5; }
 
     /* ── Destination list ── */
     .review-dest-list { flex: 1; overflow-y: auto; list-style: none; padding: 0; margin: 0; min-height: 0; }
@@ -1392,8 +1432,6 @@ function injectReviewStyles(): void {
       display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
     .review-dest-name { flex: 1; font-size: 0.875rem; font-weight: 500;
       white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .rev-access-mini { flex-shrink: 0; }
-    .rev-access-mini .badge { font-size: 0.68rem; padding: 1px 6px; }
     .rev-dest-phase { flex-shrink: 0; }
 
     /* ── Source rows ── */
@@ -1408,10 +1446,6 @@ function injectReviewStyles(): void {
       overflow: hidden; text-overflow: ellipsis; font-family: 'Consolas', monospace;
       font-size: 0.78rem; }
     .review-source-size { flex-shrink: 0; font-size: 0.75rem; color: var(--color-text-muted); }
-    .rev-source-spstat { display: flex; gap: 6px; flex-shrink: 0; font-size: 0.72rem; }
-    .rss-m { color: #107c10; font-weight: 600; }
-    .rss-f { color: var(--color-danger, #a4262c); font-weight: 600; }
-    .rss-s { color: var(--color-text-muted); }
 
     /* ── Phase select ── */
     .rev-phase-select { font-size: 0.75rem; padding: 2px 4px; border-radius: 4px;
@@ -1463,11 +1497,23 @@ function injectReviewStyles(): void {
     .btn-ghost:hover:not(:disabled) { background: var(--color-surface-alt); }
     button:disabled { opacity: 0.6; cursor: not-allowed; }
 
-    /* ── View Results button on source rows ── */
-    .rev-view-results-btn { font-size: 0.72rem; padding: 2px 7px; border-radius: 4px; flex-shrink: 0;
-      border: 1px solid var(--color-border); background: white; cursor: pointer; font-family: inherit;
-      color: var(--color-primary, #0078d4); }
-    .rev-view-results-btn:hover { background: var(--color-primary-light, #deecf9); }
+    /* ── View button ── */
+    .rev-view-btn { font-size: 0.78rem; padding: 3px 10px; border-radius: 4px; flex-shrink: 0;
+      border: 1.5px solid var(--color-primary, #0078d4); background: var(--color-primary, #0078d4);
+      color: white; cursor: pointer; font-family: inherit; font-weight: 600; white-space: nowrap; }
+    .rev-view-btn:hover { background: #005a9e; border-color: #005a9e; }
+
+    /* ── Status breakdown (right panel) ── */
+    .rev-status-breakdown { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--color-border); }
+    .rev-sb-title { font-size: 0.72rem; font-weight: 700; text-transform: uppercase;
+      letter-spacing: 0.05em; color: var(--color-text-muted); margin-bottom: 10px; }
+    .rev-sb-table { width: 100%; border-collapse: collapse; font-size: 0.84rem; }
+    .rev-sb-row td { padding: 4px 0; border-bottom: 1px solid var(--color-border); }
+    .rev-sb-row:last-of-type td { border-bottom: none; }
+    .rev-sb-status { color: var(--color-text); }
+    .rev-sb-count { text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; width: 60px; }
+    .rev-sb-total-row td { padding: 6px 0 0; font-weight: 700; border-top: 2px solid var(--color-border); }
+    .rev-sb-total-row .rev-sb-status { color: var(--color-text-muted); font-size: 0.78rem; }
 
     /* ── Tabs ── */
     .rev-tabs-bar { display: flex; border-bottom: 2px solid var(--color-border);

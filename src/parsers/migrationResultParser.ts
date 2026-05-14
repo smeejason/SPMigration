@@ -19,13 +19,15 @@ export async function parseMigrationResultCsv(file: File): Promise<MigrationResu
     const source = row['Source'] ?? ''
     if (!source) continue
 
-    const status = normalizeStatus(row['Status'] ?? '')
+    const rawStatus = (row['Status'] ?? '').trim()
+    const status = normalizeStatus(rawStatus)
     const item: MigrationResultItem = {
       source,
       destination: row['Destination'] ?? '',
       itemName: row['Item name'] ?? '',
       itemType: (row['Type'] ?? '').toLowerCase() === 'folder' ? 'Folder' : 'File',
       status,
+      rawStatus,
       resultCategory: row['Result category'] ?? '',
       message: row['Message'] ?? '',
       errorCode: '',
@@ -92,13 +94,15 @@ export async function parseMigrationResultZip(file: File): Promise<MigrationResu
     const source = row['Source'] ?? ''
     if (!source) continue
 
-    const status = normalizeStatus(row['Status'] ?? '')
+    const rawStatus = (row['Status'] ?? '').trim()
+    const status = normalizeStatus(rawStatus)
     const item: MigrationResultItem = {
       source,
       destination: row['Destination'] ?? '',
       itemName: row['Item name'] ?? '',
       itemType: (row['Type'] ?? '').toLowerCase() === 'folder' ? 'Folder' : 'File',
       status,
+      rawStatus,
       resultCategory: row['Result category'] ?? '',
       message: row['Message'] ?? '',
       errorCode: failureErrorCodes.get(source) ?? '',
