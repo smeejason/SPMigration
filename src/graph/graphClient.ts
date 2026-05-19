@@ -207,6 +207,26 @@ export async function getUserDrive(userId: string): Promise<SharePointDrive | nu
 }
 
 /**
+ * Get the root URL for a user's OneDrive.
+ * Tries the Graph drive endpoint first; if that fails (delegated token can't
+ * see the drive even when it exists), constructs the URL from the UPN.
+ * Returns null only if the UPN cannot be resolved at all.
+ */
+export async function getOneDriveUrl(userId: string): Promise<string | null> {
+  const drive = await getUserDrive(userId)
+  if (drive?.webUrl) return drive.webUrl
+
+  try {
+    const user = await getUserById(userId)
+    if (!user?.userPrincipalName) return null
+    const { my: myHost } = await getSharePointHosts()
+    return `https://${myHost}/personal/${formatUpnForPersonalSite(user.userPrincipalName)}`
+  } catch {
+    return null
+  }
+}
+
+/**
  * Fetch a single user's profile by ID (for recovering UPN after a mapping is loaded).
  */
 export async function getUserById(userId: string): Promise<AppUser | null> {

@@ -1,5 +1,5 @@
 import { getState, setState } from '../../state/store'
-import { checkUserDriveAccess, grantUserDriveAccess, getUserDrive, saveMappingsFile, provisionNewSite, getSiteDrives } from '../../graph/graphClient'
+import { checkUserDriveAccess, grantUserDriveAccess, getOneDriveUrl, saveMappingsFile, provisionNewSite, getSiteDrives } from '../../graph/graphClient'
 import { getSpConfig } from '../../graph/projectService'
 import type { MigrationMapping, OneDriveAccessStatus, MigrationWave } from '../../types'
 
@@ -340,10 +340,11 @@ async function runCheckPermissions(container: HTMLElement): Promise<void> {
       newStatus = result
       if (result === 'accessible') {
         accessibleCount++
-        // Fetch the OneDrive URL and persist it so the CSV export and SPMT config are up-to-date
+        // Fetch the OneDrive URL and persist it so the CSV export and SPMT config are up-to-date.
+        // getOneDriveUrl falls back to UPN construction when Graph returns 404/403.
         try {
-          const drive = await getUserDrive(userId)
-          if (drive?.webUrl) driveWebUrl = drive.webUrl
+          const url = await getOneDriveUrl(userId)
+          if (url) driveWebUrl = url
         } catch { /* non-fatal — URL already stored from Phase 1 */ }
       } else if (result === 'no-access' || result === 'no-drive') noaccessCount++
       else                                                          errorCount++
