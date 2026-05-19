@@ -432,6 +432,7 @@ async function runGrantAccess(container: HTMLElement): Promise<void> {
   for (const mapping of matchedMappings) {
     const userId = mapping.targetSite!.id
     let newStatus: OneDriveAccessStatus = 'error'
+    let driveWebUrl: string | undefined
     try {
       const access = await checkUserDriveAccess(userId)
       if (access === 'accessible') {
@@ -447,14 +448,23 @@ async function runGrantAccess(container: HTMLElement): Promise<void> {
         newStatus = access  // 'error'
         errorCount++
       }
+      if (newStatus === 'granted' || newStatus === 'accessible') {
+        try {
+          const url = await getOneDriveUrl(userId)
+          if (url) driveWebUrl = url
+        } catch { /* non-fatal */ }
+      }
     } catch {
       newStatus = 'error'
       errorCount++
     }
 
-    setState({ mappings: getState().mappings.map(m =>
-      m.id === mapping.id ? { ...m, accessStatus: newStatus } : m
-    )})
+    setState({ mappings: getState().mappings.map(m => {
+      if (m.id !== mapping.id) return m
+      const updates: Partial<typeof m> = { accessStatus: newStatus }
+      if (driveWebUrl && m.targetSite) updates.targetSite = { ...m.targetSite, webUrl: driveWebUrl }
+      return { ...m, ...updates }
+    })})
 
     const cell = container.querySelector(`[data-access-for="${CSS.escape(mapping.id)}"]`) as HTMLElement | null
     if (cell) cell.innerHTML = odAccessBadge({ ...mapping, accessStatus: newStatus })
