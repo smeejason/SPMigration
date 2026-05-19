@@ -337,17 +337,26 @@ async function runCheckPermissions(container: HTMLElement): Promise<void> {
     let driveWebUrl: string | undefined
     try {
       const result = await checkUserDriveAccess(userId)
-      newStatus = result
-      if (result === 'accessible') {
+      // 'no-access' from the SP REST fallback means "site exists, Graph can't read it".
+      // If the mapping was previously explicitly granted, trust that and keep 'granted'
+      // rather than downgrading — only the migration account has site admin rights so
+      // Graph will still 404 for the current session user after a grant.
+      if (result === 'no-access' && (mapping.accessStatus === 'granted' || mapping.accessStatus === 'accessible')) {
+        newStatus = mapping.accessStatus
         accessibleCount++
-        // Fetch the OneDrive URL and persist it so the CSV export and SPMT config are up-to-date.
-        // getOneDriveUrl falls back to UPN construction when Graph returns 404/403.
+      } else {
+        newStatus = result
+        if (result === 'accessible') accessibleCount++
+        else if (result === 'no-access' || result === 'no-drive') noaccessCount++
+        else errorCount++
+      }
+      if (newStatus === 'accessible' || newStatus === 'granted') {
+        // Populate the URL so CSV export and SPMT config are up-to-date.
         try {
           const url = await getOneDriveUrl(userId)
           if (url) driveWebUrl = url
         } catch { /* non-fatal — URL already stored from Phase 1 */ }
-      } else if (result === 'no-access' || result === 'no-drive') noaccessCount++
-      else                                                          errorCount++
+      }
     } catch {
       newStatus = 'error'
       errorCount++

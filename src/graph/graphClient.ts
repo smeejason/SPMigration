@@ -245,27 +245,33 @@ export async function getUserById(userId: string): Promise<AppUser | null> {
  * Check whether the admin can access a user's OneDrive.
  * Returns 'accessible' | 'no-access' | 'no-drive' | 'error'.
  *
- * Graph delegated permissions often can't reach personal OneDrives even with
- * Files.ReadWrite.All.  When the Graph call returns 403 we fall back to the
- * SharePoint REST API with AllSites.FullControl to distinguish a missing drive
- * (no-drive) from an existing-but-inaccessible one (no-access).
+ * 'accessible' — Graph confirmed the drive is readable (access already in place).
+ * 'no-access'  — the personal site EXISTS but Graph cannot read it (access not yet granted).
+ * 'no-drive'   — the personal site genuinely does not exist.
+ *
+ * Graph delegated tokens return 404 both when a drive doesn't exist AND when
+ * the caller lacks site-level admin access, so we cannot rely on a Graph 404
+ * alone to determine whether the site exists.  The SP REST fallback uses the
+ * AllSites.FullControl scope to distinguish the two cases — but because that
+ * scope can read any site in the tenant, a 200 there only proves existence,
+ * NOT that the migration account has been granted admin access.  We therefore
+ * return 'no-access' (not 'accessible') from the fallback path.
  */
 export async function checkUserDriveAccess(userId: string): Promise<'accessible' | 'no-access' | 'no-drive' | 'error'> {
-  // Fast path — Graph API (works when Files.ReadWrite.All is sufficient)
+  // Fast path — Graph API.  A 200 here means the drive is already accessible
+  // to the current session, so no further grant is needed.
   try {
     await client().api(`/users/${userId}/drive/root`).get()
     return 'accessible'
   } catch (err) {
     const status = (err as { statusCode?: number }).statusCode
-    // 404 from Graph does NOT reliably mean no drive — the delegated token
-    // can return 404 for drives that exist but the caller can't see. Only
-    // skip the SP fallback for non-auth errors.
     if (status !== 403 && status !== 401 && status !== 404) return 'error'
+    // 404 from Graph is ambiguous — fall through to the SP REST existence check.
   }
 
-  // Fallback — SharePoint REST API with AllSites.FullControl.
-  // This is the authoritative check: 404 here means the personal site was
-  // genuinely never provisioned; anything else means it exists.
+  // SP REST fallback — AllSites.FullControl lets us read any site, so a 200
+  // only proves the personal site was provisioned, NOT that the migration
+  // account has admin rights.  Return 'no-access' so the caller knows to grant.
   try {
     const user = await getUserById(userId)
     if (!user?.userPrincipalName) return 'no-access'
@@ -278,9 +284,8 @@ export async function checkUserDriveAccess(userId: string): Promise<'accessible'
       headers: { Authorization: `Bearer ${spToken}`, Accept: 'application/json' },
     })
 
-    if (resp.ok) return 'accessible'            // site exists, AllSites.FullControl confirmed
-    if (resp.status === 404) return 'no-drive'  // personal site genuinely not provisioned
-    return 'no-access'
+    if (resp.status === 404) return 'no-drive'  // personal site genuinely never provisioned
+    return 'no-access'                           // site exists — grant access before using it
   } catch {
     return 'no-access'
   }
