@@ -14,6 +14,7 @@ const _selectedUploadId = new Map<string, string>()   // destKey → uploadId
 
 let _statusFilter = 'all'
 let _hideRecycleBin = false
+let _errorMsgFilter = new Set<string>()
 let _allItems: MigrationResultItem[] = []
 let _selectedNode: ReviewNode | null = null
 let _expandedPaths = new Set<string>()
@@ -722,6 +723,7 @@ function openResultsView(container: HTMLElement, mapping: MigrationMapping, revi
   // Reset tree state
   _statusFilter = 'all'
   _hideRecycleBin = false
+  _errorMsgFilter = new Set()
   _allItems = filteredItems
   _selectedNode = null
   _expandedPaths = new Set()
@@ -780,6 +782,7 @@ function openResultsView(container: HTMLElement, mapping: MigrationMapping, revi
                 <button class="review-pill" data-filter="Skipped">⊘ Skipped</button>
                 ${totals.partial > 0 ? '<button class="review-pill" data-filter="Partial">◐ Partial</button>' : ''}
               </div>
+              <div id="rev-err-filter-wrap"></div>
               <label class="review-rb-label">
                 <input type="checkbox" id="review-hide-rb" /> Hide Recycle Bin
               </label>
@@ -1338,6 +1341,27 @@ function clearSpContent(): void {
 
 function renderFolderCardHtml(node: ReviewNode): string {
   const pct = (n: number) => node.totalCount > 0 ? ` (${Math.round(n / node.totalCount * 100)}%)` : ''
+
+  const statusOrder: Record<string, number> = { Failed: 0, Partial: 1, Skipped: 2, Migrated: 3 }
+  const folderItems = _allItems
+    .filter(i => i.sourcePath.startsWith(node.path + '/') || i.sourcePath === node.path)
+    .sort((a, b) => (statusOrder[a.status] ?? 4) - (statusOrder[b.status] ?? 4) || a.sourcePath.localeCompare(b.sourcePath))
+
+  const LIMIT = 150
+  const displayItems = folderItems.slice(0, LIMIT)
+
+  const itemsHtml = displayItems.map(item => {
+    const name = item.itemName || item.sourcePath.split('/').pop() || item.sourcePath
+    const rawStatus = item.rawStatus || item.status
+    const statusClass = rawStatus.toLowerCase().replace(/\s+/g, '-')
+    return `
+      <div class="rfc-item-row">
+        <span class="rfc-item-status rfc-item-status--${escHtml(statusClass)}">${escHtml(rawStatus)}</span>
+        <span class="rfc-item-name" title="${escHtml(item.source)}">${escHtml(name)}</span>
+        ${item.message ? `<span class="rfc-item-msg" title="${escHtml(item.message)}">⚠</span>` : ''}
+      </div>`
+  }).join('')
+
   return `
     <div class="review-item-card">
       <div class="review-item-title-row">
@@ -1353,6 +1377,11 @@ function renderFolderCardHtml(node: ReviewNode): string {
         <div class="ric ric--skipped"><div class="ric-value">⊘ ${node.skippedCount.toLocaleString()}</div><div class="ric-label">Skipped</div></div>
         <div class="ric ric--total"><div class="ric-value">${node.totalCount.toLocaleString()}</div><div class="ric-label">Total</div></div>
       </div>
+      ${folderItems.length > 0 ? `
+        <div class="rfc-items-section">
+          <div class="rfc-items-header">Items${folderItems.length > LIMIT ? ` — showing ${LIMIT} of ${folderItems.length}` : ` (${folderItems.length})`}</div>
+          <div class="rfc-items-list">${itemsHtml}</div>
+        </div>` : ''}
     </div>`
 }
 
@@ -1444,6 +1473,75 @@ function setupResultsFilters(panel: HTMLElement, rootNodes: ReviewNode[]): void 
   })
 
   panel.querySelector('#review-search')?.addEventListener('input', () => rebuildTree())
+
+  // ── Error message multi-select dropdown ──────────────────────────────────────
+  const errWrap = panel.querySelector<HTMLElement>('#rev-err-filter-wrap')
+  const uniqueMessages = [...new Set(
+    _allItems.filter(i => i.status === 'Failed' && i.message).map(i => i.message)
+  )].sort()
+
+  if (errWrap && uniqueMessages.length > 0) {
+    errWrap.innerHTML = `
+      <div class="rev-err-filter" id="rev-err-filter">
+        <button class="rev-err-filter-btn" id="rev-err-filter-btn">
+          <span id="rev-err-filter-label">Error Filter</span> ▾
+        </button>
+        <div class="rev-err-panel" id="rev-err-panel" style="display:none">
+          <label class="rev-err-item rev-err-all">
+            <input type="checkbox" id="rev-err-all-cb" checked /> All errors
+          </label>
+          ${uniqueMessages.map(msg => `
+            <label class="rev-err-item" title="${escHtml(msg)}">
+              <input type="checkbox" class="rev-err-cb" value="${escHtml(msg)}" checked />
+              <span class="rev-err-msg-text">${escHtml(msg.length > 65 ? msg.slice(0, 62) + '…' : msg)}</span>
+            </label>`).join('')}
+        </div>
+      </div>`
+
+    const dropBtn    = errWrap.querySelector<HTMLButtonElement>('#rev-err-filter-btn')!
+    const dropPanel  = errWrap.querySelector<HTMLElement>('#rev-err-panel')!
+    const allCb      = errWrap.querySelector<HTMLInputElement>('#rev-err-all-cb')!
+    const filterLabel = errWrap.querySelector<HTMLElement>('#rev-err-filter-label')!
+
+    dropBtn.addEventListener('click', (e) => {
+      e.stopPropagation()
+      dropPanel.style.display = dropPanel.style.display === 'none' ? '' : 'none'
+    })
+
+    // Close dropdown when clicking elsewhere in the panel
+    panel.addEventListener('click', (e) => {
+      if (!(e.target as HTMLElement).closest('#rev-err-filter')) {
+        dropPanel.style.display = 'none'
+      }
+    })
+
+    const syncFilter = () => {
+      const allCbs   = errWrap.querySelectorAll<HTMLInputElement>('.rev-err-cb')
+      const checkedCbs = errWrap.querySelectorAll<HTMLInputElement>('.rev-err-cb:checked')
+      if (checkedCbs.length === allCbs.length) {
+        _errorMsgFilter = new Set()
+        filterLabel.textContent = 'Error Filter'
+        allCb.checked = true
+        allCb.indeterminate = false
+      } else {
+        _errorMsgFilter = new Set(Array.from(checkedCbs).map(cb => cb.value))
+        filterLabel.textContent = `${checkedCbs.length} of ${allCbs.length} errors`
+        allCb.checked = false
+        allCb.indeterminate = checkedCbs.length > 0
+      }
+      rebuildTree()
+    }
+
+    allCb.addEventListener('change', () => {
+      errWrap.querySelectorAll<HTMLInputElement>('.rev-err-cb').forEach(cb => { cb.checked = allCb.checked })
+      allCb.indeterminate = false
+      syncFilter()
+    })
+
+    errWrap.querySelectorAll<HTMLInputElement>('.rev-err-cb').forEach(cb => {
+      cb.addEventListener('change', syncFilter)
+    })
+  }
 }
 
 function setupSpFeedToggle(panel: HTMLElement): void {
@@ -1492,6 +1590,11 @@ function nodeMatchesFilters(node: ReviewNode, statusFilter: string, hideRb: bool
   if (hideRb && node.children.length === 0) {
     const items = _allItems.filter(i => i.sourcePath === node.path)
     if (items.length > 0 && items.every(i => i.isRecycleBin)) return false
+  }
+  // Error message filter — only applied to leaf nodes; folders pass through via recursion
+  if (_errorMsgFilter.size > 0 && node.children.length === 0) {
+    const items = _allItems.filter(i => i.sourcePath === node.path)
+    if (!items.some(i => _errorMsgFilter.has(i.message))) return false
   }
   return true
 }
@@ -1824,6 +1927,43 @@ function injectReviewStyles(): void {
     .review-pill.review-pill--active { background: var(--color-primary, #0078d4); color: white; border-color: var(--color-primary, #0078d4); }
     .review-rb-label { display: flex; align-items: center; gap: 6px; font-size: 0.82rem;
       color: var(--color-text-muted); cursor: pointer; white-space: nowrap; }
+
+    /* ── Error message filter dropdown ── */
+    .rev-err-filter { position: relative; display: inline-flex; align-items: center; }
+    .rev-err-filter-btn { padding: 4px 10px; font-size: 0.8rem; border: 1px solid var(--color-border);
+      border-radius: 14px; background: white; cursor: pointer; white-space: nowrap; font-family: inherit;
+      display: flex; align-items: center; gap: 4px; }
+    .rev-err-filter-btn:hover { background: var(--color-surface-alt); border-color: var(--color-primary); }
+    .rev-err-panel { position: absolute; top: calc(100% + 6px); left: 0; z-index: 200;
+      background: white; border: 1px solid var(--color-border); border-radius: 6px;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.15); padding: 4px 0;
+      min-width: 280px; max-height: 300px; overflow-y: auto; }
+    .rev-err-item { display: flex; align-items: flex-start; gap: 8px; padding: 5px 12px;
+      cursor: pointer; font-size: 0.8rem; line-height: 1.3; }
+    .rev-err-item:hover { background: var(--color-surface-alt); }
+    .rev-err-all { font-weight: 600; border-bottom: 1px solid var(--color-border);
+      padding-bottom: 7px; margin-bottom: 2px; }
+    .rev-err-item input[type="checkbox"] { flex-shrink: 0; margin-top: 2px; cursor: pointer; }
+    .rev-err-msg-text { flex: 1; min-width: 0; word-break: break-word; }
+
+    /* ── Folder item list (right panel) ── */
+    .rfc-items-section { margin-top: 14px; border-top: 1px solid var(--color-border); padding-top: 10px; }
+    .rfc-items-header { font-size: 0.68rem; font-weight: 700; text-transform: uppercase;
+      letter-spacing: 0.05em; color: var(--color-text-muted); margin-bottom: 6px; }
+    .rfc-items-list { max-height: 300px; overflow-y: auto; border: 1px solid var(--color-border);
+      border-radius: 4px; }
+    .rfc-item-row { display: flex; align-items: center; gap: 8px; padding: 4px 8px;
+      border-bottom: 1px solid var(--color-border-light, #f0f0f0); font-size: 0.78rem; }
+    .rfc-item-row:last-child { border-bottom: none; }
+    .rfc-item-status { flex-shrink: 0; font-size: 0.68rem; font-weight: 600; padding: 1px 6px;
+      border-radius: 3px; min-width: 72px; text-align: center; white-space: nowrap; }
+    .rfc-item-status--migrated     { color: #107c10; background: #e6f4e6; }
+    .rfc-item-status--scan-finished{ color: #0078d4; background: #ddeeff; }
+    .rfc-item-status--failed       { color: var(--color-danger, #a4262c); background: #fde7e9; }
+    .rfc-item-status--skipped      { color: #605e5c; background: #f0f0f0; }
+    .rfc-item-status--partial      { color: #7d4200; background: #fff4ce; }
+    .rfc-item-name { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .rfc-item-msg  { flex-shrink: 0; cursor: help; font-size: 0.85rem; }
 
     /* ── Tree ── */
     .rch-name { flex: 1; padding-left: 64px; }
