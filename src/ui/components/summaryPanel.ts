@@ -1,5 +1,5 @@
 import { getState, setState } from '../../state/store'
-import { checkUserDriveAccess, grantUserDriveAccess, getUserDrive, saveMappingsFile, provisionNewSite, getSiteDrives } from '../../graph/graphClient'
+import { checkUserDriveAccess, grantUserDriveAccess, getOneDriveUrl, saveMappingsFile, provisionNewSite, getSiteDrives } from '../../graph/graphClient'
 import { getSpConfig } from '../../graph/projectService'
 import type { MigrationMapping, OneDriveAccessStatus, MigrationWave } from '../../types'
 
@@ -337,16 +337,26 @@ async function runCheckPermissions(container: HTMLElement): Promise<void> {
     let driveWebUrl: string | undefined
     try {
       const result = await checkUserDriveAccess(userId)
-      newStatus = result
-      if (result === 'accessible') {
+      // 'no-access' from the SP REST fallback means "site exists, Graph can't read it".
+      // If the mapping was previously explicitly granted, trust that and keep 'granted'
+      // rather than downgrading — only the migration account has site admin rights so
+      // Graph will still 404 for the current session user after a grant.
+      if (result === 'no-access' && (mapping.accessStatus === 'granted' || mapping.accessStatus === 'accessible')) {
+        newStatus = mapping.accessStatus
         accessibleCount++
-        // Fetch the OneDrive URL and persist it so the CSV export and SPMT config are up-to-date
+      } else {
+        newStatus = result
+        if (result === 'accessible') accessibleCount++
+        else if (result === 'no-access' || result === 'no-drive') noaccessCount++
+        else errorCount++
+      }
+      if (newStatus === 'accessible' || newStatus === 'granted') {
+        // Populate the URL so CSV export and SPMT config are up-to-date.
         try {
-          const drive = await getUserDrive(userId)
-          if (drive?.webUrl) driveWebUrl = drive.webUrl
+          const url = await getOneDriveUrl(userId)
+          if (url) driveWebUrl = url
         } catch { /* non-fatal — URL already stored from Phase 1 */ }
-      } else if (result === 'no-access' || result === 'no-drive') noaccessCount++
-      else                                                          errorCount++
+      }
     } catch {
       newStatus = 'error'
       errorCount++
@@ -422,6 +432,7 @@ async function runGrantAccess(container: HTMLElement): Promise<void> {
   for (const mapping of matchedMappings) {
     const userId = mapping.targetSite!.id
     let newStatus: OneDriveAccessStatus = 'error'
+    let driveWebUrl: string | undefined
     try {
       const access = await checkUserDriveAccess(userId)
       if (access === 'accessible') {
@@ -437,14 +448,23 @@ async function runGrantAccess(container: HTMLElement): Promise<void> {
         newStatus = access  // 'error'
         errorCount++
       }
+      if (newStatus === 'granted' || newStatus === 'accessible') {
+        try {
+          const url = await getOneDriveUrl(userId)
+          if (url) driveWebUrl = url
+        } catch { /* non-fatal */ }
+      }
     } catch {
       newStatus = 'error'
       errorCount++
     }
 
-    setState({ mappings: getState().mappings.map(m =>
-      m.id === mapping.id ? { ...m, accessStatus: newStatus } : m
-    )})
+    setState({ mappings: getState().mappings.map(m => {
+      if (m.id !== mapping.id) return m
+      const updates: Partial<typeof m> = { accessStatus: newStatus }
+      if (driveWebUrl && m.targetSite) updates.targetSite = { ...m.targetSite, webUrl: driveWebUrl }
+      return { ...m, ...updates }
+    })})
 
     const cell = container.querySelector(`[data-access-for="${CSS.escape(mapping.id)}"]`) as HTMLElement | null
     if (cell) cell.innerHTML = odAccessBadge({ ...mapping, accessStatus: newStatus })

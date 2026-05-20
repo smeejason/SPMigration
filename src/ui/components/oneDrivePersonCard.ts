@@ -1,4 +1,4 @@
-import { checkUserDriveAccess, grantUserDriveAccess, revokeUserDriveAccess, getUserDrive, getUserById } from '../../graph/graphClient'
+import { checkUserDriveAccess, grantUserDriveAccess, revokeUserDriveAccess, getOneDriveUrl, getUserById } from '../../graph/graphClient'
 import { getState, setState } from '../../state/store'
 import { getCurrentUser } from '../../auth/authService'
 import type { MigrationMapping, OneDriveAccessStatus } from '../../types'
@@ -154,8 +154,8 @@ async function checkAndRefreshAccess(
     let freshWebUrl: string | undefined
     if (access === 'accessible') {
       try {
-        const drive = await getUserDrive(userId)
-        if (drive?.webUrl) freshWebUrl = drive.webUrl
+        const url = await getOneDriveUrl(userId)
+        if (url) freshWebUrl = url
       } catch { /* non-fatal */ }
     }
 

@@ -207,6 +207,26 @@ export async function getUserDrive(userId: string): Promise<SharePointDrive | nu
 }
 
 /**
+ * Get the root URL for a user's OneDrive.
+ * Tries the Graph drive endpoint first; if that fails (delegated token can't
+ * see the drive even when it exists), constructs the URL from the UPN.
+ * Returns null only if the UPN cannot be resolved at all.
+ */
+export async function getOneDriveUrl(userId: string): Promise<string | null> {
+  const drive = await getUserDrive(userId)
+  if (drive?.webUrl) return drive.webUrl
+
+  try {
+    const user = await getUserById(userId)
+    if (!user?.userPrincipalName) return null
+    const { my: myHost } = await getSharePointHosts()
+    return `https://${myHost}/personal/${formatUpnForPersonalSite(user.userPrincipalName)}`
+  } catch {
+    return null
+  }
+}
+
+/**
  * Fetch a single user's profile by ID (for recovering UPN after a mapping is loaded).
  */
 export async function getUserById(userId: string): Promise<AppUser | null> {
@@ -225,26 +245,33 @@ export async function getUserById(userId: string): Promise<AppUser | null> {
  * Check whether the admin can access a user's OneDrive.
  * Returns 'accessible' | 'no-access' | 'no-drive' | 'error'.
  *
- * Graph delegated permissions often can't reach personal OneDrives even with
- * Files.ReadWrite.All.  When the Graph call returns 403 we fall back to the
- * SharePoint REST API with AllSites.FullControl to distinguish a missing drive
- * (no-drive) from an existing-but-inaccessible one (no-access).
+ * 'accessible' — Graph confirmed the drive is readable (access already in place).
+ * 'no-access'  — the personal site EXISTS but Graph cannot read it (access not yet granted).
+ * 'no-drive'   — the personal site genuinely does not exist.
+ *
+ * Graph delegated tokens return 404 both when a drive doesn't exist AND when
+ * the caller lacks site-level admin access, so we cannot rely on a Graph 404
+ * alone to determine whether the site exists.  The SP REST fallback uses the
+ * AllSites.FullControl scope to distinguish the two cases — but because that
+ * scope can read any site in the tenant, a 200 there only proves existence,
+ * NOT that the migration account has been granted admin access.  We therefore
+ * return 'no-access' (not 'accessible') from the fallback path.
  */
 export async function checkUserDriveAccess(userId: string): Promise<'accessible' | 'no-access' | 'no-drive' | 'error'> {
-  // Fast path — Graph API (works when Files.ReadWrite.All is sufficient)
+  // Fast path — Graph API.  A 200 here means the drive is already accessible
+  // to the current session, so no further grant is needed.
   try {
     await client().api(`/users/${userId}/drive/root`).get()
     return 'accessible'
   } catch (err) {
     const status = (err as { statusCode?: number }).statusCode
-    if (status === 404) return 'no-drive'
-    if (status !== 403 && status !== 401) return 'error'
+    if (status !== 403 && status !== 401 && status !== 404) return 'error'
+    // 404 from Graph is ambiguous — fall through to the SP REST existence check.
   }
 
-  // Fallback — SharePoint REST API with AllSites.FullControl
-  // Token scope MUST be the root SharePoint host (contoso.sharepoint.com), not
-  // -my — Azure AD issues SharePoint tokens against the root resource even when
-  // calling -my.sharepoint.com REST endpoints.
+  // SP REST fallback — AllSites.FullControl lets us read any site, so a 200
+  // only proves the personal site was provisioned, NOT that the migration
+  // account has admin rights.  Return 'no-access' so the caller knows to grant.
   try {
     const user = await getUserById(userId)
     if (!user?.userPrincipalName) return 'no-access'
@@ -257,9 +284,8 @@ export async function checkUserDriveAccess(userId: string): Promise<'accessible'
       headers: { Authorization: `Bearer ${spToken}`, Accept: 'application/json' },
     })
 
-    if (resp.ok) return 'accessible'            // site exists, AllSites.FullControl confirmed
-    if (resp.status === 404) return 'no-drive'  // personal site never provisioned
-    return 'no-access'
+    if (resp.status === 404) return 'no-drive'  // personal site genuinely never provisioned
+    return 'no-access'                           // site exists — grant access before using it
   } catch {
     return 'no-access'
   }
@@ -284,26 +310,29 @@ export async function grantUserDriveAccess(userId: string, migrationAccountEmail
   }
 
   // Step 2: request a SharePoint token scoped to the ROOT host.
-  const { root: rootHost, admin: adminHost } = await getSharePointHosts()
+  const { root: rootHost, my: myHost, admin: adminHost } = await getSharePointHosts()
   const spToken = await getToken([`https://${rootHost}/AllSites.FullControl`])
 
-  // Step 3: get the actual personal site URL from SharePoint User Profile Service.
-  // This is the definitive URL as stored by SharePoint and handles all UPN edge
-  // cases (B2B guests, federated users, special characters). An empty PersonalUrl
-  // means the user has never provisioned their OneDrive.
-  const encodedAccount = encodeURIComponent(`i:0#.f|membership|${user.userPrincipalName}`)
-  const profileResp = await fetch(
-    `https://${adminHost}/_api/SP.UserProfiles.PeopleManager/GetPropertiesFor(accountName=@v)?@v='${encodedAccount}'`,
-    { headers: { Authorization: `Bearer ${spToken}`, Accept: 'application/json;odata=nometadata' } },
-  )
-  if (!profileResp.ok) {
-    const text = await profileResp.text().catch(() => '')
-    throw new Error(`Could not load user profile (${profileResp.status}): ${text}`)
-  }
-  const profile = await profileResp.json() as { PersonalUrl?: string }
-  const personalSiteUrl = profile.PersonalUrl?.replace(/\/$/, '')
+  // Step 3: get the personal site URL.
+  // Preferred: SharePoint User Profile Service (handles B2B guests, special chars).
+  // Fallback: construct from UPN — works when the profile hasn't synced yet or
+  // the site was provisioned via Admin Center but PersonalUrl is not yet populated.
+  let personalSiteUrl: string | null = null
+  try {
+    const encodedAccount = encodeURIComponent(`i:0#.f|membership|${user.userPrincipalName}`)
+    const profileResp = await fetch(
+      `https://${adminHost}/_api/SP.UserProfiles.PeopleManager/GetPropertiesFor(accountName=@v)?@v='${encodedAccount}'`,
+      { headers: { Authorization: `Bearer ${spToken}`, Accept: 'application/json;odata=nometadata' } },
+    )
+    if (profileResp.ok) {
+      const profile = await profileResp.json() as { PersonalUrl?: string }
+      personalSiteUrl = profile.PersonalUrl?.replace(/\/$/, '') || null
+    }
+  } catch { /* fall through to UPN construction */ }
+
   if (!personalSiteUrl) {
-    throw new Error('OneDrive has not been provisioned for this user — they need to sign in to OneDrive at least once before access can be granted.')
+    // Construct the URL from the UPN — this matches the URL shown in Admin Center
+    personalSiteUrl = `https://${myHost}/personal/${formatUpnForPersonalSite(user.userPrincipalName)}`
   }
 
   // Step 4: use CSOM ProcessQuery to call Tenant.SetSiteAdmin.
@@ -348,22 +377,24 @@ export async function revokeUserDriveAccess(userId: string, migrationAccountEmai
     throw new Error('Could not retrieve UPN for user')
   }
 
-  const { root: rootHost, admin: adminHost } = await getSharePointHosts()
+  const { root: rootHost, my: myHost, admin: adminHost } = await getSharePointHosts()
   const spToken = await getToken([`https://${rootHost}/AllSites.FullControl`])
 
-  const encodedAccount = encodeURIComponent(`i:0#.f|membership|${user.userPrincipalName}`)
-  const profileResp = await fetch(
-    `https://${adminHost}/_api/SP.UserProfiles.PeopleManager/GetPropertiesFor(accountName=@v)?@v='${encodedAccount}'`,
-    { headers: { Authorization: `Bearer ${spToken}`, Accept: 'application/json;odata=nometadata' } },
-  )
-  if (!profileResp.ok) {
-    const text = await profileResp.text().catch(() => '')
-    throw new Error(`Could not load user profile (${profileResp.status}): ${text}`)
-  }
-  const profile = await profileResp.json() as { PersonalUrl?: string }
-  const personalSiteUrl = profile.PersonalUrl?.replace(/\/$/, '')
+  let personalSiteUrl: string | null = null
+  try {
+    const encodedAccount = encodeURIComponent(`i:0#.f|membership|${user.userPrincipalName}`)
+    const profileResp = await fetch(
+      `https://${adminHost}/_api/SP.UserProfiles.PeopleManager/GetPropertiesFor(accountName=@v)?@v='${encodedAccount}'`,
+      { headers: { Authorization: `Bearer ${spToken}`, Accept: 'application/json;odata=nometadata' } },
+    )
+    if (profileResp.ok) {
+      const profile = await profileResp.json() as { PersonalUrl?: string }
+      personalSiteUrl = profile.PersonalUrl?.replace(/\/$/, '') || null
+    }
+  } catch { /* fall through to UPN construction */ }
+
   if (!personalSiteUrl) {
-    throw new Error('OneDrive has not been provisioned for this user.')
+    personalSiteUrl = `https://${myHost}/personal/${formatUpnForPersonalSite(user.userPrincipalName)}`
   }
 
   const csomBody = `<Request AddExpandoFieldTypeSuffix="true" SchemaVersion="15.0.0.0" LibraryVersion="16.0.0.0" ApplicationName="JavaScript Client" xmlns="http://schemas.microsoft.com/sharepoint/clientquery/2009"><Actions><ObjectPath Id="1" ObjectPathId="0" /><ObjectPath Id="3" ObjectPathId="2" /><Method Name="SetSiteAdmin" Id="4" ObjectPathId="2"><Parameters><Parameter Type="String">${personalSiteUrl}</Parameter><Parameter Type="String">i:0#.f|membership|${migrationAccountEmail}</Parameter><Parameter Type="Boolean">false</Parameter></Parameters></Method></Actions><ObjectPaths><StaticProperty Id="0" TypeId="{3747adcd-a3c3-41b9-bfab-4a64dd2f1e0a}" Name="Current" /><Constructor Id="2" TypeId="{268004ae-ef6b-4e9b-8425-127220d84719}" /></ObjectPaths></Request>`
