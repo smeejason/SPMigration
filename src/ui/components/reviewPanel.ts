@@ -1,14 +1,22 @@
 import { getState, setState } from '../../state/store'
 import { persistProjectMappings, getSpConfig, updateProject } from '../../graph/projectService'
 import { renderPersonCard } from './oneDrivePersonCard'
-import { downloadDriveItem, resolveSharePointItemByUrl, resolveDriveItemRef, resolveOneDriveFolderByPath, listDriveItemsRecursive } from '../../graph/graphClient'
-import { buildReviewTree } from '../../parsers/migrationResultParser'
-import type { MigrationMapping, MigrationPhase, OneDriveAccessStatus, MigrationResultSummary, MigrationResultItem, ReviewData, ReviewNode, ResultUpload } from '../../types'
+import { downloadDriveItem, uploadFileToDrive, getOrCreateProjectFolder, resolveSharePointItemByUrl, resolveDriveItemRef, resolveOneDriveFolderByPath, listDriveItemsRecursive } from '../../graph/graphClient'
+import { buildReviewTree, computeSourceSummary } from '../../parsers/migrationResultParser'
+import type { MigrationMapping, MigrationPhase, OneDriveAccessStatus, MigrationResultSummary, MigrationResultItem, ReviewNode, ResultUpload, SourcePathSummary } from '../../types'
 import type { SpDriveItemDetails, DriveItemFlat } from '../../graph/graphClient'
 
 // ─── Per-destination CSV selection (cleared on each layout render) ────────────
 
 const _selectedUploadId = new Map<string, string>()   // destKey → uploadId
+
+// ─── Source-summary cache (populated by ensureSourceSummaries, cleared on project change) ──
+
+let _sourceSummaries: Map<string, SourcePathSummary> = new Map()  // uploadId → SourcePathSummary
+let _resultUploads: ResultUpload[] = []
+// Cache for full item arrays — lazy-populated on View click, session-scoped
+let _loadedItems: Map<string, MigrationResultItem[]> = new Map()  // uploadId → items
+let _currentProjectId: string | null = null
 
 // ─── Tree view module-level state (scoped per-open) ──────────────────────────
 
@@ -94,64 +102,72 @@ function aggregatePhase(mappings: MigrationMapping[]): MigrationPhase {
   return min
 }
 
-// ─── SPMT result cross-reference ──────────────────────────────────────────────
+// ─── SPMT result cross-reference (uses _sourceSummaries module state) ────────
 
-// Returns uploads (newest-first) that have items matching at least one mapping in the group
-function uploadsForGroup(group: DestGroup, reviewData: ReviewData, resultUploads: ResultUpload[]): ResultUpload[] {
+// Returns uploads (newest-first) that have summary data for at least one mapping in the group
+function uploadsForGroup(group: DestGroup): ResultUpload[] {
   const relevantIds = new Set<string>()
   for (const m of group.mappings) {
     const p = m.sourceNode.path
-    for (const item of reviewData.items) {
-      if (item.uploadId && (item.sourcePath === p || item.sourcePath.startsWith(p + '/'))) {
-        relevantIds.add(item.uploadId)
-      }
+    for (const [uploadId, summary] of _sourceSummaries) {
+      if (summary[p] !== undefined) relevantIds.add(uploadId)
     }
   }
-  return resultUploads
+  return _resultUploads
     .filter(u => relevantIds.has(u.id))
     .sort((a, b) => new Date(b.uploadedAt).getTime() - new Date(a.uploadedAt).getTime())
 }
 
-function spStatForMapping(m: MigrationMapping, reviewData: ReviewData, uploadId?: string): { migrated: number; scanFinished: number; failed: number; skipped: number } | null {
+function spStatForMapping(m: MigrationMapping, uploadId?: string): { migrated: number; scanFinished: number; failed: number; skipped: number } | null {
   const sourcePath = m.sourceNode.path
-  const items = reviewData.items.filter(i =>
-    (uploadId === undefined || i.uploadId === uploadId) &&
-    (i.sourcePath === sourcePath || i.sourcePath.startsWith(sourcePath + '/')))
-  if (items.length === 0) return null
-  return {
-    migrated: items.filter(i => {
-      if (i.rawStatus) return i.rawStatus.toLowerCase() === 'migrated'
-      return i.status === 'Migrated'
-    }).length,
-    scanFinished: items.filter(i => {
-      if (i.rawStatus) return i.rawStatus.toLowerCase() === 'scan finished'
-      return false
-    }).length,
-    failed:  items.filter(i => i.status === 'Failed').length,
-    skipped: items.filter(i => {
-      if (i.rawStatus) return i.rawStatus.toLowerCase() === 'skipped'
-      return i.status === 'Skipped'
-    }).length,
+  const uploads = uploadId ? [_resultUploads.find(u => u.id === uploadId)].filter(Boolean) as ResultUpload[] : _resultUploads
+  let migrated = 0, scanFinished = 0, failed = 0, skipped = 0, hasAny = false
+  for (const upload of uploads) {
+    const summary = _sourceSummaries.get(upload.id)
+    if (!summary) continue
+    const entry = summary[sourcePath]
+    if (!entry) continue
+    hasAny = true
+    migrated    += entry.migratedCount
+    scanFinished += entry.scanFinishedCount
+    failed      += entry.failedCount
+    skipped     += entry.skippedCount
   }
+  return hasAny ? { migrated, scanFinished, failed, skipped } : null
 }
 
-function statusBreakdownHtml(group: DestGroup, reviewData: ReviewData, uploadId?: string): string {
-  const items: MigrationResultItem[] = []
-  for (const m of group.mappings) {
-    const p = m.sourceNode.path
-    reviewData.items
-      .filter(i => (uploadId === undefined || i.uploadId === uploadId) &&
-        (i.sourcePath === p || i.sourcePath.startsWith(p + '/')))
-      .forEach(i => items.push(i))
-  }
-  if (items.length === 0) return ''
+function statusBreakdownHtml(group: DestGroup, uploadId?: string): string {
+  const rawStatusCounts = new Map<string, number>()
+  const failMsgs = new Map<string, number>()
+  const skipMsgs = new Map<string, number>()
 
-  const counts = new Map<string, number>()
-  for (const item of items) {
-    const s = item.rawStatus || item.status
-    counts.set(s, (counts.get(s) ?? 0) + 1)
+  const uploads = uploadId ? _resultUploads.filter(u => u.id === uploadId) : _resultUploads
+  for (const upload of uploads) {
+    const summary = _sourceSummaries.get(upload.id)
+    if (!summary) continue
+    for (const m of group.mappings) {
+      const entry = summary[m.sourceNode.path]
+      if (!entry) continue
+      for (const { status, count } of entry.rawStatusCounts) {
+        rawStatusCounts.set(status, (rawStatusCounts.get(status) ?? 0) + count)
+      }
+      for (const { message, count } of entry.failMessages) {
+        failMsgs.set(message, (failMsgs.get(message) ?? 0) + count)
+      }
+      for (const { message, count } of entry.skipMessages) {
+        skipMsgs.set(message, (skipMsgs.get(message) ?? 0) + count)
+      }
+    }
   }
-  const rows = Array.from(counts.entries()).sort((a, b) => b[1] - a[1])
+
+  if (rawStatusCounts.size === 0) return ''
+
+  const rows = Array.from(rawStatusCounts.entries()).sort((a, b) => b[1] - a[1])
+  const total = rows.reduce((s, [, c]) => s + c, 0)
+  const failMsgRows = Array.from(failMsgs.entries()).sort((a, b) => b[1] - a[1])
+  const skipMsgRows = Array.from(skipMsgs.entries()).sort((a, b) => b[1] - a[1])
+  const failTotal = failMsgRows.reduce((s, [, c]) => s + c, 0)
+  const skipTotal = skipMsgRows.reduce((s, [, c]) => s + c, 0)
 
   return `
     <div class="rev-status-breakdown" id="rev-status-breakdown">
@@ -164,47 +180,90 @@ function statusBreakdownHtml(group: DestGroup, reviewData: ReviewData, uploadId?
           </tr>`).join('')}
         <tr class="rev-sb-total-row">
           <td class="rev-sb-status">Total</td>
-          <td class="rev-sb-count">${items.length.toLocaleString()}</td>
+          <td class="rev-sb-count">${total.toLocaleString()}</td>
         </tr>
       </table>
+      ${failMsgRows.length > 0 ? `
+        <details class="rev-msg-details rev-msg-details--fail">
+          <summary class="rev-msg-summary"><span>Failed Messages</span><span class="rev-msg-count">${failTotal.toLocaleString()}</span></summary>
+          <table class="rev-msg-table">
+            ${failMsgRows.map(([msg, count]) => `<tr><td>${escHtml(msg)}</td><td>${count.toLocaleString()}</td></tr>`).join('')}
+          </table>
+        </details>` : ''}
+      ${skipMsgRows.length > 0 ? `
+        <details class="rev-msg-details rev-msg-details--skip">
+          <summary class="rev-msg-summary"><span>Skipped Messages</span><span class="rev-msg-count">${skipTotal.toLocaleString()}</span></summary>
+          <table class="rev-msg-table">
+            ${skipMsgRows.map(([msg, count]) => `<tr><td>${escHtml(msg)}</td><td>${count.toLocaleString()}</td></tr>`).join('')}
+          </table>
+        </details>` : ''}
     </div>`
 }
 
 // ─── Review data loading ──────────────────────────────────────────────────────
 
-async function ensureReviewData(): Promise<ReviewData | null> {
-  const state = getState()
-  if (state.reviewData) return state.reviewData
+/**
+ * Ensures source-path summaries are loaded for all uploads.
+ * Uploads with a pre-computed .source-summary.json are downloaded in parallel (fast).
+ * Old uploads without one are migrated one-by-one: full items downloaded, summary
+ * computed and saved — a one-time cost that makes every subsequent load instant.
+ */
+async function ensureSourceSummaries(container: HTMLElement): Promise<void> {
+  if (_sourceSummaries.size > 0) return  // already loaded this session
 
-  const project = state.currentProject
-  const resultUploads = project?.projectData.resultUploads ?? []
-  if (resultUploads.length === 0) return null
+  const project = getState().currentProject
+  const uploads = project?.projectData.resultUploads ?? []
+  _resultUploads = uploads
+
+  if (uploads.length === 0) return
 
   const { siteId } = getSpConfig()
-  const downloads = await Promise.all(
-    resultUploads.map(u => downloadDriveItem(siteId, u.summaryItemId))
-  ) as MigrationResultSummary[]
+  const hasSum = uploads.filter(u => u.sourceSummaryItemId)
+  const needsMigration = uploads.filter(u => !u.sourceSummaryItemId)
 
-  // Tag each item with its upload's ID at load time (not persisted — memory only)
-  const combinedItems: MigrationResultItem[] = downloads.flatMap((d, i) =>
-    (d.items ?? []).map(item => ({ ...item, uploadId: resultUploads[i].id }))
-  )
-  const tree = buildReviewTree(combinedItems)
-  const reviewData: ReviewData = {
-    tree,
-    items: combinedItems,
-    totals: {
-      migrated: downloads.reduce((s, d) => s + d.migratedCount, 0),
-      failed:   downloads.reduce((s, d) => s + d.failedCount, 0),
-      skipped:  downloads.reduce((s, d) => s + d.skippedCount, 0),
-      partial:  downloads.reduce((s, d) => s + d.partialCount, 0),
-      total:    downloads.reduce((s, d) => s + d.totalCount, 0),
-      failedRecycleBin:  combinedItems.filter(i => i.status === 'Failed'  && i.isRecycleBin).length,
-      skippedRecycleBin: combinedItems.filter(i => i.status === 'Skipped' && i.isRecycleBin).length,
-    },
+  // Download pre-existing summaries in parallel
+  if (hasSum.length > 0) {
+    const results = await Promise.all(hasSum.map(u => downloadDriveItem(siteId, u.sourceSummaryItemId!)))
+    for (let i = 0; i < hasSum.length; i++) {
+      _sourceSummaries.set(hasSum[i].id, results[i] as SourcePathSummary)
+    }
   }
-  setState({ reviewData })
-  return reviewData
+
+  // One-time migration for old uploads — show progress in the container
+  if (needsMigration.length > 0) {
+    const progressEl = container.querySelector<HTMLElement>('.review-loading')
+    const updateProgress = (done: number) => {
+      if (progressEl) progressEl.innerHTML = `<span class="spinner"></span> Optimising ${needsMigration.length} upload${needsMigration.length > 1 ? 's' : ''} for faster loading… (${done}/${needsMigration.length})`
+    }
+    updateProgress(0)
+
+    const currentProject = getState().currentProject!
+    let patchedUploads = [...(currentProject.projectData.resultUploads ?? [])]
+    const folderId = await getOrCreateProjectFolder(siteId, currentProject.title, currentProject.id)
+
+    for (let i = 0; i < needsMigration.length; i++) {
+      const upload = needsMigration[i]
+      const full = await downloadDriveItem(siteId, upload.summaryItemId) as MigrationResultSummary
+      const summary = computeSourceSummary(full.items ?? [])
+      const safeName = upload.fileName.replace(/["*:<>?/\\|#%]/g, '_')
+      const sourceSummaryItemId = await uploadFileToDrive(
+        siteId, folderId,
+        `${upload.id}_${safeName}.source-summary.json`,
+        JSON.stringify(summary),
+      )
+      _sourceSummaries.set(upload.id, summary)
+
+      // Patch the ResultUpload record in memory
+      patchedUploads = patchedUploads.map(u => u.id === upload.id ? { ...u, sourceSummaryItemId } : u)
+      updateProgress(i + 1)
+    }
+
+    // Persist the patched uploads back to SharePoint
+    const newProjectData = { ...currentProject.projectData, resultUploads: patchedUploads }
+    await updateProject(currentProject.id, { projectData: newProjectData })
+    setState({ currentProject: { ...currentProject, projectData: newProjectData } })
+    _resultUploads = patchedUploads
+  }
 }
 
 // ─── Entry point ──────────────────────────────────────────────────────────────
@@ -214,6 +273,14 @@ export async function renderReviewPanel(container: HTMLElement): Promise<void> {
   const state = getState()
   const project = state.currentProject
   if (!project) return
+
+  // Clear caches on project change so stale data is never shown
+  if (project.id !== _currentProjectId) {
+    _sourceSummaries.clear()
+    _resultUploads = []
+    _loadedItems.clear()
+    _currentProjectId = project.id
+  }
 
   const resultUploads = project.projectData.resultUploads ?? []
   if (resultUploads.length === 0) {
@@ -230,9 +297,8 @@ export async function renderReviewPanel(container: HTMLElement): Promise<void> {
 
   container.innerHTML = `<div class="review-panel"><div class="review-loading"><span class="spinner"></span> Loading migration results…</div></div>`
 
-  let reviewData: ReviewData | null
   try {
-    reviewData = await ensureReviewData()
+    await ensureSourceSummaries(container)
   } catch (err) {
     container.innerHTML = `
       <div class="review-panel">
@@ -245,15 +311,11 @@ export async function renderReviewPanel(container: HTMLElement): Promise<void> {
     return
   }
 
-  if (!reviewData) return
-
   const allMappings = state.mappings.filter(m => m.targetSite || m.plannedSite)
   const allGroups = buildDestGroups(allMappings)
 
   // Only show destinations where at least one source folder has matching SPMT results
-  const groups = allGroups.filter(g =>
-    g.mappings.some(m => spStatForMapping(m, reviewData!) !== null)
-  )
+  const groups = allGroups.filter(g => g.mappings.some(m => spStatForMapping(m) !== null))
 
   if (groups.length === 0) {
     container.innerHTML = `
@@ -268,12 +330,12 @@ export async function renderReviewPanel(container: HTMLElement): Promise<void> {
   }
 
   const migrationAccount = project.projectData.autoMapSettings?.migrationAccount ?? ''
-  renderLayout(container, groups, migrationAccount, reviewData!, resultUploads)
+  renderLayout(container, groups, migrationAccount)
 }
 
 // ─── Layout ───────────────────────────────────────────────────────────────────
 
-function renderLayout(container: HTMLElement, groups: DestGroup[], migrationAccount: string, reviewData: ReviewData, resultUploads: ResultUpload[]): void {
+function renderLayout(container: HTMLElement, groups: DestGroup[], migrationAccount: string): void {
   _selectedUploadId.clear()
   const totalDests = groups.length
   const withAccess = groups.filter(g =>
@@ -331,7 +393,7 @@ function renderLayout(container: HTMLElement, groups: DestGroup[], migrationAcco
             <span class="rch-phase">Phase</span>
           </div>
           <ul class="review-dest-list" id="review-dest-list">
-            ${groups.map(g => renderDestItemHtml(g, reviewData, resultUploads)).join('')}
+            ${groups.map(g => renderDestItemHtml(g)).join('')}
           </ul>
         </div>
         <div class="review-mapping-right" id="review-mapping-right">
@@ -344,7 +406,7 @@ function renderLayout(container: HTMLElement, groups: DestGroup[], migrationAcco
     </div>
   `
 
-  wireDestList(container, groups, migrationAccount, reviewData, resultUploads)
+  wireDestList(container, groups, migrationAccount)
 }
 
 function formatUploadLabel(u: ResultUpload): string {
@@ -353,20 +415,19 @@ function formatUploadLabel(u: ResultUpload): string {
   return `${u.fileName} (${date})`
 }
 
-function renderDestItemHtml(g: DestGroup, reviewData: ReviewData, resultUploads: ResultUpload[]): string {
+function renderDestItemHtml(g: DestGroup): string {
   const initials = escHtml(g.displayName.slice(0, 2).toUpperCase())
   const phase = aggregatePhase(g.mappings)
 
-  // Single mapping — flat row with stat columns
   // Find relevant uploads for this group; default to newest
-  const relevantUploads = uploadsForGroup(g, reviewData, resultUploads)
+  const relevantUploads = uploadsForGroup(g)
   const defaultUploadId = relevantUploads[0]?.id  // newest first
   const selUploadId = _selectedUploadId.get(g.key) ?? defaultUploadId
   if (selUploadId && !_selectedUploadId.has(g.key)) _selectedUploadId.set(g.key, selUploadId)
 
   if (g.mappings.length === 1) {
     const m = g.mappings[0]
-    const spStat = spStatForMapping(m, reviewData, selUploadId)
+    const spStat = spStatForMapping(m, selUploadId)
     const csvLabel = relevantUploads.length > 0 ? `<span class="rev-csv-label" data-csv-label="${escHtml(g.key)}">${escHtml(relevantUploads.find(u => u.id === selUploadId)?.fileName ?? '')}</span>` : ''
     const migratedCell  = spStat ? `<span class="rdc-migrated" data-stat-migrated="${escHtml(g.key)}">${spStat.migrated.toLocaleString()}</span>` : `<span class="rdc-migrated rdc-empty" data-stat-migrated="${escHtml(g.key)}">—</span>`
     const scanFinCell   = spStat ? `<span class="rdc-scanfinished" data-stat-scanfinished="${escHtml(g.key)}">${spStat.scanFinished.toLocaleString()}</span>` : `<span class="rdc-scanfinished rdc-empty" data-stat-scanfinished="${escHtml(g.key)}">—</span>`
@@ -398,13 +459,13 @@ function renderDestItemHtml(g: DestGroup, reviewData: ReviewData, resultUploads:
   }
 
   // Multiple mappings — expandable, aggregate stats shown on header row
-  const totalMigrated = g.mappings.reduce((s, m) => s + (spStatForMapping(m, reviewData, selUploadId)?.migrated ?? 0), 0)
-  const totalScanFin  = g.mappings.reduce((s, m) => s + (spStatForMapping(m, reviewData, selUploadId)?.scanFinished ?? 0), 0)
-  const totalSkip     = g.mappings.reduce((s, m) => s + (spStatForMapping(m, reviewData, selUploadId)?.skipped ?? 0), 0)
-  const totalFail     = g.mappings.reduce((s, m) => s + (spStatForMapping(m, reviewData, selUploadId)?.failed ?? 0), 0)
-  const hasAny        = g.mappings.some(m => spStatForMapping(m, reviewData, selUploadId) !== null)
+  const totalMigrated = g.mappings.reduce((s, m) => s + (spStatForMapping(m, selUploadId)?.migrated ?? 0), 0)
+  const totalScanFin  = g.mappings.reduce((s, m) => s + (spStatForMapping(m, selUploadId)?.scanFinished ?? 0), 0)
+  const totalSkip     = g.mappings.reduce((s, m) => s + (spStatForMapping(m, selUploadId)?.skipped ?? 0), 0)
+  const totalFail     = g.mappings.reduce((s, m) => s + (spStatForMapping(m, selUploadId)?.failed ?? 0), 0)
+  const hasAny        = g.mappings.some(m => spStatForMapping(m, selUploadId) !== null)
   const csvLabel      = relevantUploads.length > 0 ? `<span class="rev-csv-label" data-csv-label="${escHtml(g.key)}">${escHtml(relevantUploads.find(u => u.id === selUploadId)?.fileName ?? '')}</span>` : ''
-  const sourceRows    = g.mappings.map(m => renderSourceRowHtml(m, reviewData, selUploadId)).join('')
+  const sourceRows    = g.mappings.map(m => renderSourceRowHtml(m, selUploadId)).join('')
 
   return `
     <li class="review-dest-item" data-dest-key="${escHtml(g.key)}">
@@ -427,9 +488,9 @@ function renderDestItemHtml(g: DestGroup, reviewData: ReviewData, resultUploads:
     </li>`
 }
 
-function renderSourceRowHtml(m: MigrationMapping, reviewData: ReviewData, uploadId?: string): string {
+function renderSourceRowHtml(m: MigrationMapping, uploadId?: string): string {
   const name = m.sourceNode.name || m.sourceNode.originalPath
-  const spStat = spStatForMapping(m, reviewData, uploadId)
+  const spStat = spStatForMapping(m, uploadId)
   const migratedCell = spStat ? `<span class="rdc-migrated">${spStat.migrated.toLocaleString()}</span>`         : `<span class="rdc-migrated rdc-empty">—</span>`
   const scanFinCell  = spStat ? `<span class="rdc-scanfinished">${spStat.scanFinished.toLocaleString()}</span>` : `<span class="rdc-scanfinished rdc-empty">—</span>`
   const skipCell     = spStat ? `<span class="rdc-skip">${spStat.skipped.toLocaleString()}</span>`              : `<span class="rdc-skip rdc-empty">—</span>`
@@ -456,7 +517,7 @@ function renderSourceRowHtml(m: MigrationMapping, reviewData: ReviewData, upload
 
 // ─── Wiring ───────────────────────────────────────────────────────────────────
 
-function wireDestList(container: HTMLElement, groups: DestGroup[], migrationAccount: string, reviewData: ReviewData, resultUploads: ResultUpload[]): void {
+function wireDestList(container: HTMLElement, groups: DestGroup[], migrationAccount: string): void {
   const list = container.querySelector<HTMLElement>('#review-dest-list')!
   const rightPanel = container.querySelector<HTMLElement>('#review-mapping-right')!
 
@@ -480,7 +541,7 @@ function wireDestList(container: HTMLElement, groups: DestGroup[], migrationAcco
 
       list.querySelectorAll('.review-dest-row').forEach(r => r.classList.remove('review-dest-row--selected'))
       row.classList.add('review-dest-row--selected')
-      renderRightPanel(rightPanel, group, migrationAccount, reviewData, resultUploads, list, (newStatus, mappingId) =>
+      renderRightPanel(rightPanel, group, migrationAccount, list, (newStatus, mappingId) =>
         handleAccessChanged(newStatus, mappingId, list, groups), container)
     })
   })
@@ -494,10 +555,8 @@ function wireDestList(container: HTMLElement, groups: DestGroup[], migrationAcco
     const destKey   = btn.dataset.destKey ?? ''
     const mapping = getState().mappings.find(m => m.id === mappingId)
     if (!mapping) return
-    const reviewData = getState().reviewData
-    if (!reviewData) return
     const uploadId = destKey ? _selectedUploadId.get(destKey) : undefined
-    openResultsView(container, mapping, reviewData, uploadId)
+    void openResultsView(container, mapping, uploadId)
   })
 
   // Phase select change
@@ -530,13 +589,11 @@ function renderRightPanel(
   rightPanel: HTMLElement,
   group: DestGroup,
   migrationAccount: string,
-  reviewData: ReviewData,
-  resultUploads: ResultUpload[],
   list: HTMLElement,
   onAccessChanged: (s: OneDriveAccessStatus, id: string) => Promise<void>,
   container: HTMLElement,
 ): void {
-  const relevantUploads = uploadsForGroup(group, reviewData, resultUploads)
+  const relevantUploads = uploadsForGroup(group)
   const selUploadId = _selectedUploadId.get(group.key) ?? relevantUploads[0]?.id
 
   const csvSelectorHtml = relevantUploads.length > 0 ? `
@@ -550,7 +607,7 @@ function renderRightPanel(
       <button class="rev-csv-view-btn" id="rev-csv-view-btn" title="View results for selected CSV">🔍</button>
     </div>` : ''
 
-  const breakdown = statusBreakdownHtml(group, reviewData, selUploadId)
+  const breakdown = statusBreakdownHtml(group, selUploadId)
 
   if (group.isOneDrive) {
     const rep = group.mappings[0]
@@ -601,9 +658,7 @@ function renderRightPanel(
   // Wire CSV view button → open results tree for selected CSV
   rightPanel.querySelector<HTMLButtonElement>('#rev-csv-view-btn')?.addEventListener('click', () => {
     const uploadId = _selectedUploadId.get(group.key) ?? relevantUploads[0]?.id
-    const rv = getState().reviewData
-    if (!rv) return
-    openResultsView(container, group.mappings[0], rv, uploadId)
+    void openResultsView(container, group.mappings[0], uploadId)
   })
 
   // Wire CSV selector → update table row stats + breakdown
@@ -613,25 +668,24 @@ function renderRightPanel(
 
     // Update status breakdown in right panel
     const breakdownWrap = rightPanel.querySelector<HTMLElement>('#rev-breakdown-wrap')!
-    breakdownWrap.innerHTML = statusBreakdownHtml(group, reviewData, newUploadId)
+    breakdownWrap.innerHTML = statusBreakdownHtml(group, newUploadId)
 
     // Update stat cells and CSV label in the table row
-    updateRowStats(list, group, reviewData, newUploadId)
+    updateRowStats(list, group, newUploadId)
 
     // Update any open source rows too (multi-mapping case)
     const destItem = list.querySelector<HTMLElement>(`.review-dest-item[data-dest-key="${CSS.escape(group.key)}"]`)
     if (destItem) {
       const sourcesList = destItem.querySelector<HTMLElement>('.review-dest-sources')
       if (sourcesList && sourcesList.style.display !== 'none') {
-        sourcesList.innerHTML = group.mappings.map(m => renderSourceRowHtml(m, reviewData, newUploadId)).join('')
+        sourcesList.innerHTML = group.mappings.map(m => renderSourceRowHtml(m, newUploadId)).join('')
       }
     }
   })
 }
 
-function updateRowStats(list: HTMLElement, group: DestGroup, reviewData: ReviewData, uploadId: string): void {
-  const upload = reviewData.items.find(i => i.uploadId === uploadId)?.uploadId
-  const csvFileName = upload ? (getState().currentProject?.projectData.resultUploads?.find(u => u.id === uploadId)?.fileName ?? '') : ''
+function updateRowStats(list: HTMLElement, group: DestGroup, uploadId: string): void {
+  const csvFileName = _resultUploads.find(u => u.id === uploadId)?.fileName ?? ''
 
   const setCell = (attr: string, value: string, isEmpty: boolean) => {
     const el = list.querySelector<HTMLElement>(`[${attr}="${CSS.escape(group.key)}"]`)
@@ -642,7 +696,7 @@ function updateRowStats(list: HTMLElement, group: DestGroup, reviewData: ReviewD
   }
 
   if (group.mappings.length === 1) {
-    const spStat = spStatForMapping(group.mappings[0], reviewData, uploadId)
+    const spStat = spStatForMapping(group.mappings[0], uploadId)
     if (spStat) {
       setCell('data-stat-migrated',     spStat.migrated.toLocaleString(), false)
       setCell('data-stat-scanfinished', spStat.scanFinished.toLocaleString(), false)
@@ -655,11 +709,11 @@ function updateRowStats(list: HTMLElement, group: DestGroup, reviewData: ReviewD
       setCell('data-stat-failed', '—', true)
     }
   } else {
-    const totalMigrated = group.mappings.reduce((s, m) => s + (spStatForMapping(m, reviewData, uploadId)?.migrated ?? 0), 0)
-    const totalScanFin  = group.mappings.reduce((s, m) => s + (spStatForMapping(m, reviewData, uploadId)?.scanFinished ?? 0), 0)
-    const totalSkip     = group.mappings.reduce((s, m) => s + (spStatForMapping(m, reviewData, uploadId)?.skipped ?? 0), 0)
-    const totalFail     = group.mappings.reduce((s, m) => s + (spStatForMapping(m, reviewData, uploadId)?.failed ?? 0), 0)
-    const hasAny        = group.mappings.some(m => spStatForMapping(m, reviewData, uploadId) !== null)
+    const totalMigrated = group.mappings.reduce((s, m) => s + (spStatForMapping(m, uploadId)?.migrated ?? 0), 0)
+    const totalScanFin  = group.mappings.reduce((s, m) => s + (spStatForMapping(m, uploadId)?.scanFinished ?? 0), 0)
+    const totalSkip     = group.mappings.reduce((s, m) => s + (spStatForMapping(m, uploadId)?.skipped ?? 0), 0)
+    const totalFail     = group.mappings.reduce((s, m) => s + (spStatForMapping(m, uploadId)?.failed ?? 0), 0)
+    const hasAny        = group.mappings.some(m => spStatForMapping(m, uploadId) !== null)
     setCell('data-stat-migrated',     hasAny ? totalMigrated.toLocaleString() : '—', !hasAny)
     setCell('data-stat-scanfinished', hasAny ? totalScanFin.toLocaleString()  : '—', !hasAny)
     setCell('data-stat-skipped',      hasAny ? totalSkip.toLocaleString()     : '—', !hasAny)
@@ -701,14 +755,43 @@ async function handleAccessChanged(
 
 // ─── Results tree view ────────────────────────────────────────────────────────
 
-function openResultsView(container: HTMLElement, mapping: MigrationMapping, reviewData: ReviewData, uploadId?: string): void {
+async function openResultsView(container: HTMLElement, mapping: MigrationMapping, uploadId?: string): Promise<void> {
   const sourcePath = mapping.sourceNode.path
   const sourceName = mapping.sourceNode.name || mapping.sourceNode.originalPath
+  const { siteId } = getSpConfig()
 
-  // Filter items to this source path, and optionally to a specific upload CSV
-  const filteredItems = reviewData.items.filter(i =>
-    (uploadId === undefined || i.uploadId === uploadId) &&
-    (i.sourcePath === sourcePath || i.sourcePath.startsWith(sourcePath + '/')))
+  // Determine which uploads to show — either the specific one, or all with data for this source
+  const uploadsToLoad = uploadId
+    ? _resultUploads.filter(u => u.id === uploadId)
+    : _resultUploads.filter(u => {
+        const sum = _sourceSummaries.get(u.id)
+        return sum && sum[sourcePath] !== undefined
+      })
+
+  // Show loading if any upload isn't yet in the item cache
+  const needsLoad = uploadsToLoad.some(u => !_loadedItems.has(u.id))
+  if (needsLoad) {
+    container.innerHTML = `<div class="review-panel"><div class="review-loading"><span class="spinner"></span> Loading migration details…</div></div>`
+  }
+
+  // Lazy-load full item arrays (cached per-session)
+  for (const upload of uploadsToLoad) {
+    if (_loadedItems.has(upload.id)) continue
+    try {
+      const full = await downloadDriveItem(siteId, upload.summaryItemId) as MigrationResultSummary
+      const tagged = (full.items ?? []).map(i => ({ ...i, uploadId: upload.id }))
+      _loadedItems.set(upload.id, tagged)
+    } catch (err) {
+      console.warn(`[Review] Failed to load items for upload ${upload.id}:`, err)
+      _loadedItems.set(upload.id, [])
+    }
+  }
+
+  // Combine items from all relevant uploads, filtered to this source path
+  const allSourceItems = uploadsToLoad.flatMap(u => _loadedItems.get(u.id) ?? [])
+  const filteredItems = allSourceItems.filter(i =>
+    i.sourcePath === sourcePath || i.sourcePath.startsWith(sourcePath + '/'))
+
   const subTree = buildReviewTree(filteredItems)
   const totals = {
     migrated: filteredItems.filter(i => i.status === 'Migrated').length,
@@ -1810,6 +1893,21 @@ function injectReviewStyles(): void {
     .rev-sb-count { text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; width: 60px; }
     .rev-sb-total-row td { padding: 6px 0 0; font-weight: 700; border-top: 2px solid var(--color-border); }
     .rev-sb-total-row .rev-sb-status { color: var(--color-text-muted); font-size: 0.78rem; }
+
+    /* ── Message breakdown collapsibles ── */
+    .rev-msg-details { margin-top: 10px; border: 1px solid var(--color-border); border-radius: 5px; overflow: hidden; }
+    .rev-msg-summary { padding: 6px 10px; font-size: 0.78rem; font-weight: 600; cursor: pointer;
+      list-style: none; display: flex; justify-content: space-between; align-items: center;
+      background: var(--color-surface-alt, #f8f8f8); }
+    .rev-msg-summary::-webkit-details-marker { display: none; }
+    .rev-msg-details--fail .rev-msg-summary { color: var(--color-danger, #a4262c); }
+    .rev-msg-details--skip .rev-msg-summary { color: #605e5c; }
+    .rev-msg-count { font-size: 0.75rem; background: rgba(0,0,0,0.06); padding: 1px 6px;
+      border-radius: 10px; font-variant-numeric: tabular-nums; }
+    .rev-msg-table { width: 100%; border-collapse: collapse; font-size: 0.75rem; }
+    .rev-msg-table td { padding: 4px 10px; border-top: 1px solid var(--color-border); word-break: break-word; }
+    .rev-msg-table td:last-child { text-align: right; font-weight: 600; white-space: nowrap;
+      width: 1%; padding-left: 16px; font-variant-numeric: tabular-nums; }
 
     /* ── Tabs ── */
     .rev-tabs-bar { display: flex; border-bottom: 2px solid var(--color-border);

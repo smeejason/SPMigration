@@ -1,6 +1,6 @@
 import JSZip from 'jszip'
 import Papa from 'papaparse'
-import type { MigrationResultItem, MigrationResultStatus, MigrationResultSummary, ReviewNode } from '../types'
+import type { MigrationResultItem, MigrationResultStatus, MigrationResultSummary, ReviewNode, SourcePathSummary, SourcePathSummaryEntry } from '../types'
 
 // ─── Public API ───────────────────────────────────────────────────────────────
 
@@ -29,7 +29,7 @@ export async function parseMigrationResultCsv(file: File): Promise<MigrationResu
       status,
       rawStatus,
       resultCategory: row['Result category'] ?? '',
-      message: row['Message'] ?? '',
+      message: (row['Message'] ?? '').trim(),
       errorCode: '',
       fileSizeBytes: parseInt((row['Item size (bytes)'] ?? '0').replace(/[^0-9]/g, '') || '0', 10),
       isRecycleBin: source.includes('$RECYCLE.BIN'),
@@ -104,7 +104,7 @@ export async function parseMigrationResultZip(file: File): Promise<MigrationResu
       status,
       rawStatus,
       resultCategory: row['Result category'] ?? '',
-      message: row['Message'] ?? '',
+      message: (row['Message'] ?? '').trim(),
       errorCode: failureErrorCodes.get(source) ?? '',
       fileSizeBytes: parseInt((row['Item size (bytes)'] ?? '0').replace(/[^0-9]/g, '') || '0', 10),
       isRecycleBin: source.includes('$RECYCLE.BIN'),
@@ -128,6 +128,80 @@ export async function parseMigrationResultZip(file: File): Promise<MigrationResu
   }
 
   return { items, migratedCount, failedCount, skippedCount, partialCount, totalCount: items.length }
+}
+
+// ─── Source path summary ─────────────────────────────────────────────────────
+
+/**
+ * Builds a compact per-source-path summary from a flat items array.
+ * Every path prefix up to maxDepth levels is indexed so the review panel can
+ * display per-user stats and message breakdowns without downloading the full items.
+ */
+export function computeSourceSummary(items: MigrationResultItem[], maxDepth = 5): SourcePathSummary {
+  // Accumulate raw counts keyed by path prefix
+  const entries = new Map<string, {
+    migrated: number; failed: number; skipped: number
+    scanFinished: number; partial: number; total: number
+    rawStatus: Map<string, number>
+    failMsgs: Map<string, number>
+    skipMsgs: Map<string, number>
+  }>()
+
+  const getOrCreate = (prefix: string) => {
+    if (!entries.has(prefix)) {
+      entries.set(prefix, {
+        migrated: 0, failed: 0, skipped: 0, scanFinished: 0, partial: 0, total: 0,
+        rawStatus: new Map(), failMsgs: new Map(), skipMsgs: new Map(),
+      })
+    }
+    return entries.get(prefix)!
+  }
+
+  for (const item of items) {
+    const parts = item.sourcePath.split('/').filter(Boolean)
+    const normalised = item.status
+    const raw = (item.rawStatus || item.status).trim()
+    const msg = item.message.trim()
+
+    for (let depth = 1; depth <= Math.min(parts.length, maxDepth); depth++) {
+      const prefix = parts.slice(0, depth).join('/')
+      const e = getOrCreate(prefix)
+      e.total++
+      if (normalised === 'Migrated') e.migrated++
+      else if (normalised === 'Failed') {
+        e.failed++
+        if (msg) e.failMsgs.set(msg, (e.failMsgs.get(msg) ?? 0) + 1)
+      } else if (normalised === 'Skipped') {
+        if (raw.toLowerCase() === 'scan finished') e.scanFinished++
+        else e.skipped++
+        if (msg && msg.toLowerCase() !== 'scan finished') {
+          e.skipMsgs.set(msg, (e.skipMsgs.get(msg) ?? 0) + 1)
+        }
+      } else if (normalised === 'Partial') {
+        e.partial++
+      }
+      e.rawStatus.set(raw, (e.rawStatus.get(raw) ?? 0) + 1)
+    }
+  }
+
+  const toSortedArr = (m: Map<string, number>, limit = 30) =>
+    Array.from(m.entries()).sort((a, b) => b[1] - a[1]).slice(0, limit)
+
+  const result: SourcePathSummary = {}
+  for (const [prefix, e] of entries) {
+    result[prefix] = {
+      migratedCount: e.migrated,
+      failedCount: e.failed,
+      skippedCount: e.skipped,
+      scanFinishedCount: e.scanFinished,
+      partialCount: e.partial,
+      totalCount: e.total,
+      rawStatusCounts: toSortedArr(e.rawStatus).map(([status, count]) => ({ status, count })),
+      failMessages: toSortedArr(e.failMsgs).map(([message, count]) => ({ message, count })),
+      skipMessages: toSortedArr(e.skipMsgs).map(([message, count]) => ({ message, count })),
+    } satisfies SourcePathSummaryEntry
+  }
+  return result
 }
 
 // ─── Tree builder ─────────────────────────────────────────────────────────────
@@ -242,7 +316,7 @@ function stripBom(text: string): string {
 function normalizeStatus(raw: string): MigrationResultStatus {
   const s = raw.trim().toLowerCase()
   if (s === 'migrated') return 'Migrated'
-  if (s === 'failed') return 'Failed'
+  if (s === 'failed' || s.startsWith('scan file failure') || s.includes('failure')) return 'Failed'
   if (s === 'skipped') return 'Skipped'
   if (s === 'partial success' || s === 'partial') return 'Partial'
   return 'Skipped'

@@ -360,12 +360,31 @@ export interface ResultUpload {
   uploadedAt: string      // ISO datetime string
   zipItemId: string       // Graph driveItem ID of the stored raw ZIP
   summaryItemId: string   // Graph driveItem ID of the stored .result.json
+  sourceSummaryItemId?: string  // Graph driveItem ID of the .source-summary.json (absent on old uploads)
   migratedCount: number
   failedCount: number
   skippedCount: number
   partialCount: number
   totalCount: number
 }
+
+/**
+ * Compact per-source-path statistics stored alongside each .result.json.
+ * Keyed by every path prefix up to maxDepth levels (e.g. "SERVER", "SERVER/SHARE", "SERVER/SHARE/USER").
+ * Used by the review list and right panel so the full item array is never downloaded for summary views.
+ */
+export interface SourcePathSummaryEntry {
+  migratedCount: number
+  failedCount: number
+  skippedCount: number
+  scanFinishedCount: number
+  partialCount: number
+  totalCount: number
+  rawStatusCounts: Array<{ status: string; count: number }>  // sorted desc — for the status breakdown table
+  failMessages: Array<{ message: string; count: number }>    // sorted desc, top 30
+  skipMessages: Array<{ message: string; count: number }>    // sorted desc, top 30
+}
+export type SourcePathSummary = Record<string, SourcePathSummaryEntry>
 
 export interface ReviewNode {
   path: string

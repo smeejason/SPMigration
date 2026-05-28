@@ -1,7 +1,7 @@
 import { setState, getState } from '../../state/store'
 import { updateProject, getSpConfig } from '../../graph/projectService'
 import { getOrCreateProjectFolder, uploadFileToDrive, downloadDriveItem, deleteDriveItem, saveMappingsFile } from '../../graph/graphClient'
-import { parseMigrationResultZip, parseMigrationResultCsv } from '../../parsers/migrationResultParser'
+import { parseMigrationResultZip, parseMigrationResultCsv, computeSourceSummary } from '../../parsers/migrationResultParser'
 import type { TreeNode, MigrationMapping, ExcelUpload, ResultUpload } from '../../types'
 
 // ─── Entry point ──────────────────────────────────────────────────────────────
@@ -295,6 +295,8 @@ async function handleResultFiles(container: HTMLElement, files: File[]): Promise
 
       const zipItemId = await uploadFileToDrive(siteId, folderId, `${ts}_${safeName}`, await file.arrayBuffer())
       const summaryItemId = await uploadFileToDrive(siteId, folderId, `${ts}_${safeName}.result.json`, JSON.stringify(summary))
+      const sourceSummary = computeSourceSummary(summary.items)
+      const sourceSummaryItemId = await uploadFileToDrive(siteId, folderId, `${ts}_${safeName}.source-summary.json`, JSON.stringify(sourceSummary))
 
       const newUpload: ResultUpload = {
         id: ts,
@@ -302,6 +304,7 @@ async function handleResultFiles(container: HTMLElement, files: File[]): Promise
         uploadedAt: new Date().toISOString(),
         zipItemId,
         summaryItemId,
+        sourceSummaryItemId,
         migratedCount: summary.migratedCount,
         failedCount: summary.failedCount,
         skippedCount: summary.skippedCount,
