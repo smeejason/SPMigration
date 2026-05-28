@@ -1559,8 +1559,11 @@ function setupResultsFilters(panel: HTMLElement, rootNodes: ReviewNode[]): void 
 
   // ── Error message multi-select dropdown ──────────────────────────────────────
   const errWrap = panel.querySelector<HTMLElement>('#rev-err-filter-wrap')
+  // Use message if set; fall back to rawStatus for rows where the failure reason
+  // is encoded in the Status column (e.g. "Scan File Failure:...") with no Message.
+  const errLabel = (i: MigrationResultItem) => i.message || i.rawStatus
   const uniqueMessages = [...new Set(
-    _allItems.filter(i => i.status === 'Failed' && i.message).map(i => i.message)
+    _allItems.filter(i => i.status === 'Failed').map(errLabel).filter(Boolean)
   )].sort()
 
   if (errWrap && uniqueMessages.length > 0) {
@@ -1658,6 +1661,10 @@ function filterNodes(nodes: ReviewNode[], statusFilter: string, hideRb: boolean,
   for (const node of nodes) {
     const filteredChildren = filterNodes(node.children, statusFilter, hideRb, search)
     if (nodeMatchesFilters(node, statusFilter, hideRb, search) || filteredChildren.length > 0) {
+      // When the error filter is active, a folder only shows if it has visible children.
+      // Without this, a folder with failedCount>0 passes nodeMatchesFilters even after
+      // all its descendants are filtered out by the error message selection.
+      if (_errorMsgFilter.size > 0 && node.children.length > 0 && filteredChildren.length === 0) continue
       result.push({ ...node, children: filteredChildren })
     }
   }
@@ -1674,10 +1681,12 @@ function nodeMatchesFilters(node: ReviewNode, statusFilter: string, hideRb: bool
     const items = _allItems.filter(i => i.sourcePath === node.path)
     if (items.length > 0 && items.every(i => i.isRecycleBin)) return false
   }
-  // Error message filter — only applied to leaf nodes; folders pass through via recursion
+  // Error message filter — leaf nodes only; folders are handled in filterNodes.
+  // Use message || rawStatus so rows where the failure reason is in the Status
+  // column (e.g. "Scan File Failure:Unauthorized access...") still match.
   if (_errorMsgFilter.size > 0 && node.children.length === 0) {
     const items = _allItems.filter(i => i.sourcePath === node.path)
-    if (!items.some(i => _errorMsgFilter.has(i.message))) return false
+    if (!items.some(i => _errorMsgFilter.has(i.message || i.rawStatus))) return false
   }
   return true
 }
