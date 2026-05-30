@@ -380,6 +380,8 @@ export interface SourcePathSummaryEntry {
   scanFinishedCount: number
   partialCount: number
   totalCount: number
+  migratedBytes?: number        // total size of migrated File items in bytes (absent in old summaries)
+  migratedFileCount?: number    // count of File-type (not Folder) migrated items
   rawStatusCounts: Array<{ status: string; count: number }>  // sorted desc — for the status breakdown table
   failMessages: Array<{ message: string; count: number }>    // sorted desc, top 30
   skipMessages: Array<{ message: string; count: number }>    // sorted desc, top 30

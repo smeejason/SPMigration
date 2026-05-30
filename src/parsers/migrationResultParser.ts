@@ -142,6 +142,7 @@ export function computeSourceSummary(items: MigrationResultItem[], maxDepth = 5)
   const entries = new Map<string, {
     migrated: number; failed: number; skipped: number
     scanFinished: number; partial: number; total: number
+    migratedBytes: number; migratedFileCount: number
     rawStatus: Map<string, number>
     failMsgs: Map<string, number>
     skipMsgs: Map<string, number>
@@ -151,6 +152,7 @@ export function computeSourceSummary(items: MigrationResultItem[], maxDepth = 5)
     if (!entries.has(prefix)) {
       entries.set(prefix, {
         migrated: 0, failed: 0, skipped: 0, scanFinished: 0, partial: 0, total: 0,
+        migratedBytes: 0, migratedFileCount: 0,
         rawStatus: new Map(), failMsgs: new Map(), skipMsgs: new Map(),
       })
     }
@@ -167,8 +169,11 @@ export function computeSourceSummary(items: MigrationResultItem[], maxDepth = 5)
       const prefix = parts.slice(0, depth).join('/')
       const e = getOrCreate(prefix)
       e.total++
-      if (normalised === 'Migrated') e.migrated++
-      else if (normalised === 'Failed') {
+      if (normalised === 'Migrated') {
+        e.migrated++
+        if (item.itemType === 'File') e.migratedFileCount++
+        e.migratedBytes += item.fileSizeBytes ?? 0
+      } else if (normalised === 'Failed') {
         e.failed++
         if (msg) e.failMsgs.set(msg, (e.failMsgs.get(msg) ?? 0) + 1)
       } else if (normalised === 'Skipped') {
@@ -196,6 +201,8 @@ export function computeSourceSummary(items: MigrationResultItem[], maxDepth = 5)
       scanFinishedCount: e.scanFinished,
       partialCount: e.partial,
       totalCount: e.total,
+      migratedBytes: e.migratedBytes,
+      migratedFileCount: e.migratedFileCount,
       rawStatusCounts: toSortedArr(e.rawStatus).map(([status, count]) => ({ status, count })),
       failMessages: toSortedArr(e.failMsgs).map(([message, count]) => ({ message, count })),
       skipMessages: toSortedArr(e.skipMsgs).map(([message, count]) => ({ message, count })),

@@ -219,17 +219,25 @@ async function ensureSourceSummaries(container: HTMLElement): Promise<void> {
 
   const { siteId } = getSpConfig()
   const hasSum = uploads.filter(u => u.sourceSummaryItemId)
-  const needsMigration = uploads.filter(u => !u.sourceSummaryItemId)
+  const needsMigration: ResultUpload[] = uploads.filter(u => !u.sourceSummaryItemId)
 
   // Download pre-existing summaries in parallel
   if (hasSum.length > 0) {
     const results = await Promise.all(hasSum.map(u => downloadDriveItem(siteId, u.sourceSummaryItemId!)))
     for (let i = 0; i < hasSum.length; i++) {
-      _sourceSummaries.set(hasSum[i].id, results[i] as SourcePathSummary)
+      const summary = results[i] as SourcePathSummary
+      // Detect old-format summaries missing migratedBytes — queue them for one-time re-computation
+      const sample = Object.values(summary)[0]
+      if (sample && sample.migratedBytes === undefined) {
+        needsMigration.push(hasSum[i])
+      } else {
+        _sourceSummaries.set(hasSum[i].id, summary)
+      }
     }
   }
 
-  // One-time migration for old uploads — show progress in the container
+  // One-time migration for old uploads (no summary file) and old-format summaries (missing bytes) —
+  // show progress in the container
   if (needsMigration.length > 0) {
     const progressEl = container.querySelector<HTMLElement>('.review-loading')
     const updateProgress = (done: number) => {
@@ -338,15 +346,35 @@ export async function renderReviewPanel(container: HTMLElement): Promise<void> {
 function renderLayout(container: HTMLElement, groups: DestGroup[], migrationAccount: string): void {
   _selectedUploadId.clear()
   const totalDests = groups.length
-  const withAccess = groups.filter(g =>
-    g.isOneDrive && g.mappings.some(m => m.accessStatus === 'accessible' || m.accessStatus === 'granted')).length
-  const revoked = groups.filter(g =>
-    g.isOneDrive && g.mappings.some(m => m.accessStatus === 'revoked')).length
 
   const phaseCounts: Record<MigrationPhase, number> = { planning: 0, migrated: 0, testing: 0, live: 0 }
   for (const g of groups) {
     for (const m of g.mappings) phaseCounts[m.phase ?? 'planning']++
   }
+
+  // Aggregate GB and file counts from the LATEST upload per group (from source summaries)
+  let totalMigratedBytes = 0
+  let totalMigratedFiles = 0
+  const seenUploadIds = new Set<string>()
+  for (const group of groups) {
+    const latestUpload = uploadsForGroup(group)[0]
+    if (!latestUpload || seenUploadIds.has(latestUpload.id)) continue
+    seenUploadIds.add(latestUpload.id)
+    const summary = _sourceSummaries.get(latestUpload.id)
+    if (!summary) continue
+    for (const m of group.mappings) {
+      const entry = summary[m.sourceNode.path]
+      if (!entry) continue
+      totalMigratedBytes += entry.migratedBytes ?? 0
+      totalMigratedFiles += entry.migratedFileCount ?? 0
+    }
+  }
+  const gbLabel = totalMigratedBytes > 0
+    ? (totalMigratedBytes / 1_073_741_824).toFixed(2)
+    : '—'
+  const filesLabel = totalMigratedFiles > 0
+    ? totalMigratedFiles.toLocaleString()
+    : '—'
 
   container.innerHTML = `
     <div class="review-panel">
@@ -354,14 +382,6 @@ function renderLayout(container: HTMLElement, groups: DestGroup[], migrationAcco
         <div class="rstat-card">
           <div class="rstat-label">Destinations</div>
           <div class="rstat-value rstat-blue">${totalDests}</div>
-        </div>
-        <div class="rstat-card">
-          <div class="rstat-label">Has Access</div>
-          <div class="rstat-value rstat-green">${withAccess}</div>
-        </div>
-        <div class="rstat-card">
-          <div class="rstat-label">Revoked</div>
-          <div class="rstat-value rstat-amber">${revoked}</div>
         </div>
         <div class="rstat-card">
           <div class="rstat-label">Planning</div>
@@ -378,6 +398,14 @@ function renderLayout(container: HTMLElement, groups: DestGroup[], migrationAcco
         <div class="rstat-card">
           <div class="rstat-label">Live</div>
           <div class="rstat-value rstat-green">${phaseCounts.live}</div>
+        </div>
+        <div class="rstat-card">
+          <div class="rstat-label">GB Migrated</div>
+          <div class="rstat-value rstat-green">${gbLabel}</div>
+        </div>
+        <div class="rstat-card">
+          <div class="rstat-label">Files Migrated</div>
+          <div class="rstat-value rstat-green">${filesLabel}</div>
         </div>
       </div>
 
