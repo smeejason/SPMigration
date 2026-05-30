@@ -366,7 +366,7 @@ function renderLayout(container: HTMLElement, groups: DestGroup[], migrationAcco
       const entry = summary[m.sourceNode.path]
       if (!entry) continue
       totalMigratedBytes += entry.migratedBytes ?? 0
-      totalMigratedFiles += entry.migratedFileCount ?? 0
+      totalMigratedFiles += entry.migratedCount   // all migrated items (files + folders), matches table column
     }
   }
   const gbLabel = totalMigratedBytes > 0
@@ -404,7 +404,7 @@ function renderLayout(container: HTMLElement, groups: DestGroup[], migrationAcco
           <div class="rstat-value rstat-green">${gbLabel}</div>
         </div>
         <div class="rstat-card">
-          <div class="rstat-label">Files Migrated</div>
+          <div class="rstat-label">Items Migrated</div>
           <div class="rstat-value rstat-green">${filesLabel}</div>
         </div>
       </div>
