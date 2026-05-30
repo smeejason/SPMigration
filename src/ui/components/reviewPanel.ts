@@ -352,21 +352,21 @@ function renderLayout(container: HTMLElement, groups: DestGroup[], migrationAcco
     for (const m of g.mappings) phaseCounts[m.phase ?? 'planning']++
   }
 
-  // Aggregate GB and file counts from the LATEST upload per group (from source summaries)
+  // Aggregate GB and item counts from the LATEST upload per group (from source summaries).
+  // Each group contributes its own source path entries — no upload-level deduplication,
+  // because multiple groups (e.g. 9 users) can legitimately share the same combined CSV.
   let totalMigratedBytes = 0
   let totalMigratedFiles = 0
-  const seenUploadIds = new Set<string>()
   for (const group of groups) {
     const latestUpload = uploadsForGroup(group)[0]
-    if (!latestUpload || seenUploadIds.has(latestUpload.id)) continue
-    seenUploadIds.add(latestUpload.id)
+    if (!latestUpload) continue
     const summary = _sourceSummaries.get(latestUpload.id)
     if (!summary) continue
     for (const m of group.mappings) {
       const entry = summary[m.sourceNode.path]
       if (!entry) continue
       totalMigratedBytes += entry.migratedBytes ?? 0
-      totalMigratedFiles += entry.migratedCount   // all migrated items (files + folders), matches table column
+      totalMigratedFiles += entry.migratedCount
     }
   }
   const gbLabel = totalMigratedBytes > 0
