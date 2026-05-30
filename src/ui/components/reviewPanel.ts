@@ -407,6 +407,9 @@ function renderLayout(container: HTMLElement, groups: DestGroup[], migrationAcco
           <div class="rstat-label">Items Migrated</div>
           <div class="rstat-value rstat-green">${filesLabel}</div>
         </div>
+        <div class="rstat-refresh-wrap">
+          <button class="rstat-refresh-btn" id="rstat-refresh-btn" title="Refresh stats">↺</button>
+        </div>
       </div>
 
       <div class="review-mapping-layout">
@@ -435,6 +438,17 @@ function renderLayout(container: HTMLElement, groups: DestGroup[], migrationAcco
   `
 
   wireDestList(container, groups, migrationAccount)
+
+  const refreshBtn = container.querySelector<HTMLButtonElement>('#rstat-refresh-btn')
+  refreshBtn?.addEventListener('click', () => {
+    refreshBtn.classList.add('spinning')
+    refreshBtn.disabled = true
+    _sourceSummaries.clear()
+    _resultUploads = []
+    _loadedItems.clear()
+    _currentProjectId = null   // force full reload on next render
+    void renderReviewPanel(container)
+  })
 }
 
 function formatUploadLabel(u: ResultUpload): string {
@@ -1772,11 +1786,19 @@ function injectReviewStyles(): void {
     @keyframes review-spin { to { transform: rotate(360deg); } }
 
     /* ── Stats bar ── */
-    .review-stats-bar { display: flex; border-bottom: 1px solid var(--color-border);
+    .review-stats-bar { display: flex; align-items: stretch; border-bottom: 1px solid var(--color-border);
       background: var(--color-surface); flex-shrink: 0; overflow-x: auto; }
     .rstat-card { flex: 1; min-width: 80px; padding: 10px 14px;
       border-right: 1px solid var(--color-border); }
-    .rstat-card:last-child { border-right: none; }
+    .rstat-refresh-wrap { display: flex; align-items: center; padding: 0 10px;
+      border-left: 1px solid var(--color-border); flex-shrink: 0; }
+    .rstat-refresh-btn { background: none; border: 1px solid var(--color-border); border-radius: 50%;
+      width: 28px; height: 28px; display: flex; align-items: center; justify-content: center;
+      cursor: pointer; font-size: 1rem; line-height: 1; color: var(--color-text-muted);
+      transition: color 0.15s, border-color 0.15s, transform 0.3s; }
+    .rstat-refresh-btn:hover { color: var(--color-primary); border-color: var(--color-primary); }
+    .rstat-refresh-btn.spinning { animation: rstat-spin 0.6s linear; }
+    @keyframes rstat-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
     .rstat-label { font-size: 0.62rem; font-weight: 700; color: var(--color-text-muted);
       text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 3px; }
     .rstat-value { font-size: 1.1rem; font-weight: 700; line-height: 1.1; }
