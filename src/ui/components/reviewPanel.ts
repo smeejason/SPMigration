@@ -43,6 +43,13 @@ function formatBytes(bytes: number): string {
   return `${(bytes / Math.pow(1024, i)).toFixed(1)} ${units[i]}`
 }
 
+function formatMigratedGb(bytes: number): string {
+  if (!bytes || bytes <= 0) return '—'
+  const gb = bytes / 1_073_741_824
+  if (gb >= 0.01) return gb.toFixed(2)
+  return '<0.01'
+}
+
 function isOneDriveMapping(m: MigrationMapping): boolean {
   return m.matchStatus !== undefined || m.resolvedDisplayName !== undefined
 }
@@ -118,22 +125,23 @@ function uploadsForGroup(group: DestGroup): ResultUpload[] {
     .sort((a, b) => new Date(b.uploadedAt).getTime() - new Date(a.uploadedAt).getTime())
 }
 
-function spStatForMapping(m: MigrationMapping, uploadId?: string): { migrated: number; scanFinished: number; failed: number; skipped: number } | null {
+function spStatForMapping(m: MigrationMapping, uploadId?: string): { migrated: number; scanFinished: number; failed: number; skipped: number; migratedBytes: number } | null {
   const sourcePath = m.sourceNode.path
   const uploads = uploadId ? [_resultUploads.find(u => u.id === uploadId)].filter(Boolean) as ResultUpload[] : _resultUploads
-  let migrated = 0, scanFinished = 0, failed = 0, skipped = 0, hasAny = false
+  let migrated = 0, scanFinished = 0, failed = 0, skipped = 0, migratedBytes = 0, hasAny = false
   for (const upload of uploads) {
     const summary = _sourceSummaries.get(upload.id)
     if (!summary) continue
     const entry = summary[sourcePath]
     if (!entry) continue
     hasAny = true
-    migrated    += entry.migratedCount
+    migrated     += entry.migratedCount
     scanFinished += entry.scanFinishedCount
-    failed      += entry.failedCount
-    skipped     += entry.skippedCount
+    failed       += entry.failedCount
+    skipped      += entry.skippedCount
+    migratedBytes += entry.migratedBytes ?? 0
   }
-  return hasAny ? { migrated, scanFinished, failed, skipped } : null
+  return hasAny ? { migrated, scanFinished, failed, skipped, migratedBytes } : null
 }
 
 function statusBreakdownHtml(group: DestGroup, uploadId?: string): string {
@@ -417,6 +425,7 @@ function renderLayout(container: HTMLElement, groups: DestGroup[], migrationAcco
           <div class="review-col-header">
             <span class="rch-dest">Account</span>
             <span class="rch-migrated">Migrated</span>
+            <span class="rch-gb">GB</span>
             <span class="rch-scanfinished">Scan Finished</span>
             <span class="rch-skip">Skipped</span>
             <span class="rch-fail">Failed</span>
@@ -472,6 +481,7 @@ function renderDestItemHtml(g: DestGroup): string {
     const spStat = spStatForMapping(m, selUploadId)
     const csvLabel = relevantUploads.length > 0 ? `<span class="rev-csv-label" data-csv-label="${escHtml(g.key)}">${escHtml(relevantUploads.find(u => u.id === selUploadId)?.fileName ?? '')}</span>` : ''
     const migratedCell  = spStat ? `<span class="rdc-migrated" data-stat-migrated="${escHtml(g.key)}">${spStat.migrated.toLocaleString()}</span>` : `<span class="rdc-migrated rdc-empty" data-stat-migrated="${escHtml(g.key)}">—</span>`
+    const gbCell        = spStat ? `<span class="rdc-gb" data-stat-gb="${escHtml(g.key)}">${formatMigratedGb(spStat.migratedBytes)}</span>` : `<span class="rdc-gb rdc-empty" data-stat-gb="${escHtml(g.key)}">—</span>`
     const scanFinCell   = spStat ? `<span class="rdc-scanfinished" data-stat-scanfinished="${escHtml(g.key)}">${spStat.scanFinished.toLocaleString()}</span>` : `<span class="rdc-scanfinished rdc-empty" data-stat-scanfinished="${escHtml(g.key)}">—</span>`
     const skipCell      = spStat ? `<span class="rdc-skip" data-stat-skipped="${escHtml(g.key)}">${spStat.skipped.toLocaleString()}</span>` : `<span class="rdc-skip rdc-empty" data-stat-skipped="${escHtml(g.key)}">—</span>`
     const failCell      = spStat ? `<span class="rdc-fail" data-stat-failed="${escHtml(g.key)}">${spStat.failed > 0 ? spStat.failed.toLocaleString() : '0'}</span>` : `<span class="rdc-fail rdc-empty" data-stat-failed="${escHtml(g.key)}">—</span>`
@@ -493,7 +503,7 @@ function renderDestItemHtml(g: DestGroup): string {
             <span class="review-dest-name">${escHtml(g.displayName)}</span>
             ${csvLabel}
           </div>
-          ${migratedCell}${scanFinCell}${skipCell}${failCell}
+          ${migratedCell}${gbCell}${scanFinCell}${skipCell}${failCell}
           <span class="rdc-view">${viewBtn}</span>
           <span class="rev-dest-phase" data-dest-phase="${escHtml(g.key)}">${phaseSelect}</span>
         </div>
@@ -502,6 +512,7 @@ function renderDestItemHtml(g: DestGroup): string {
 
   // Multiple mappings — expandable, aggregate stats shown on header row
   const totalMigrated = g.mappings.reduce((s, m) => s + (spStatForMapping(m, selUploadId)?.migrated ?? 0), 0)
+  const totalGbBytes  = g.mappings.reduce((s, m) => s + (spStatForMapping(m, selUploadId)?.migratedBytes ?? 0), 0)
   const totalScanFin  = g.mappings.reduce((s, m) => s + (spStatForMapping(m, selUploadId)?.scanFinished ?? 0), 0)
   const totalSkip     = g.mappings.reduce((s, m) => s + (spStatForMapping(m, selUploadId)?.skipped ?? 0), 0)
   const totalFail     = g.mappings.reduce((s, m) => s + (spStatForMapping(m, selUploadId)?.failed ?? 0), 0)
@@ -519,8 +530,8 @@ function renderDestItemHtml(g: DestGroup): string {
           ${csvLabel}
         </div>
         ${hasAny
-          ? `<span class="rdc-migrated" data-stat-migrated="${escHtml(g.key)}">${totalMigrated.toLocaleString()}</span><span class="rdc-scanfinished" data-stat-scanfinished="${escHtml(g.key)}">${totalScanFin.toLocaleString()}</span><span class="rdc-skip" data-stat-skipped="${escHtml(g.key)}">${totalSkip.toLocaleString()}</span><span class="rdc-fail" data-stat-failed="${escHtml(g.key)}">${totalFail.toLocaleString()}</span>`
-          : `<span class="rdc-migrated rdc-empty" data-stat-migrated="${escHtml(g.key)}">—</span><span class="rdc-scanfinished rdc-empty" data-stat-scanfinished="${escHtml(g.key)}">—</span><span class="rdc-skip rdc-empty" data-stat-skipped="${escHtml(g.key)}">—</span><span class="rdc-fail rdc-empty" data-stat-failed="${escHtml(g.key)}">—</span>`}
+          ? `<span class="rdc-migrated" data-stat-migrated="${escHtml(g.key)}">${totalMigrated.toLocaleString()}</span><span class="rdc-gb" data-stat-gb="${escHtml(g.key)}">${formatMigratedGb(totalGbBytes)}</span><span class="rdc-scanfinished" data-stat-scanfinished="${escHtml(g.key)}">${totalScanFin.toLocaleString()}</span><span class="rdc-skip" data-stat-skipped="${escHtml(g.key)}">${totalSkip.toLocaleString()}</span><span class="rdc-fail" data-stat-failed="${escHtml(g.key)}">${totalFail.toLocaleString()}</span>`
+          : `<span class="rdc-migrated rdc-empty" data-stat-migrated="${escHtml(g.key)}">—</span><span class="rdc-gb rdc-empty" data-stat-gb="${escHtml(g.key)}">—</span><span class="rdc-scanfinished rdc-empty" data-stat-scanfinished="${escHtml(g.key)}">—</span><span class="rdc-skip rdc-empty" data-stat-skipped="${escHtml(g.key)}">—</span><span class="rdc-fail rdc-empty" data-stat-failed="${escHtml(g.key)}">—</span>`}
         <span class="rdc-view"></span>
         <span class="rev-dest-phase" data-dest-phase="${escHtml(g.key)}">${phaseBadgeHtml(phase)}</span>
       </div>
@@ -534,6 +545,7 @@ function renderSourceRowHtml(m: MigrationMapping, uploadId?: string): string {
   const name = m.sourceNode.name || m.sourceNode.originalPath
   const spStat = spStatForMapping(m, uploadId)
   const migratedCell = spStat ? `<span class="rdc-migrated">${spStat.migrated.toLocaleString()}</span>`         : `<span class="rdc-migrated rdc-empty">—</span>`
+  const gbCell       = spStat ? `<span class="rdc-gb">${formatMigratedGb(spStat.migratedBytes)}</span>`         : `<span class="rdc-gb rdc-empty">—</span>`
   const scanFinCell  = spStat ? `<span class="rdc-scanfinished">${spStat.scanFinished.toLocaleString()}</span>` : `<span class="rdc-scanfinished rdc-empty">—</span>`
   const skipCell     = spStat ? `<span class="rdc-skip">${spStat.skipped.toLocaleString()}</span>`              : `<span class="rdc-skip rdc-empty">—</span>`
   const failCell     = spStat ? `<span class="rdc-fail">${spStat.failed.toLocaleString()}</span>`               : `<span class="rdc-fail rdc-empty">—</span>`
@@ -551,7 +563,7 @@ function renderSourceRowHtml(m: MigrationMapping, uploadId?: string): string {
     <li class="review-source-row">
       <span class="review-source-icon">📁</span>
       <span class="review-source-name" title="${escHtml(m.sourceNode.originalPath)}">${escHtml(name)}</span>
-      ${migratedCell}${scanFinCell}${skipCell}${failCell}
+      ${migratedCell}${gbCell}${scanFinCell}${skipCell}${failCell}
       <span class="rdc-view">${viewBtn}</span>
       ${phaseSelect}
     </li>`
@@ -741,25 +753,29 @@ function updateRowStats(list: HTMLElement, group: DestGroup, uploadId: string): 
     const spStat = spStatForMapping(group.mappings[0], uploadId)
     if (spStat) {
       setCell('data-stat-migrated',     spStat.migrated.toLocaleString(), false)
+      setCell('data-stat-gb',           formatMigratedGb(spStat.migratedBytes), false)
       setCell('data-stat-scanfinished', spStat.scanFinished.toLocaleString(), false)
       setCell('data-stat-skipped',      spStat.skipped.toLocaleString(), false)
       setCell('data-stat-failed',       spStat.failed > 0 ? spStat.failed.toLocaleString() : '0', false)
     } else {
       setCell('data-stat-migrated', '—', true)
+      setCell('data-stat-gb', '—', true)
       setCell('data-stat-scanfinished', '—', true)
       setCell('data-stat-skipped', '—', true)
       setCell('data-stat-failed', '—', true)
     }
   } else {
     const totalMigrated = group.mappings.reduce((s, m) => s + (spStatForMapping(m, uploadId)?.migrated ?? 0), 0)
+    const totalGbBytes  = group.mappings.reduce((s, m) => s + (spStatForMapping(m, uploadId)?.migratedBytes ?? 0), 0)
     const totalScanFin  = group.mappings.reduce((s, m) => s + (spStatForMapping(m, uploadId)?.scanFinished ?? 0), 0)
     const totalSkip     = group.mappings.reduce((s, m) => s + (spStatForMapping(m, uploadId)?.skipped ?? 0), 0)
     const totalFail     = group.mappings.reduce((s, m) => s + (spStatForMapping(m, uploadId)?.failed ?? 0), 0)
     const hasAny        = group.mappings.some(m => spStatForMapping(m, uploadId) !== null)
-    setCell('data-stat-migrated',     hasAny ? totalMigrated.toLocaleString() : '—', !hasAny)
-    setCell('data-stat-scanfinished', hasAny ? totalScanFin.toLocaleString()  : '—', !hasAny)
-    setCell('data-stat-skipped',      hasAny ? totalSkip.toLocaleString()     : '—', !hasAny)
-    setCell('data-stat-failed',       hasAny ? totalFail.toLocaleString()     : '—', !hasAny)
+    setCell('data-stat-migrated',     hasAny ? totalMigrated.toLocaleString()      : '—', !hasAny)
+    setCell('data-stat-gb',           hasAny ? formatMigratedGb(totalGbBytes)      : '—', !hasAny)
+    setCell('data-stat-scanfinished', hasAny ? totalScanFin.toLocaleString()       : '—', !hasAny)
+    setCell('data-stat-skipped',      hasAny ? totalSkip.toLocaleString()          : '—', !hasAny)
+    setCell('data-stat-failed',       hasAny ? totalFail.toLocaleString()          : '—', !hasAny)
   }
 
   // Update CSV label in table row
@@ -1824,6 +1840,7 @@ function injectReviewStyles(): void {
       font-size: 0.62rem; font-weight: 700; color: var(--color-text-muted);
       text-transform: uppercase; letter-spacing: 0.05em; flex-shrink: 0; gap: 8px; }
     .rch-dest { flex: 1; }
+    .rch-gb          { width: 68px;  text-align: right; flex-shrink: 0; }
     .rch-status      { width: 108px; text-align: right; flex-shrink: 0; }
     .rch-scanfinished{ width: 90px;  text-align: right; flex-shrink: 0; }
     .rch-skip        { width: 68px;  text-align: right; flex-shrink: 0; }
@@ -1833,12 +1850,13 @@ function injectReviewStyles(): void {
 
     /* ── Stat cells ── */
     .rdc-migrated     { width: 80px;  text-align: right; font-size: 0.8rem; flex-shrink: 0; font-variant-numeric: tabular-nums; color: #107c10; font-weight: 600; }
+    .rdc-gb           { width: 68px;  text-align: right; font-size: 0.8rem; flex-shrink: 0; font-variant-numeric: tabular-nums; color: #107c10; font-weight: 600; }
     .rdc-scanfinished { width: 90px;  text-align: right; font-size: 0.8rem; flex-shrink: 0; font-variant-numeric: tabular-nums; color: var(--color-primary, #0078d4); }
     .rdc-skip         { width: 68px;  text-align: right; font-size: 0.8rem; flex-shrink: 0; font-variant-numeric: tabular-nums; color: var(--color-text-muted); }
     .rdc-fail         { width: 58px;  text-align: right; font-size: 0.8rem; flex-shrink: 0; font-variant-numeric: tabular-nums; }
     .rdc-fail:not(.rdc-empty) { color: var(--color-danger, #a4262c); font-weight: 600; }
     .rdc-view         { width: 58px;  flex-shrink: 0; display: flex; align-items: center; justify-content: flex-start; padding-left: 4px; }
-    .rdc-migrated.rdc-empty, .rdc-scanfinished.rdc-empty, .rdc-skip.rdc-empty, .rdc-fail.rdc-empty { color: var(--color-text-muted); opacity: 0.5; font-weight: normal; }
+    .rdc-migrated.rdc-empty, .rdc-gb.rdc-empty, .rdc-scanfinished.rdc-empty, .rdc-skip.rdc-empty, .rdc-fail.rdc-empty { color: var(--color-text-muted); opacity: 0.5; font-weight: normal; }
 
     /* ── Destination list ── */
     .review-dest-list { flex: 1; overflow-y: auto; list-style: none; padding: 0; margin: 0; min-height: 0; }
