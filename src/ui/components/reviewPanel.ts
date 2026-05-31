@@ -1,7 +1,7 @@
 import { getState, setState } from '../../state/store'
 import { persistProjectMappings, getSpConfig, updateProject } from '../../graph/projectService'
 import { renderPersonCard } from './oneDrivePersonCard'
-import { downloadDriveItem, uploadFileToDrive, getOrCreateProjectFolder, resolveSharePointItemByUrl, resolveDriveItemRef, resolveOneDriveFolderByPath, listDriveItemsRecursive } from '../../graph/graphClient'
+import { downloadDriveItem, uploadFileToDrive, getOrCreateProjectFolder, resolveSharePointItemByUrl, resolveDriveItemRef, resolveOneDriveFolderByPath, listDriveItemsRecursive, encodeUrlPathSegments } from '../../graph/graphClient'
 import { buildReviewTree, computeSourceSummary } from '../../parsers/migrationResultParser'
 import type { MigrationMapping, MigrationPhase, OneDriveAccessStatus, MigrationResultSummary, MigrationResultItem, ReviewNode, ResultUpload, SourcePathSummary } from '../../types'
 import type { SpDriveItemDetails, DriveItemFlat } from '../../graph/graphClient'
@@ -1106,7 +1106,8 @@ async function runValidation(panel: HTMLElement, mapping: MigrationMapping, filt
 
     if (isPersonalOneDrive && oneDriveUserId) {
       try {
-        const urlParsed = new URL(rootDestUrl)
+        // Encode path segments first so # and other special chars don't break URL parsing
+        const urlParsed = new URL(encodeUrlPathSegments(rootDestUrl))
         const parts = urlParsed.pathname.split('/').slice(4).map(decodeURIComponent).filter(Boolean)
         const drivePath = parts.join('/')
         ref = await resolveOneDriveFolderByPath(oneDriveUserId, drivePath)

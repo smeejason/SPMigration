@@ -836,8 +836,9 @@ export async function resolveSharePointItemByUrl(rawOrEncodedUrl: string): Promi
 }
 
 /** Re-encode path segments in a fully-decoded URL so that URL-unsafe characters
- *  (#, ?, &, +, space, etc.) in filenames don't act as URL delimiters. */
-function encodeUrlPathSegments(decodedUrl: string): string {
+ *  (#, ?, &, +, space, etc.) in filenames don't act as URL delimiters.
+ *  Exported so callers can sanitise URLs before passing them to `new URL()`. */
+export function encodeUrlPathSegments(decodedUrl: string): string {
   // Locate where the host ends and the path begins
   const slashIdx = decodedUrl.indexOf('/', decodedUrl.indexOf('//') + 2)
   if (slashIdx < 0) return decodedUrl
@@ -1033,7 +1034,9 @@ export interface DriveItemFlat {
  */
 export async function resolveDriveItemRef(url: string): Promise<{ driveId: string; itemId: string } | null> {
   try {
-    const encoded = 'u!' + btoa(url).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_')
+    let safeUrl: string
+    try { safeUrl = encodeUrlPathSegments(decodeURIComponent(url)) } catch { safeUrl = encodeUrlPathSegments(url) }
+    const encoded = 'u!' + btoa(safeUrl).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_')
     const item = await client()
       .api(`/shares/${encoded}/driveItem`)
       .select('id,parentReference')
