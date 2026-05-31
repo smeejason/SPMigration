@@ -820,8 +820,12 @@ export async function getSharePointItemByPath(siteId: string, driveRelativePath:
  * the file lives in — no need to know siteId or driveId ahead of time.
  */
 export async function resolveSharePointItemByUrl(rawOrEncodedUrl: string): Promise<SpDriveItemDetails> {
+  // Decode any existing percent-encoding, then re-encode path segments properly.
+  // Characters like # (fragment delimiter) and spaces must be percent-encoded in
+  // path segments before base64-encoding, otherwise SharePoint truncates the path.
   let url: string
   try { url = decodeURIComponent(rawOrEncodedUrl) } catch { url = rawOrEncodedUrl }
+  url = encodeUrlPathSegments(url)
   // Graph /shares requires base64url encoding with a 'u!' prefix
   const encoded = 'u!' + btoa(url).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_')
   return client()
@@ -829,6 +833,23 @@ export async function resolveSharePointItemByUrl(rawOrEncodedUrl: string): Promi
     .select('name,createdBy,createdDateTime,lastModifiedBy,lastModifiedDateTime')
     .expand('listItem($expand=fields($select=Title))')
     .get() as Promise<SpDriveItemDetails>
+}
+
+/** Re-encode path segments in a fully-decoded URL so that URL-unsafe characters
+ *  (#, ?, &, +, space, etc.) in filenames don't act as URL delimiters. */
+function encodeUrlPathSegments(decodedUrl: string): string {
+  // Locate where the host ends and the path begins
+  const slashIdx = decodedUrl.indexOf('/', decodedUrl.indexOf('//') + 2)
+  if (slashIdx < 0) return decodedUrl
+  const host = decodedUrl.slice(0, slashIdx)
+  const pathAndQuery = decodedUrl.slice(slashIdx)
+  // Separate path from query string (? separates; # in the path is NOT a separator here)
+  const qIdx = pathAndQuery.indexOf('?')
+  const path = qIdx >= 0 ? pathAndQuery.slice(0, qIdx) : pathAndQuery
+  const query = qIdx >= 0 ? pathAndQuery.slice(qIdx) : ''
+  // Encode each segment individually — encodeURIComponent handles #, ?, &, space, etc.
+  const encodedPath = path.split('/').map(seg => encodeURIComponent(seg)).join('/')
+  return host + encodedPath + query
 }
 
 export async function deleteDriveItem(siteId: string, itemId: string): Promise<void> {
