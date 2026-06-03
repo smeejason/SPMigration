@@ -108,8 +108,9 @@ function renderOneDriveSummary(container: HTMLElement, mappings: MigrationMappin
       <div class="od-action-bar">
         <div class="od-btn-group">
           <div class="od-btn-cluster">
-            <button id="btn-check-perms"  class="btn btn-secondary od-action-btn">🔍 Check Permissions</button>
-            <button id="btn-grant-access" class="btn btn-secondary od-action-btn">🔑 Grant Drive Access</button>
+            <button id="btn-check-perms"      class="btn btn-secondary od-action-btn">🔍 Check Permissions</button>
+            <button id="btn-grant-access"     class="btn btn-secondary od-action-btn">🔑 Grant Drive Access</button>
+            ${waves.length > 0 ? `<button id="btn-assign-wave" class="btn btn-secondary od-action-btn" disabled title="Select a wave above to enable">📋 Add all Mapped to Wave</button>` : ''}
           </div>
           <div class="od-btn-cluster od-btn-cluster--right">
             <button id="btn-export-csv"   class="btn btn-primary">Export as CSV</button>
@@ -219,6 +220,7 @@ function renderOneDriveSummary(container: HTMLElement, mappings: MigrationMappin
   })
 
   // Wire wave filter pills
+  const assignWaveBtn = container.querySelector<HTMLButtonElement>('#btn-assign-wave')!
   const waveFilterBar = container.querySelector('#od-wave-filter-bar')
   waveFilterBar?.querySelectorAll<HTMLElement>('.filter-pill').forEach(btn => {
     btn.addEventListener('click', () => {
@@ -226,6 +228,10 @@ function renderOneDriveSummary(container: HTMLElement, mappings: MigrationMappin
       btn.classList.add('filter-pill--active')
       container.dataset.odWaveFilter = btn.dataset.wave!
       applyBothFilters()
+      const waveId = btn.dataset.wave!
+      const isRealWave = waveId !== 'all' && waveId !== 'none'
+      assignWaveBtn.disabled = !isRealWave
+      assignWaveBtn.title = isRealWave ? '' : 'Select a wave above to enable'
     })
   })
 
@@ -239,6 +245,8 @@ function renderOneDriveSummary(container: HTMLElement, mappings: MigrationMappin
   })
   container.querySelector('#btn-check-perms')?.addEventListener('click', () => runCheckPermissions(container))
   container.querySelector('#btn-grant-access')?.addEventListener('click', () => runGrantAccess(container))
+
+  assignWaveBtn.addEventListener('click', () => void assignAllToWave(container, 'od'))
 }
 
 function applyOdFilter(mappings: MigrationMapping[], filter: string): MigrationMapping[] {
@@ -251,6 +259,37 @@ function applyWaveFilter(mappings: MigrationMapping[], wave: string): MigrationM
   if (wave === 'all') return mappings
   if (wave === 'none') return mappings.filter(m => !m.waveId)
   return mappings.filter(m => m.waveId === wave)
+}
+
+async function assignAllToWave(container: HTMLElement, panel: 'od' | 'sp'): Promise<void> {
+  const waveId = panel === 'od'
+    ? (container.dataset.odWaveFilter ?? '')
+    : (container.dataset.spWaveFilter ?? '')
+  if (!waveId || waveId === 'all' || waveId === 'none') return
+
+  const isValidOd = (m: MigrationMapping) =>
+    (m.matchStatus === 'matched' || m.matchStatus === undefined) && !m.waveId
+  const isValidSp = (m: MigrationMapping) =>
+    m.status === 'ready' && !m.waveId
+
+  const predicate = panel === 'od' ? isValidOd : isValidSp
+  const updated = getState().mappings.map(m => predicate(m) ? { ...m, waveId } : m)
+  const changedCount = updated.filter((m, i) => m.waveId !== getState().mappings[i].waveId).length
+  if (changedCount === 0) return
+
+  setState({ mappings: updated })
+  await persistMappings()
+
+  // Update the DOM: set data-wave-id and refresh the wave cell content
+  const waveName = getState().currentProject?.projectData.waves?.find(w => w.id === waveId)?.name ?? ''
+  updated.forEach(m => {
+    if (m.waveId !== waveId) return
+    const row = container.querySelector<HTMLTableRowElement>(`tr[data-mapping-id="${CSS.escape(m.id)}"]`)
+    if (!row) return
+    row.dataset.waveId = waveId
+    const waveCell = row.querySelector<HTMLElement>('.od-wave-cell')
+    if (waveCell) waveCell.innerHTML = `<span class="badge od-wave-badge">${escHtml(waveName)}</span>`
+  })
 }
 
 // ─── Row / badge helpers ───────────────────────────────────────────────────────
@@ -550,6 +589,7 @@ function renderSharePointSummary(container: HTMLElement, mappings: MigrationMapp
   const totalFiles = ready.reduce((s, m) => s + m.sourceNode.fileCount, 0)
   const uniqueSites = new Set(ready.map(m => m.targetSite?.id).filter(Boolean)).size
   const hasPending = unmapped.length > 0
+  const spWaves: MigrationWave[] = getState().currentProject?.projectData.waves ?? []
 
   const spFilterPills = [
     ready.length   > 0 ? `<button class="filter-pill" data-filter="ready">✅ Ready (${ready.length})</button>`   : '',
@@ -585,6 +625,7 @@ function renderSharePointSummary(container: HTMLElement, mappings: MigrationMapp
       <div class="summary-export-row">
         <button id="btn-export-csv"  class="btn btn-primary">Export as CSV</button>
         <button id="btn-export-json" class="btn btn-ghost">Export as JSON</button>
+        ${spWaves.length > 0 ? `<button id="btn-sp-assign-wave" class="btn btn-secondary" disabled title="Select a wave below to enable">📋 Add all Mapped to Wave</button>` : ''}
       </div>
 
       <!-- ── Filter Bar ── -->
@@ -593,6 +634,15 @@ function renderSharePointSummary(container: HTMLElement, mappings: MigrationMapp
         <button class="filter-pill filter-pill--active" data-filter="all">All (${mappings.length})</button>
         ${spFilterPills}
       </div>
+
+      ${spWaves.length > 0 ? `
+      <!-- ── Wave Filter Bar ── -->
+      <div class="summary-filter-bar summary-wave-filter-bar" id="sp-wave-filter-bar">
+        <span class="filter-label">Wave:</span>
+        <button class="filter-pill filter-pill--active" data-wave="all">All Waves</button>
+        ${spWaves.map(w => `<button class="filter-pill" data-wave="${escHtml(w.id)}">${escHtml(w.name)}</button>`).join('')}
+        <button class="filter-pill" data-wave="none">No Wave</button>
+      </div>` : ''}
 
       <!-- ── Pending bulk-create toolbar (shown only when pending filter active) ── -->
       <div id="sp-pending-toolbar" class="sp-pending-toolbar" style="display:none">
@@ -635,12 +685,13 @@ function renderSharePointSummary(container: HTMLElement, mappings: MigrationMapp
               <th>Destination List</th>
               <th>Folder Path</th>
               <th>Status</th>
+              ${spWaves.length > 0 ? '<th>Wave</th>' : ''}
             </tr>
           </thead>
           <tbody>
             ${mappings.length === 0
-              ? `<tr><td colspan="9" class="table-empty">No mappings defined yet.</td></tr>`
-              : mappings.map(spRowHtml).join('')}
+              ? `<tr><td colspan="${9 + (spWaves.length > 0 ? 1 : 0)}" class="table-empty">No mappings defined yet.</td></tr>`
+              : mappings.map(m => spRowHtml(m, spWaves)).join('')}
           </tbody>
         </table>
       </div>
@@ -649,25 +700,34 @@ function renderSharePointSummary(container: HTMLElement, mappings: MigrationMapp
   injectSummaryStyles()
 
   let activeSpFilter = 'all'
+  container.dataset.spWaveFilter = 'all'
 
   // ── Filter pills ────────────────────────────────────────────────────────────
   const spFilterBar = container.querySelector('#sp-filter-bar')!
   const pendingToolbar = container.querySelector('#sp-pending-toolbar') as HTMLElement
   const thCheckbox = container.querySelector('#th-checkbox') as HTMLElement
 
-  const applyFilter = (filter: string): void => {
-    activeSpFilter = filter
+  const applySpBothFilters = (): void => {
+    const sf = activeSpFilter
+    const wf = container.dataset.spWaveFilter ?? 'all'
     container.querySelectorAll<HTMLTableRowElement>('tr[data-filter-status]').forEach(row => {
-      const match = filter === 'all' || row.dataset.filterStatus === filter
-      row.style.display = match ? '' : 'none'
+      const statusMatch = sf === 'all' || row.dataset.filterStatus === sf
+      const waveVal = row.dataset.waveId ?? ''
+      const waveMatch = wf === 'all' || (wf === 'none' && !waveVal) || waveVal === wf
+      row.style.display = statusMatch && waveMatch ? '' : 'none'
     })
-    const isPending = filter === 'pending'
+    const isPending = sf === 'pending'
     pendingToolbar.style.display = isPending ? '' : 'none'
     thCheckbox.style.display = isPending ? '' : 'none'
     container.querySelectorAll<HTMLElement>('.sp-check-cell').forEach(td => {
       td.style.display = isPending ? '' : 'none'
     })
     updateSelectedCount()
+  }
+
+  const applyFilter = (filter: string): void => {
+    activeSpFilter = filter
+    applySpBothFilters()
   }
 
   spFilterBar.querySelectorAll<HTMLElement>('.filter-pill').forEach(btn => {
@@ -677,6 +737,26 @@ function renderSharePointSummary(container: HTMLElement, mappings: MigrationMapp
       applyFilter(btn.dataset.filter!)
     })
   })
+
+  // ── Wave filter pills ───────────────────────────────────────────────────────
+  const spAssignWaveBtn = container.querySelector<HTMLButtonElement>('#btn-sp-assign-wave')
+  const spWaveFilterBar = container.querySelector('#sp-wave-filter-bar')
+  spWaveFilterBar?.querySelectorAll<HTMLElement>('.filter-pill').forEach(btn => {
+    btn.addEventListener('click', () => {
+      spWaveFilterBar.querySelectorAll('.filter-pill').forEach(b => b.classList.remove('filter-pill--active'))
+      btn.classList.add('filter-pill--active')
+      container.dataset.spWaveFilter = btn.dataset.wave!
+      applySpBothFilters()
+      if (spAssignWaveBtn) {
+        const waveId = btn.dataset.wave!
+        const isRealWave = waveId !== 'all' && waveId !== 'none'
+        spAssignWaveBtn.disabled = !isRealWave
+        spAssignWaveBtn.title = isRealWave ? '' : 'Select a wave below to enable'
+      }
+    })
+  })
+
+  spAssignWaveBtn?.addEventListener('click', () => void assignAllToWave(container, 'sp'))
 
   // ── Checkbox logic ──────────────────────────────────────────────────────────
   const createBtn = container.querySelector('#btn-create-selected-sites') as HTMLButtonElement
@@ -794,12 +874,13 @@ function renderSharePointSummary(container: HTMLElement, mappings: MigrationMapp
   })
 }
 
-function spRowHtml(m: MigrationMapping): string {
+function spRowHtml(m: MigrationMapping, waves: MigrationWave[] = []): string {
   const statusClass = m.status === 'ready' ? 'status-ready' : m.status === 'error' ? 'status-error' : 'status-pending'
   const statusLabel = m.status === 'ready' ? '✅ Ready' : m.status === 'error' ? '⚠ Error' : '⏳ Pending'
   const plannedName = m.plannedSite?.displayName ?? '—'
+  const wave = waves.find(w => w.id === m.waveId)
   return `
-    <tr data-filter-status="${m.status}" data-mapping-path="${escHtml(m.sourceNode.path)}">
+    <tr data-filter-status="${m.status}" data-mapping-path="${escHtml(m.sourceNode.path)}" data-wave-id="${escHtml(m.waveId ?? '')}" data-mapping-id="${escHtml(m.id)}">
       <td class="sp-check-cell" style="display:none">
         ${m.status === 'pending' && m.plannedSite
           ? `<input type="checkbox" class="sp-row-check" data-path="${escHtml(m.sourceNode.path)}" />`
@@ -813,6 +894,7 @@ function spRowHtml(m: MigrationMapping): string {
       <td>${m.targetDrive ? escHtml(m.targetDrive.name)        : '—'}</td>
       <td class="path-cell">${m.targetFolderPath ? escHtml(m.targetFolderPath) : '/'}</td>
       <td><span class="badge ${statusClass}">${statusLabel}</span></td>
+      ${waves.length > 0 ? `<td class="od-wave-cell">${wave ? `<span class="badge od-wave-badge">${escHtml(wave.name)}</span>` : '<span class="od-wave-none">—</span>'}</td>` : ''}
     </tr>`
 }
 
