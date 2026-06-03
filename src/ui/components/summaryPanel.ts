@@ -273,23 +273,25 @@ async function assignAllToWave(container: HTMLElement, panel: 'od' | 'sp'): Prom
     m.status === 'ready' && !m.waveId
 
   const predicate = panel === 'od' ? isValidOd : isValidSp
-  const updated = getState().mappings.map(m => predicate(m) ? { ...m, waveId } : m)
-  const changedCount = updated.filter((m, i) => m.waveId !== getState().mappings[i].waveId).length
-  if (changedCount === 0) return
+  const toUpdate = getState().mappings.filter(predicate)
+  if (toUpdate.length === 0) return
 
+  // Show spinner on the button
+  const btnId = panel === 'od' ? 'btn-assign-wave' : 'btn-sp-assign-wave'
+  const btn = container.querySelector<HTMLButtonElement>(`#${btnId}`)
+  if (btn) {
+    btn.disabled = true
+    btn.innerHTML = `<span class="spinner btn-spinner"></span> Adding ${toUpdate.length} mapping${toUpdate.length !== 1 ? 's' : ''}…`
+  }
+
+  const updated = getState().mappings.map(m => predicate(m) ? { ...m, waveId } : m)
   setState({ mappings: updated })
   await persistMappings()
 
-  // Update the DOM: set data-wave-id and refresh the wave cell content
-  const waveName = getState().currentProject?.projectData.waves?.find(w => w.id === waveId)?.name ?? ''
-  updated.forEach(m => {
-    if (m.waveId !== waveId) return
-    const row = container.querySelector<HTMLTableRowElement>(`tr[data-mapping-id="${CSS.escape(m.id)}"]`)
-    if (!row) return
-    row.dataset.waveId = waveId
-    const waveCell = row.querySelector<HTMLElement>('.od-wave-cell')
-    if (waveCell) waveCell.innerHTML = `<span class="badge od-wave-badge">${escHtml(waveName)}</span>`
-  })
+  // Full re-render then restore the active wave pill so the user sees the wave they just filled
+  renderSummaryPanel(container)
+  const wavePillBar = panel === 'od' ? '#od-wave-filter-bar' : '#sp-wave-filter-bar'
+  container.querySelector<HTMLElement>(`${wavePillBar} [data-wave="${CSS.escape(waveId)}"]`)?.click()
 }
 
 // ─── Row / badge helpers ───────────────────────────────────────────────────────
@@ -1095,6 +1097,7 @@ function injectSummaryStyles(): void {
     .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid currentColor;
       border-top-color: transparent; border-radius: 50%;
       animation: spin 0.7s linear infinite; flex-shrink: 0; vertical-align: middle; }
+    .btn-spinner { margin-right: 4px; }
     .sp-check-cell { text-align: center; }
   `
   document.head.appendChild(style)
