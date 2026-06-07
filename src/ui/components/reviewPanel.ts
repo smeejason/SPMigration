@@ -24,6 +24,7 @@ let _statusFilter = 'all'
 let _hideRecycleBin = false
 let _errorMsgFilter = new Set<string>()
 let _allItems: MigrationResultItem[] = []
+let _pathsWithConcerningFailures = new Set<string>()
 let _selectedNode: ReviewNode | null = null
 let _expandedPaths = new Set<string>()
 let _spFeedEnabled = false
@@ -866,6 +867,7 @@ async function openResultsView(container: HTMLElement, mapping: MigrationMapping
   _hideRecycleBin = false
   _errorMsgFilter = new Set()
   _allItems = filteredItems
+  _pathsWithConcerningFailures = buildConcerningFailurePaths(filteredItems)
   _selectedNode = null
   _expandedPaths = new Set()
   _spFeedEnabled = getState().currentProject?.projectData.sharePointFeedEnabled ?? false
@@ -1351,6 +1353,22 @@ function applyValidationFilter(wrap: HTMLElement, status: string, search: string
 
 // ─── Tree rendering ───────────────────────────────────────────────────────────
 
+const IGNORED_FAIL_MSG = 'scan file failure:the parent folder was not migrated'
+
+function buildConcerningFailurePaths(items: MigrationResultItem[]): Set<string> {
+  const paths = new Set<string>()
+  for (const item of items) {
+    if (item.status !== 'Failed') continue
+    if (item.rawStatus.trim().toLowerCase() === IGNORED_FAIL_MSG) continue
+    // Stamp every ancestor path so folder rows also get the icon
+    const parts = item.sourcePath.split('/')
+    for (let i = 1; i <= parts.length; i++) {
+      paths.add(parts.slice(0, i).join('/'))
+    }
+  }
+  return paths
+}
+
 function renderTreeNodes(nodes: ReviewNode[], container: HTMLElement): void {
   container.innerHTML = ''
   for (const node of nodes) container.appendChild(createReviewNodeEl(node))
@@ -1409,7 +1427,16 @@ function createReviewNodeEl(node: ReviewNode): HTMLLIElement {
   colTotal.className = 'rstat rstat-total'
   colTotal.textContent = node.totalCount.toLocaleString()
 
-  row.append(toggle, icon, name, colMigrated, colFailed, colSkipped, colTotal)
+  const warnIcon = _pathsWithConcerningFailures.has(node.path)
+    ? (() => {
+        const el = document.createElement('span')
+        el.className = 'review-warn-icon'
+        el.title = 'Contains failures that need attention'
+        return el
+      })()
+    : null
+
+  row.append(toggle, icon, name, ...(warnIcon ? [warnIcon] : []), colMigrated, colFailed, colSkipped, colTotal)
   li.appendChild(row)
 
   if (hasChildren) {
@@ -2160,6 +2187,11 @@ function injectReviewStyles(): void {
     .review-icon { width: 22px; text-align: center; flex-shrink: 0; margin-right: 4px; }
     .review-name { flex: 1; min-width: 0; font-size: 0.85rem; font-family: 'Consolas', monospace;
       white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .review-warn-icon { flex-shrink: 0; margin: 0 4px; font-size: 0.8rem; line-height: 1;
+      color: #fff; background: var(--color-danger, #a4262c); border-radius: 50%;
+      width: 16px; height: 16px; display: inline-flex; align-items: center; justify-content: center;
+      cursor: default; }
+    .review-warn-icon::after { content: '!'; font-weight: 700; font-size: 0.7rem; }
     .rstat { width: 80px; text-align: right; padding-right: 12px; font-size: 0.78rem; flex-shrink: 0; white-space: nowrap; }
     .rstat-status { width: 108px; text-align: right; padding-right: 12px; font-size: 0.78rem; flex-shrink: 0; white-space: nowrap; }
     .rstat-status--migrated { color: #107c10; font-weight: 600; }
