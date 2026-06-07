@@ -492,6 +492,9 @@ function renderDestItemHtml(g: DestGroup): string {
   const selUploadId = _selectedUploadId.get(g.key) ?? defaultUploadId
   if (selUploadId && !_selectedUploadId.has(g.key)) _selectedUploadId.set(g.key, selUploadId)
 
+  const hasConcerning = groupHasConcerningFailures(g)
+  const warnBadge = hasConcerning ? `<span class="review-warn-icon" title="Contains failures that need attention"></span>` : ''
+
   if (g.mappings.length === 1) {
     const m = g.mappings[0]
     const spStat = spStatForMapping(m, selUploadId)
@@ -516,7 +519,7 @@ function renderDestItemHtml(g: DestGroup): string {
         <div class="review-dest-row" tabindex="0" role="button">
           <span class="review-dest-avatar">${initials}</span>
           <div class="review-dest-name-wrap">
-            <span class="review-dest-name">${escHtml(g.displayName)}</span>
+            <span class="review-dest-name-row"><span class="review-dest-name">${escHtml(g.displayName)}</span>${warnBadge}</span>
             ${csvLabel}
           </div>
           ${migratedCell}${gbCell}${scanFinCell}${skipCell}${failCell}
@@ -542,7 +545,7 @@ function renderDestItemHtml(g: DestGroup): string {
         <span class="review-dest-toggle">▶</span>
         <span class="review-dest-avatar">${initials}</span>
         <div class="review-dest-name-wrap">
-          <span class="review-dest-name">${escHtml(g.displayName)}</span>
+          <span class="review-dest-name-row"><span class="review-dest-name">${escHtml(g.displayName)}</span>${warnBadge}</span>
           ${csvLabel}
         </div>
         ${hasAny
@@ -1397,7 +1400,13 @@ function applyValidationFilter(wrap: HTMLElement, status: string, search: string
 
 // ─── Tree rendering ───────────────────────────────────────────────────────────
 
-const IGNORED_FAIL_MSG = 'scan file failure:the parent folder was not migrated'
+const IGNORED_FAIL_SUBSTR = 'the parent folder was not migrated'
+
+function isConcerningFailure(rawStatus: string): boolean {
+  const s = rawStatus.trim().toLowerCase()
+  const isFailure = s === 'failed' || s.startsWith('scan file failure') || s.includes('failure')
+  return isFailure && !s.includes(IGNORED_FAIL_SUBSTR)
+}
 
 function groupHasConcerningFailures(group: DestGroup): boolean {
   for (const upload of _resultUploads) {
@@ -1406,13 +1415,14 @@ function groupHasConcerningFailures(group: DestGroup): boolean {
     for (const m of group.mappings) {
       const entry = summary[m.sourceNode.path]
       if (!entry || entry.failedCount === 0) continue
-      const hasConcerning = entry.rawStatusCounts.some(({ status, count }) => {
-        if (count === 0) return false
+      // Find rawStatus entries that look like failures
+      const failureEntries = entry.rawStatusCounts.filter(({ status }) => {
         const s = status.trim().toLowerCase()
-        return (s === 'failed' || s.startsWith('scan file failure') || s.includes('failure'))
-          && s !== IGNORED_FAIL_MSG
+        return s === 'failed' || s.startsWith('scan file failure') || s.includes('failure')
       })
-      if (hasConcerning) return true
+      // No rawStatus data but failedCount > 0 → treat as concerning (safe fallback)
+      if (failureEntries.length === 0) return true
+      if (failureEntries.some(({ status, count }) => count > 0 && isConcerningFailure(status))) return true
     }
   }
   return false
@@ -1422,7 +1432,7 @@ function buildConcerningFailurePaths(items: MigrationResultItem[]): Set<string> 
   const paths = new Set<string>()
   for (const item of items) {
     if (item.status !== 'Failed') continue
-    if (item.rawStatus.trim().toLowerCase() === IGNORED_FAIL_MSG) continue
+    if (!isConcerningFailure(item.rawStatus)) continue
     // Stamp every ancestor path so folder rows also get the icon
     const parts = item.sourcePath.split('/')
     for (let i = 1; i <= parts.length; i++) {
@@ -1977,6 +1987,7 @@ function injectReviewStyles(): void {
       display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
     .review-dest-name-wrap { flex: 1; min-width: 0; display: flex; flex-direction: column;
       justify-content: center; gap: 1px; overflow: hidden; }
+    .review-dest-name-row { display: flex; align-items: center; gap: 5px; min-width: 0; }
     .review-dest-name { font-size: 0.875rem; font-weight: 500;
       white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .rev-csv-label { font-size: 0.68rem; color: var(--color-text-muted); white-space: nowrap;
