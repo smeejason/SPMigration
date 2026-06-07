@@ -1402,10 +1402,12 @@ function applyValidationFilter(wrap: HTMLElement, status: string, search: string
 
 const IGNORED_FAIL_SUBSTR = 'the parent folder was not migrated'
 
-function isConcerningFailure(rawStatus: string): boolean {
+function isConcerningFailure(rawStatus: string, message = ''): boolean {
   const s = rawStatus.trim().toLowerCase()
   const isFailure = s === 'failed' || s.startsWith('scan file failure') || s.includes('failure')
-  return isFailure && !s.includes(IGNORED_FAIL_SUBSTR)
+  if (!isFailure) return false
+  // Check both the status string and the message column for the ignored phrase
+  return !s.includes(IGNORED_FAIL_SUBSTR) && !message.trim().toLowerCase().includes(IGNORED_FAIL_SUBSTR)
 }
 
 function groupHasConcerningFailures(group: DestGroup): boolean {
@@ -1415,13 +1417,25 @@ function groupHasConcerningFailures(group: DestGroup): boolean {
     for (const m of group.mappings) {
       const entry = summary[m.sourceNode.path]
       if (!entry || entry.failedCount === 0) continue
-      // Find rawStatus entries that look like failures
+
+      if (entry.failMessages.length > 0) {
+        // Count failed items whose message is NOT the ignored phrase
+        const concerningCount = entry.failMessages
+          .filter(({ message }) => !message.trim().toLowerCase().includes(IGNORED_FAIL_SUBSTR))
+          .reduce((sum, { count }) => sum + count, 0)
+        if (concerningCount > 0) return true
+        // All recorded messages are the ignored type — check if they account for all failures
+        const recordedCount = entry.failMessages.reduce((sum, { count }) => sum + count, 0)
+        if (recordedCount >= entry.failedCount) continue  // fully accounted for — not concerning
+        // Some failed items had no message; fall through to rawStatusCounts
+      }
+
+      // Fallback: check rawStatusCounts when message data is absent
       const failureEntries = entry.rawStatusCounts.filter(({ status }) => {
         const s = status.trim().toLowerCase()
         return s === 'failed' || s.startsWith('scan file failure') || s.includes('failure')
       })
-      // No rawStatus data but failedCount > 0 → treat as concerning (safe fallback)
-      if (failureEntries.length === 0) return true
+      if (failureEntries.length === 0) return true  // safe fallback
       if (failureEntries.some(({ status, count }) => count > 0 && isConcerningFailure(status))) return true
     }
   }
@@ -1432,7 +1446,7 @@ function buildConcerningFailurePaths(items: MigrationResultItem[]): Set<string> 
   const paths = new Set<string>()
   for (const item of items) {
     if (item.status !== 'Failed') continue
-    if (!isConcerningFailure(item.rawStatus)) continue
+    if (!isConcerningFailure(item.rawStatus, item.message)) continue
     // Stamp every ancestor path so folder rows also get the icon
     const parts = item.sourcePath.split('/')
     for (let i = 1; i <= parts.length; i++) {
