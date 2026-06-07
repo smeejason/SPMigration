@@ -193,7 +193,7 @@ function statusBreakdownHtml(group: DestGroup, uploadId?: string): string {
         </tr>
       </table>
       ${failMsgRows.length > 0 ? `
-        <details class="rev-msg-details rev-msg-details--fail">
+        <details class="rev-msg-details rev-msg-details--fail" open>
           <summary class="rev-msg-summary"><span>Failed Messages</span><span class="rev-msg-count">${failTotal.toLocaleString()}</span></summary>
           <table class="rev-msg-table">
             ${failMsgRows.map(([msg, count]) => `<tr><td>${escHtml(msg)}</td><td>${count.toLocaleString()}</td></tr>`).join('')}
@@ -421,6 +421,21 @@ function renderLayout(container: HTMLElement, groups: DestGroup[], migrationAcco
         </div>
       </div>
 
+      <div class="rev-dest-filter-bar">
+        <label class="rev-dest-filter-check">
+          <input type="checkbox" id="rev-filter-actionable" />
+          <span>Actionable failures only</span>
+        </label>
+        <div class="rev-dest-filter-phases">
+          <span class="rev-fpill-label">Phase:</span>
+          <button class="rev-fpill rev-fpill--active" data-phase="all">All</button>
+          <button class="rev-fpill" data-phase="planning">Planning</button>
+          <button class="rev-fpill" data-phase="migrated">Migrated</button>
+          <button class="rev-fpill" data-phase="testing">Testing</button>
+          <button class="rev-fpill" data-phase="live">Live</button>
+        </div>
+      </div>
+
       <div class="review-mapping-layout">
         <div class="review-mapping-left">
           <div class="review-col-header">
@@ -497,7 +512,7 @@ function renderDestItemHtml(g: DestGroup): string {
       </select>`
 
     return `
-      <li class="review-dest-item review-dest-item--flat" data-dest-key="${escHtml(g.key)}">
+      <li class="review-dest-item review-dest-item--flat" data-dest-key="${escHtml(g.key)}" data-phase="${escHtml(aggregatePhase(g.mappings))}">
         <div class="review-dest-row" tabindex="0" role="button">
           <span class="review-dest-avatar">${initials}</span>
           <div class="review-dest-name-wrap">
@@ -522,7 +537,7 @@ function renderDestItemHtml(g: DestGroup): string {
   const sourceRows    = g.mappings.map(m => renderSourceRowHtml(m, selUploadId)).join('')
 
   return `
-    <li class="review-dest-item" data-dest-key="${escHtml(g.key)}">
+    <li class="review-dest-item" data-dest-key="${escHtml(g.key)}" data-phase="${escHtml(aggregatePhase(g.mappings))}">
       <div class="review-dest-row" tabindex="0" role="button">
         <span class="review-dest-toggle">▶</span>
         <span class="review-dest-avatar">${initials}</span>
@@ -634,9 +649,38 @@ function wireDestList(container: HTMLElement, groups: DestGroup[], migrationAcco
       const destKey = destItem.dataset.destKey!
       const latestMappings = getState().mappings.filter(m =>
         groups.find(g => g.key === destKey)?.mappings.some(gm => gm.id === m.id))
+      const newPhase = aggregatePhase(latestMappings)
       const badge = destItem.querySelector<HTMLElement>(`[data-dest-phase="${CSS.escape(destKey)}"]`)
-      if (badge) badge.innerHTML = phaseBadgeHtml(aggregatePhase(latestMappings))
+      if (badge) badge.innerHTML = phaseBadgeHtml(newPhase)
+      // Keep data-phase in sync so phase filter works after an inline phase change
+      destItem.dataset.phase = newPhase
     }
+  })
+
+  // ── Destination list filters ────────────────────────────────────────────────
+  const applyDestFilters = (): void => {
+    const actionableOnly = (container.querySelector<HTMLInputElement>('#rev-filter-actionable'))?.checked ?? false
+    const activePhase = container.dataset.destPhaseFilter ?? 'all'
+    list.querySelectorAll<HTMLElement>('li.review-dest-item').forEach(li => {
+      const group = groups.find(g => g.key === li.dataset.destKey)
+      if (!group) return
+      const phaseOk = activePhase === 'all' || li.dataset.phase === activePhase
+      const actionableOk = !actionableOnly || groupHasConcerningFailures(group)
+      li.style.display = phaseOk && actionableOk ? '' : 'none'
+    })
+  }
+
+  container.dataset.destPhaseFilter = 'all'
+
+  container.querySelector('#rev-filter-actionable')?.addEventListener('change', applyDestFilters)
+
+  container.querySelectorAll<HTMLElement>('.rev-fpill').forEach(btn => {
+    btn.addEventListener('click', () => {
+      container.querySelectorAll('.rev-fpill').forEach(b => b.classList.remove('rev-fpill--active'))
+      btn.classList.add('rev-fpill--active')
+      container.dataset.destPhaseFilter = btn.dataset.phase!
+      applyDestFilters()
+    })
   })
 }
 
@@ -1355,6 +1399,25 @@ function applyValidationFilter(wrap: HTMLElement, status: string, search: string
 
 const IGNORED_FAIL_MSG = 'scan file failure:the parent folder was not migrated'
 
+function groupHasConcerningFailures(group: DestGroup): boolean {
+  for (const upload of _resultUploads) {
+    const summary = _sourceSummaries.get(upload.id)
+    if (!summary) continue
+    for (const m of group.mappings) {
+      const entry = summary[m.sourceNode.path]
+      if (!entry || entry.failedCount === 0) continue
+      const hasConcerning = entry.rawStatusCounts.some(({ status, count }) => {
+        if (count === 0) return false
+        const s = status.trim().toLowerCase()
+        return (s === 'failed' || s.startsWith('scan file failure') || s.includes('failure'))
+          && s !== IGNORED_FAIL_MSG
+      })
+      if (hasConcerning) return true
+    }
+  }
+  return false
+}
+
 function buildConcerningFailurePaths(items: MigrationResultItem[]): Set<string> {
   const paths = new Set<string>()
   for (const item of items) {
@@ -1851,6 +1914,20 @@ function injectReviewStyles(): void {
     .rstat-amber { color: #7d4200; }
 
     /* ── Two-panel layout ── */
+    .rev-dest-filter-bar { display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+      padding: 8px 16px; border-bottom: 1px solid var(--color-border);
+      background: var(--color-surface-alt); font-size: 0.82rem; }
+    .rev-dest-filter-check { display: flex; align-items: center; gap: 6px; cursor: pointer;
+      font-weight: 500; color: var(--color-text); }
+    .rev-dest-filter-check input { cursor: pointer; accent-color: var(--color-danger, #a4262c); }
+    .rev-dest-filter-phases { display: flex; align-items: center; gap: 4px; }
+    .rev-fpill-label { color: var(--color-text-muted); margin-right: 2px; }
+    .rev-fpill { padding: 2px 10px; border: 1px solid var(--color-border); border-radius: 12px;
+      background: transparent; cursor: pointer; font-size: 0.78rem; color: var(--color-text-muted);
+      transition: background 0.15s, color 0.15s; }
+    .rev-fpill:hover { background: var(--color-surface); color: var(--color-text); }
+    .rev-fpill--active { background: var(--color-primary, #0078d4); color: #fff;
+      border-color: var(--color-primary, #0078d4); font-weight: 600; }
     .review-mapping-layout { flex: 1; display: grid; grid-template-columns: 3fr 2fr;
       overflow: hidden; min-height: 0; }
     .review-mapping-left { display: flex; flex-direction: column; overflow: hidden;
