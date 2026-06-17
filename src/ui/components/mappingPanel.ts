@@ -1,7 +1,7 @@
 import { searchSites, getSiteDrives, saveIAFile, searchUsers, getUserDrive, checkUserDriveAccess, grantUserDriveAccess, revokeUserDriveAccess, getUserById, provisionNewSite, getSiteDesigns, checkSiteAliasAvailable } from '../../graph/graphClient'
-import { getSpConfig, loadProjectIA, persistProjectMappings } from '../../graph/projectService'
+import { getSpConfig, loadProjectIA, persistProjectMappings, updateProject } from '../../graph/projectService'
 import { setState, getState } from '../../state/store'
-import type { TreeNode, MigrationMapping, SharePointSite, SharePointDrive, NewSiteConfig, UserRef, SiteType, AppUser, IANode, MigrationWave } from '../../types'
+import type { TreeNode, MigrationMapping, SharePointSite, SharePointDrive, NewSiteConfig, PlannedSiteConfig, UserRef, SiteType, AppUser, IANode, MigrationWave } from '../../types'
 
 // Live references to mapping tag elements so we can update them without re-rendering
 const tagRegistry = new Map<string, HTMLSpanElement>()
@@ -46,7 +46,7 @@ export function renderMappingPanel(container: HTMLElement): void {
   const statNodes = autoMapLevel >= 0 ? collectAtDepth(tree, autoMapLevel) : topNodes
   const stats = buildMappingStats(statNodes)
 
-  const statMappedPaths = new Set(state.mappings.filter(m => m.targetSite || m.plannedSite).map(m => m.sourceNode.path))
+  const statMappedPaths = new Set(state.mappings.filter(m => m.targetSite || m.plannedSite || m.plannedSiteId).map(m => m.sourceNode.path))
   const statCantFindPaths = new Set(state.mappings.filter(m => m.matchStatus === 'cant-find').map(m => m.sourceNode.path))
   const usersReady     = statNodes.filter(n => statMappedPaths.has(n.path)).length
   const usersCantFind  = statNodes.filter(n => statCantFindPaths.has(n.path)).length
@@ -175,7 +175,7 @@ export function renderMappingPanel(container: HTMLElement): void {
   // Auto-expand tree to reveal mapped nodes (without expanding their children)
   const mappedPaths = new Set(
     getState().mappings
-      .filter((m) => m.targetSite || m.plannedSite)
+      .filter((m) => m.targetSite || m.plannedSite || m.plannedSiteId)
       .map((m) => m.sourceNode.path)
   )
   if (mappedPaths.size > 0) {
@@ -360,9 +360,12 @@ function createMappingNodeEl(node: TreeNode, targetEl: HTMLElement, isRoot = fal
     }
   }
 
-  const isMappedInitially = !!(existingMapping?.targetSite || existingMapping?.plannedSite)
+  const isMappedInitially = !!(existingMapping?.targetSite || existingMapping?.plannedSite || existingMapping?.plannedSiteId)
   const isCantFindInitially = existingMapping?.matchStatus === 'cant-find'
-  const initialSiteName = existingMapping?.targetSite?.displayName ?? existingMapping?.plannedSite?.displayName
+  const existingPlannedSiteConfig = existingMapping?.plannedSiteId
+    ? (getState().currentProject?.projectData.plannedSites ?? []).find(ps => ps.id === existingMapping.plannedSiteId)
+    : undefined
+  const initialSiteName = existingMapping?.targetSite?.displayName ?? existingPlannedSiteConfig?.displayName ?? existingMapping?.plannedSite?.displayName
   const isPlannedInitially = !existingMapping?.targetSite && !!existingMapping?.plannedSite
   const initialMappingType: 'auto' | 'manual' | 'cant-find' | undefined =
     isCantFindInitially ? 'cant-find' :
@@ -615,7 +618,9 @@ async function openTargetPanel(
   }
 
   const existing = getState().mappings.find((m) => m.sourceNode.path === node.path)
-  const initialTab = existing?.plannedSite && !existing?.targetSite ? 'planned' : 'existing'
+  const initialTab = existing?.plannedSiteId
+    ? 'planned-shared'
+    : (existing?.plannedSite && !existing?.targetSite ? 'planned' : 'existing')
 
   const fmtDate = (d?: Date | string) =>
     d ? new Date(d).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }) : '—'
@@ -670,6 +675,7 @@ async function openTargetPanel(
         <div class="sp-tabs-bar">
           <button type="button" class="sp-tab${initialTab === 'existing' ? ' sp-tab--active' : ''}" data-tab="existing">Existing SharePoint Location</button>
           <button type="button" class="sp-tab${initialTab === 'planned' ? ' sp-tab--active' : ''}" data-tab="planned">New Site</button>
+          <button type="button" class="sp-tab${initialTab === 'planned-shared' ? ' sp-tab--active' : ''}" data-tab="planned-shared">Planned Site</button>
         </div>
 
         <!-- Tab: Existing -->
@@ -796,6 +802,65 @@ async function openTargetPanel(
             ${existing?.plannedSite ? `<button type="button" id="btn-remove-planned" class="btn btn-ghost">Remove</button>` : ''}
           </div>
         </div>
+
+        <!-- Tab: Planned Site -->
+        ${(() => {
+          const plannedSites: PlannedSiteConfig[] = getState().currentProject?.projectData.plannedSites ?? []
+          const currentPsId = existing?.plannedSiteId ?? ''
+          return `
+        <div id="tab-planned-shared" class="sp-tab-panel target-section-body--sp"${initialTab !== 'planned-shared' ? ' style="display:none"' : ''}>
+          <div class="form-group">
+            <label>Planned Site</label>
+            <select id="ps-site-select" class="form-input">
+              <option value="">— Create new planned site —</option>
+              ${plannedSites.map(ps => `<option value="${escHtml(ps.id)}"${ps.id === currentPsId ? ' selected' : ''}>${escHtml(ps.displayName)} (.../sites/${escHtml(ps.alias)})</option>`).join('')}
+            </select>
+          </div>
+
+          <div id="ps-new-form"${currentPsId ? ' style="display:none"' : ''}>
+            <div class="form-group">
+              <label>Site Display Name <span class="required">*</span></label>
+              <input id="ps-name" type="text" class="form-input" placeholder="e.g. Engineering" />
+            </div>
+            <div class="form-group">
+              <label>URL Alias <span class="required">*</span></label>
+              <div class="alias-row">
+                <span class="alias-prefix">.../sites/</span>
+                <input id="ps-alias" type="text" class="form-input" placeholder="engineering" />
+                <span id="ps-alias-avail" class="ns-alias-avail"></span>
+              </div>
+              <small class="form-hint">Letters, numbers, and hyphens only. Leave field to check availability.</small>
+            </div>
+            <div class="form-group">
+              <label>Description <span class="hint">(optional)</span></label>
+              <textarea id="ps-desc" class="form-input" rows="2" placeholder="e.g. Site for the Engineering team"></textarea>
+            </div>
+            <div class="form-group">
+              <label>Template</label>
+              <div class="radio-group">
+                <label class="radio-label"><input type="radio" name="ps-template" value="team" checked /> Team Site</label>
+                <label class="radio-label"><input type="radio" name="ps-template" value="communication" /> Communication Site</label>
+              </div>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label>Document Library <span class="hint">(optional)</span></label>
+            <input id="ps-library" type="text" class="form-input" placeholder="e.g. Documents"
+              value="${escHtml(existing?.plannedLibraryName ?? '')}" />
+          </div>
+          <div class="form-group">
+            <label>Subfolder Path <span class="hint">(optional)</span></label>
+            <input id="ps-folder-path" type="text" class="form-input" placeholder="e.g. /Migrations/Phase1"
+              value="${escHtml(existing?.plannedSiteId ? (existing.targetFolderPath ?? '') : '')}" />
+          </div>
+          <div class="target-action-row">
+            <button type="button" id="btn-save-ps-mapping" class="btn btn-primary">Save Mapping</button>
+            ${existing?.plannedSiteId ? `<button type="button" id="btn-remove-ps-mapping" class="btn btn-ghost">Remove</button>` : ''}
+          </div>
+        </div>
+          `
+        })()}
 
       </div>
     </div>
@@ -1366,6 +1431,172 @@ async function openTargetPanel(
 
   targetEl.querySelector('#btn-remove-planned')?.addEventListener('click', async () => {
     const removeBtn = targetEl.querySelector('#btn-remove-planned') as HTMLButtonElement
+    removeBtn.disabled = true
+    removeBtn.textContent = 'Removing…'
+    const mappings = getState().mappings.filter((m) => m.sourceNode.path !== node.path)
+    setState({ mappings })
+    try {
+      await persistProjectMappings(mappings)
+    } catch {
+      removeBtn.disabled = false
+      removeBtn.textContent = 'Remove'
+      return
+    }
+    onMappingChange(null)
+    removeBtn.remove()
+  })
+
+  // ── Planned Site tab logic ─────────────────────────────────────────────────
+  const psSiteSelect   = targetEl.querySelector<HTMLSelectElement>('#ps-site-select')
+  const psNewForm      = targetEl.querySelector<HTMLElement>('#ps-new-form')
+  const psNameInput    = targetEl.querySelector<HTMLInputElement>('#ps-name')
+  const psAliasInput   = targetEl.querySelector<HTMLInputElement>('#ps-alias')
+  const psAliasAvailEl = targetEl.querySelector<HTMLElement>('#ps-alias-avail')
+
+  let psAliasAvailState: boolean | null = null
+
+  function setPsAliasAvail(state: 'checking' | 'available' | 'taken' | 'error' | null): void {
+    if (!psAliasAvailEl) return
+    psAliasAvailEl.className = 'ns-alias-avail' + (state ? ` ns-alias-avail--${state}` : '')
+    psAliasAvailEl.textContent =
+      state === 'checking'  ? 'Checking…'  :
+      state === 'available' ? '✓ Available' :
+      state === 'taken'     ? '✗ Taken'     :
+      state === 'error'     ? '? Check failed' : ''
+  }
+
+  async function runPsAliasCheck(): Promise<void> {
+    const alias = psAliasInput?.value.trim() ?? ''
+    if (!alias || !/^[a-z0-9][a-z0-9-]*[a-z0-9]$|^[a-z0-9]$/.test(alias)) return
+    setPsAliasAvail('checking')
+    try {
+      const available = await checkSiteAliasAvailable(alias)
+      psAliasAvailState = available
+      setPsAliasAvail(available ? 'available' : 'taken')
+    } catch {
+      psAliasAvailState = null
+      setPsAliasAvail('error')
+    }
+  }
+
+  // Show/hide the "create new" sub-form based on dropdown selection
+  psSiteSelect?.addEventListener('change', () => {
+    if (!psNewForm) return
+    psNewForm.style.display = psSiteSelect.value ? 'none' : ''
+  })
+
+  // Auto-derive alias from name
+  psNameInput?.addEventListener('input', () => {
+    if (!psAliasInput || psAliasInput.dataset.userEdited) return
+    psAliasInput.value = (psNameInput.value ?? '').toLowerCase()
+      .replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-').slice(0, 60)
+    psAliasAvailState = null
+    setPsAliasAvail(null)
+  })
+  psAliasInput?.addEventListener('input', () => {
+    psAliasInput.dataset.userEdited = '1'
+    psAliasAvailState = null
+    setPsAliasAvail(null)
+  })
+  psAliasInput?.addEventListener('blur', () => { void runPsAliasCheck() })
+  psAliasInput?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); void runPsAliasCheck() }
+  })
+
+  // ── Save Planned Site Mapping ──────────────────────────────────────────────
+  targetEl.querySelector('#btn-save-ps-mapping')?.addEventListener('click', async () => {
+    clearFieldErrors()
+    const saveBtn = targetEl.querySelector('#btn-save-ps-mapping') as HTMLButtonElement
+    let plannedSiteId = psSiteSelect?.value ?? ''
+
+    if (!plannedSiteId) {
+      // Validate and create a new PlannedSiteConfig
+      const name  = psNameInput?.value.trim() ?? ''
+      const alias = psAliasInput?.value.trim() ?? ''
+      const desc  = (targetEl.querySelector('#ps-desc') as HTMLTextAreaElement | null)?.value.trim() ?? ''
+      const template = (targetEl.querySelector<HTMLInputElement>('input[name="ps-template"]:checked'))?.value as 'team' | 'communication' ?? 'team'
+
+      let valid = true
+      if (!name) { setFieldError(psNameInput!, 'Site display name is required.'); valid = false }
+      if (!alias) {
+        setFieldError(psAliasInput!, 'URL alias is required.'); valid = false
+      } else if (!/^[a-z0-9][a-z0-9-]*[a-z0-9]$|^[a-z0-9]$/.test(alias)) {
+        setFieldError(psAliasInput!, 'Only lowercase letters, numbers, and hyphens. Cannot start or end with a hyphen.'); valid = false
+      } else if (psAliasAvailState === false) {
+        setFieldError(psAliasInput!, 'This URL is already in use. Please choose a different alias.'); valid = false
+      } else if (psAliasAvailState === null) {
+        setFieldError(psAliasInput!, 'Please check URL availability first (press Enter or leave the field).'); valid = false
+      }
+      if (!valid) {
+        targetEl.querySelector('.ns-field-error')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+        return
+      }
+
+      const newConfig: PlannedSiteConfig = {
+        id: `ps-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        displayName: name,
+        alias,
+        description: desc || undefined,
+        template,
+        owners: [],
+        members: [],
+      }
+
+      saveBtn.disabled = true
+      saveBtn.textContent = 'Saving site…'
+      try {
+        const project = getState().currentProject!
+        const existingPs = project.projectData.plannedSites ?? []
+        const updatedPs  = [...existingPs, newConfig]
+        const updatedData = { ...project.projectData, plannedSites: updatedPs }
+        await updateProject(project.id, { projectData: updatedData })
+        setState({ currentProject: { ...project, projectData: updatedData } })
+        plannedSiteId = newConfig.id
+      } catch {
+        saveBtn.disabled = false
+        saveBtn.textContent = '⚠ Save failed — retry'
+        return
+      }
+    }
+
+    const library    = (targetEl.querySelector('#ps-library')    as HTMLInputElement | null)?.value.trim() ?? ''
+    const folderPath = (targetEl.querySelector('#ps-folder-path') as HTMLInputElement | null)?.value.trim() ?? ''
+
+    const mapping: MigrationMapping = {
+      id: node.path,
+      sourceNode: node,
+      targetSite: null,
+      targetDrive: null,
+      targetFolderPath: folderPath,
+      status: 'pending',
+      plannedSiteId,
+      plannedLibraryName: library || undefined,
+      plannedSite: undefined,
+    }
+
+    const mappings = [
+      ...getState().mappings.filter((m) => m.sourceNode.path !== node.path),
+      mapping,
+    ]
+    setState({ mappings })
+    const psConfig = (getState().currentProject?.projectData.plannedSites ?? []).find(ps => ps.id === plannedSiteId)
+    onMappingChange(psConfig?.displayName ?? plannedSiteId, true)
+
+    saveBtn.disabled = true
+    saveBtn.textContent = 'Saving…'
+    try {
+      await persistProjectMappings(mappings)
+      saveBtn.textContent = '✓ Saved'
+    } catch {
+      saveBtn.textContent = '⚠ Save failed — retry'
+    } finally {
+      saveBtn.disabled = false
+      setTimeout(() => { if (saveBtn.textContent !== '⚠ Save failed — retry') saveBtn.textContent = 'Save Mapping' }, 2000)
+    }
+  })
+
+  targetEl.querySelector('#btn-remove-ps-mapping')?.addEventListener('click', async () => {
+    const removeBtn = targetEl.querySelector('#btn-remove-ps-mapping') as HTMLButtonElement
     removeBtn.disabled = true
     removeBtn.textContent = 'Removing…'
     const mappings = getState().mappings.filter((m) => m.sourceNode.path !== node.path)
@@ -2443,6 +2674,7 @@ function injectMappingStyles(): void {
       color: var(--color-text-muted); white-space: nowrap; }
     .alias-row .form-input { border-radius: 0 4px 4px 0; }
     .ns-radio-group { display: flex; flex-direction: column; gap: 6px; margin-bottom: 4px; }
+    .radio-group { display: flex; gap: 16px; flex-wrap: wrap; }
     .radio-label, .checkbox-label { display: flex; align-items: center; gap: 6px; font-size: 0.88rem; cursor: pointer; }
     .required { color: var(--color-danger); }
     .ns-type-row { display: flex; gap: 8px; align-items: center; }
@@ -2510,6 +2742,7 @@ function injectMappingStyles(): void {
     .ns-alias-avail--available { color: #107c10; font-weight: 500; }
     .ns-alias-avail--taken     { color: #a4262c; font-weight: 500; }
     .ns-alias-avail--error     { color: var(--color-text-muted); }
+    #ps-new-form { border-top: 1px solid var(--color-border); margin-top: 8px; padding-top: 10px; }
 
     /* Ancestor-blocked panel */
     .ancestor-blocked-panel {

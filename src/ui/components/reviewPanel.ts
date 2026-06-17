@@ -67,16 +67,18 @@ interface DestGroup {
 
 function buildDestGroups(mappings: MigrationMapping[]): DestGroup[] {
   const map = new Map<string, DestGroup>()
+  const plannedSiteConfigs = getState().currentProject?.projectData.plannedSites ?? []
 
   for (const m of mappings) {
-    if (!m.targetSite && !m.plannedSite) continue
-    const key = m.targetSite?.id ?? m.plannedSite?.alias ?? m.id
+    if (!m.targetSite && !m.plannedSite && !m.plannedSiteId) continue
+    const psConfig = m.plannedSiteId ? plannedSiteConfigs.find(ps => ps.id === m.plannedSiteId) : undefined
+    const key = m.targetSite?.id ?? m.plannedSiteId ?? m.plannedSite?.alias ?? m.id
     const od = isOneDriveMapping(m)
 
     if (!map.has(key)) {
       map.set(key, {
         key,
-        displayName: m.resolvedDisplayName ?? m.targetSite?.displayName ?? m.plannedSite?.displayName ?? key,
+        displayName: m.resolvedDisplayName ?? m.targetSite?.displayName ?? psConfig?.displayName ?? m.plannedSite?.displayName ?? key,
         isOneDrive: od,
         webUrl: m.targetSite?.webUrl ?? '',
         mappings: [],
@@ -328,7 +330,7 @@ export async function renderReviewPanel(container: HTMLElement): Promise<void> {
     return
   }
 
-  const allMappings = state.mappings.filter(m => m.targetSite || m.plannedSite)
+  const allMappings = state.mappings.filter(m => m.targetSite || m.plannedSite || m.plannedSiteId)
   const allGroups = buildDestGroups(allMappings)
 
   // Only show destinations where at least one source folder has matching SPMT results
@@ -727,7 +729,7 @@ function renderRightPanel(
     })
   } else {
     const url = group.webUrl
-    const planned = group.mappings[0]?.plannedSite && !group.mappings[0]?.targetSite
+    const planned = (group.mappings[0]?.plannedSite || group.mappings[0]?.plannedSiteId) && !group.mappings[0]?.targetSite
     rightPanel.innerHTML = `
       <div style="padding:16px;overflow-y:auto;height:100%;box-sizing:border-box;">
         <div class="person-card">

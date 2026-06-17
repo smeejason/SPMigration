@@ -52,6 +52,7 @@ export interface ProjectData {
   mappings?: MigrationMapping[]
   mappingCount?: number         // denormalized count kept in sync with the mappings file
   siteTypes?: SiteType[]        // reusable site type presets defined on the Site Types tab
+  plannedSites?: PlannedSiteConfig[]   // project-level planned site definitions (shared across mappings)
   settings?: ProjectSettings
   waves?: MigrationWave[]       // migration wave definitions (stable id + editable name)
   lastSaved?: string            // ISO date string
@@ -182,6 +183,8 @@ export interface MigrationMapping {
   resolvedDisplayName?: string
   phase?: MigrationPhase
   waveId?: string               // references MigrationWave.id in ProjectData.waves
+  plannedSiteId?: string        // references ProjectData.plannedSites[].id (shared planned site)
+  plannedLibraryName?: string   // per-mapping document library within the planned site
 }
 
 // ─── Site Types ──────────────────────────────────────────────────────────────
@@ -240,6 +243,27 @@ export interface NewSiteConfig {
   createTeam?: boolean
   owners: UserRef[]
   members: UserRef[]
+}
+
+/**
+ * A shared planned site defined at project level.
+ * Multiple mappings can reference one PlannedSiteConfig (each with their own library/folder).
+ * Stored in ProjectData.plannedSites[].
+ */
+export interface PlannedSiteConfig {
+  id: string                          // stable UUID
+  displayName: string
+  alias: string
+  description?: string
+  template: SiteTemplate
+  siteDesignId?: string
+  siteDesignName?: string
+  createTeam?: boolean
+  owners: UserRef[]
+  members: UserRef[]
+  siteTypeId?: string
+  siteTypeName?: string
+  createdSite?: SharePointSite        // populated once the site is provisioned
 }
 
 // ─── Site Creation (legacy — kept for Review tab provisioning) ────────────────

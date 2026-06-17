@@ -1,7 +1,7 @@
 import { getState, setState } from '../../state/store'
 import { checkUserDriveAccess, grantUserDriveAccess, getOneDriveUrl, saveMappingsFile, provisionNewSite, getSiteDrives } from '../../graph/graphClient'
-import { getSpConfig } from '../../graph/projectService'
-import type { MigrationMapping, OneDriveAccessStatus, MigrationWave } from '../../types'
+import { getSpConfig, updateProject } from '../../graph/projectService'
+import type { MigrationMapping, OneDriveAccessStatus, MigrationWave, PlannedSiteConfig } from '../../types'
 
 export function renderSummaryPanel(container: HTMLElement): void {
   const state = getState()
@@ -797,7 +797,7 @@ function renderSharePointSummary(container: HTMLElement, mappings: MigrationMapp
     if (selectedPaths.length === 0) return
 
     const selectedMappings = getState().mappings.filter(m =>
-      selectedPaths.includes(m.sourceNode.path) && m.plannedSite
+      selectedPaths.includes(m.sourceNode.path) && (m.plannedSite || m.plannedSiteId)
     )
     if (selectedMappings.length === 0) return
 
@@ -821,7 +821,21 @@ function renderSharePointSummary(container: HTMLElement, mappings: MigrationMapp
       logSteps.scrollTop = logSteps.scrollHeight
     }
 
-    for (const mapping of selectedMappings) {
+    // Split: per-mapping planned sites vs. shared planned site configs
+    const regularMappings  = selectedMappings.filter(m => m.plannedSite && !m.plannedSiteId)
+    const psMappings       = selectedMappings.filter(m => m.plannedSiteId)
+    const psByIdMap        = new Map<string, MigrationMapping[]>()
+    for (const m of psMappings) {
+      const group = psByIdMap.get(m.plannedSiteId!) ?? []
+      group.push(m)
+      psByIdMap.set(m.plannedSiteId!, group)
+    }
+
+    const project = getState().currentProject!
+    const plannedSiteConfigs: PlannedSiteConfig[] = project.projectData.plannedSites ?? []
+
+    // Process per-mapping planned sites (existing flow)
+    for (const mapping of regularMappings) {
       const ps = mapping.plannedSite!
       logCurrent.textContent = `Creating "${ps.displayName}" (${completed + 1}/${total})…`
       addStep(`Starting: ${ps.displayName}`)
@@ -861,6 +875,70 @@ function renderSharePointSummary(container: HTMLElement, mappings: MigrationMapp
       }
     }
 
+    // Process shared planned sites — create site once, update all referencing mappings
+    for (const [psId, psGroupMappings] of psByIdMap) {
+      const psConfig = plannedSiteConfigs.find(ps => ps.id === psId)
+      if (!psConfig) { completed += psGroupMappings.length; continue }
+
+      logCurrent.textContent = `Creating "${psConfig.displayName}" (${completed + 1}/${total})…`
+      addStep(`Starting planned site: ${psConfig.displayName}`)
+
+      try {
+        const createdSite = await provisionNewSite(
+          { displayName: psConfig.displayName, alias: psConfig.alias, description: psConfig.description,
+            template: psConfig.template, owners: psConfig.owners, members: psConfig.members,
+            siteDesignId: psConfig.siteDesignId, siteDesignName: psConfig.siteDesignName,
+            createTeam: psConfig.createTeam },
+          (step) => addStep(`  ${step}`)
+        )
+
+        // Load all drives for per-mapping library selection
+        let allDrives: import('../../types').SharePointDrive[] = []
+        try { allDrives = await getSiteDrives(createdSite.id) } catch { /* non-fatal */ }
+
+        // Update each mapping that referenced this planned site
+        let currentMappings = getState().mappings
+        for (const mapping of psGroupMappings) {
+          const libraryName = mapping.plannedLibraryName
+          const targetDrive = libraryName
+            ? (allDrives.find(d => d.name.toLowerCase() === libraryName.toLowerCase()) ?? allDrives.find(d => d.driveType === 'documentLibrary') ?? allDrives[0] ?? null)
+            : (allDrives.find(d => d.driveType === 'documentLibrary') ?? allDrives[0] ?? null)
+
+          const readyMapping: MigrationMapping = {
+            ...mapping,
+            targetSite: createdSite,
+            targetDrive,
+            status: 'ready',
+            plannedSiteId: undefined,
+            plannedLibraryName: undefined,
+          }
+          currentMappings = [
+            ...currentMappings.filter(m => m.sourceNode.path !== mapping.sourceNode.path),
+            readyMapping,
+          ]
+          completed++
+          progressBar.style.width = `${Math.round((completed / total) * 100)}%`
+        }
+        setState({ mappings: currentMappings })
+        await persistSpMappings(currentMappings).catch(() => {})
+
+        // Persist the created site back into the PlannedSiteConfig
+        const proj = getState().currentProject!
+        const updatedPs = (proj.projectData.plannedSites ?? []).map(ps =>
+          ps.id === psId ? { ...ps, createdSite } : ps
+        )
+        const updatedData = { ...proj.projectData, plannedSites: updatedPs }
+        setState({ currentProject: { ...proj, projectData: updatedData } })
+        await updateProject(proj.id, { projectData: updatedData }).catch(() => {})
+
+        addStep(`✓ Done: ${createdSite.displayName} (${psGroupMappings.length} mapping${psGroupMappings.length !== 1 ? 's' : ''} updated)`)
+      } catch (err) {
+        addStep(`⚠ Failed "${psConfig.displayName}": ${err instanceof Error ? err.message : String(err)}`)
+        completed += psGroupMappings.length
+        progressBar.style.width = `${Math.round((completed / total) * 100)}%`
+      }
+    }
+
     logCurrent.textContent = `✅ Completed ${completed}/${total} site(s). Reload the page to refresh the table.`
     createBtn.disabled = false
     checkAllInput.disabled = false
@@ -879,17 +957,20 @@ function renderSharePointSummary(container: HTMLElement, mappings: MigrationMapp
 function spRowHtml(m: MigrationMapping, waves: MigrationWave[] = []): string {
   const statusClass = m.status === 'ready' ? 'status-ready' : m.status === 'error' ? 'status-error' : 'status-pending'
   const statusLabel = m.status === 'ready' ? '✅ Ready' : m.status === 'error' ? '⚠ Error' : '⏳ Pending'
-  const plannedName = m.plannedSite?.displayName ?? '—'
+  const plannedSites: PlannedSiteConfig[] = getState().currentProject?.projectData.plannedSites ?? []
+  const psConfig = m.plannedSiteId ? plannedSites.find(ps => ps.id === m.plannedSiteId) : undefined
+  const plannedName = psConfig?.displayName ?? m.plannedSite?.displayName ?? '—'
+  const isPsRow = !!m.plannedSiteId
   const wave = waves.find(w => w.id === m.waveId)
   return `
     <tr data-filter-status="${m.status}" data-mapping-path="${escHtml(m.sourceNode.path)}" data-wave-id="${escHtml(m.waveId ?? '')}" data-mapping-id="${escHtml(m.id)}">
       <td class="sp-check-cell" style="display:none">
-        ${m.status === 'pending' && m.plannedSite
-          ? `<input type="checkbox" class="sp-row-check" data-path="${escHtml(m.sourceNode.path)}" />`
+        ${m.status === 'pending' && (m.plannedSite || isPsRow)
+          ? `<input type="checkbox" class="sp-row-check" data-path="${escHtml(m.sourceNode.path)}" data-ps-id="${escHtml(m.plannedSiteId ?? '')}" />`
           : ''}
       </td>
       <td class="path-cell" title="${escHtml(m.sourceNode.originalPath)}">${escHtml(m.sourceNode.originalPath)}</td>
-      <td class="path-cell">${m.status === 'pending' ? escHtml(plannedName) : '—'}</td>
+      <td class="path-cell">${m.status === 'pending' ? escHtml(plannedName) + (isPsRow ? ' <span class="badge status-pending" style="font-size:0.7em">Planned</span>' : '') : '—'}</td>
       <td>${formatBytes(m.sourceNode.sizeBytes)}</td>
       <td>${m.sourceNode.fileCount.toLocaleString()}</td>
       <td>${m.targetSite  ? escHtml(m.targetSite.displayName)  : '—'}</td>
