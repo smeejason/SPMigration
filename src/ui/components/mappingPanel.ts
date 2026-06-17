@@ -2552,14 +2552,14 @@ function injectMappingStyles(): void {
     /* Folder SVG icon wrapper */
     .tree-icon-wrap { display: inline-flex; flex-shrink: 0; align-items: center; line-height: 1; }
 
-    /* Per-state row tints — soft, low-saturation backgrounds */
-    .mapping-row--auto    { background: rgba(53, 113, 176, 0.07); }
-    .mapping-row--auto:hover { background: rgba(53, 113, 176, 0.13); }
-    .mapping-row--auto.mapping-row--active { background: rgba(53, 113, 176, 0.13); border-left-color: #3571B0; }
+    /* Per-state row tints — all mapped rows use the same purple */
+    .mapping-row--auto    { background: rgba(122, 88, 184, 0.07); }
+    .mapping-row--auto:hover { background: rgba(122, 88, 184, 0.13); }
+    .mapping-row--auto.mapping-row--active { background: rgba(122, 88, 184, 0.13); border-left-color: #7A58B8; }
 
-    .mapping-row--manual  { background: rgba(58, 143, 98, 0.07); }
-    .mapping-row--manual:hover { background: rgba(58, 143, 98, 0.13); }
-    .mapping-row--manual.mapping-row--active { background: rgba(58, 143, 98, 0.13); border-left-color: #3A8F62; }
+    .mapping-row--manual  { background: rgba(122, 88, 184, 0.07); }
+    .mapping-row--manual:hover { background: rgba(122, 88, 184, 0.13); }
+    .mapping-row--manual.mapping-row--active { background: rgba(122, 88, 184, 0.13); border-left-color: #7A58B8; }
 
     .mapping-row--planned { background: rgba(122, 88, 184, 0.07); }
     .mapping-row--planned:hover { background: rgba(122, 88, 184, 0.13); }
