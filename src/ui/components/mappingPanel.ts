@@ -366,7 +366,7 @@ function createMappingNodeEl(node: TreeNode, targetEl: HTMLElement, isRoot = fal
     ? (getState().currentProject?.projectData.plannedSites ?? []).find(ps => ps.id === existingMapping.plannedSiteId)
     : undefined
   const initialSiteName = existingMapping?.targetSite?.displayName ?? existingPlannedSiteConfig?.displayName ?? existingMapping?.plannedSite?.displayName
-  const isPlannedInitially = !existingMapping?.targetSite && !!existingMapping?.plannedSite
+  const isPlannedInitially = !existingMapping?.targetSite && (!!existingMapping?.plannedSite || !!existingMapping?.plannedSiteId)
   const initialMappingType: 'auto' | 'manual' | 'cant-find' | undefined =
     isCantFindInitially ? 'cant-find' :
     existingMapping?.matchStatus === 'matched' ? 'auto' :
@@ -2265,7 +2265,7 @@ function updateDescendantHighlights(parentLi: HTMLLIElement, parentMappingType: 
     const childSelfType: 'auto' | 'manual' | 'planned' | null =
       childMapping?.matchStatus === 'matched' ? 'auto' :
       childMapping?.targetSite ? 'manual' :
-      childMapping?.plannedSite ? 'planned' :
+      (childMapping?.plannedSite || childMapping?.plannedSiteId) ? 'planned' :
       null
     // Self-mapping wins; otherwise inherit parent type
     const effectiveType = childSelfType ?? parentMappingType
@@ -2295,15 +2295,15 @@ function updateDescendantHighlights(parentLi: HTMLLIElement, parentMappingType: 
  * Colours are deliberately soft / unsaturated to avoid visual harshness.
  *
  *  none    – warm amber   (classic unset look)
- *  auto    – calm blue    (system-matched)
- *  manual  – sage green   (user-chosen existing site)
+ *  auto    – soft violet  (system-matched)
+ *  manual  – soft violet  (user-chosen existing site)
  *  planned – soft violet  (user-chosen new site to be created)
  */
 function folderIconSvg(type: 'none' | 'auto' | 'manual' | 'planned' | 'cant-find'): string {
   const palette: Record<string, { tab: string; body: string }> = {
     none:        { tab: '#C88A1A', body: '#E8A82A' },
-    auto:        { tab: '#3571B0', body: '#5594D4' },
-    manual:      { tab: '#3A8F62', body: '#56B07E' },
+    auto:        { tab: '#7A58B8', body: '#9B78D4' },
+    manual:      { tab: '#7A58B8', body: '#9B78D4' },
     planned:     { tab: '#7A58B8', body: '#9B78D4' },
     'cant-find': { tab: '#A82020', body: '#D94040' },
   }
