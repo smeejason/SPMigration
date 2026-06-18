@@ -255,7 +255,7 @@ export async function persistProjectMappings(mappings: MigrationMapping[]): Prom
   if (!project) return
 
   const hasUploadFolder = (project.projectData.uploads?.length ?? 0) > 0
-  const mappedCount = mappings.filter(m => m.targetSite || m.plannedSite).length
+  const mappedCount = mappings.filter(m => m.targetSite || m.plannedSite || m.plannedSiteId).length
 
   if (hasUploadFolder) {
     const { siteId } = getSpConfig()

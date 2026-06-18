@@ -2190,7 +2190,7 @@ function findDirectChildLi(ul: Element, path: string): HTMLLIElement | null {
 function findAncestorMapping(nodePath: string): MigrationMapping | null {
   for (const m of getState().mappings) {
     const sp = m.sourceNode.path
-    if (sp && nodePath !== sp && (m.targetSite || m.plannedSite)) {
+    if (sp && nodePath !== sp && (m.targetSite || m.plannedSite || m.plannedSiteId)) {
       if (nodePath.startsWith(sp + '\\') || nodePath.startsWith(sp + '/')) {
         return m
       }
@@ -2403,7 +2403,7 @@ function refreshUsersStats(container: HTMLElement, statNodes: TreeNode[]): void 
   const currentMappings = getState().mappings
 
   // User counts
-  const mappedPaths   = new Set(currentMappings.filter(m => m.targetSite || m.plannedSite).map(m => m.sourceNode.path))
+  const mappedPaths   = new Set(currentMappings.filter(m => m.targetSite || m.plannedSite || m.plannedSiteId).map(m => m.sourceNode.path))
   const cantFindPaths = new Set(currentMappings.filter(m => m.matchStatus === 'cant-find').map(m => m.sourceNode.path))
   const ready    = statNodes.filter(n => mappedPaths.has(n.path)).length
   const cantFind = statNodes.filter(n => cantFindPaths.has(n.path)).length
